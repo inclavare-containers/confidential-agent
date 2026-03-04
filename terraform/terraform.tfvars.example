@@ -1,0 +1,32 @@
+# Terraform variables for OpenClaw deployment
+
+# Availability zone (cn-beijing-l for Intel SGX g8i instances)
+zone_id = "cn-beijing-l"
+
+# Network Configuration (VPC IP allocation)
+vpc_cidr          = "10.0.0.0/16"
+vswitch_cidr     = "10.0.1.0/24"
+trustee_private_ip  = "10.0.1.10"
+openclaw_private_ip = "10.0.1.20"
+
+# OpenClaw Instance Configuration (Intel SGX g8i series, requires ecs.g8i.xlarge or higher)
+openclaw_instance_type  = "ecs.g8i.xlarge"
+
+# Trustee Instance Configuration
+trustee_instance_type = "ecs.g7.xlarge"
+
+# Project name
+project_name = "cai"
+
+# Image configuration
+# Options: "prod" or "debug" (default)
+# When set to "debug", SSH access will be enabled with the embedded SSH key
+image_type = "debug"
+
+# Security Group Allowed CIDR
+# Controls the source IP range allowed to access:
+#   - Trustee SSH (port 22)
+#   - Trustee API (port 8081)
+#   - OpenClaw SSH (port 22)
+#   - OpenClaw Gateway (port 18789)
+security_group_allowed_cidr = "0.0.0.0/0"

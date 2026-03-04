@@ -1,0 +1,20 @@
+provider_installation {
+  dev_overrides {
+    # We have to use a custom terraform-provider-alicloud
+    "aliyun/alicloud" = "../terraform-provider-alicloud/bin/"
+  }
+
+  network_mirror {
+    url = "https://mirrors.aliyun.com/terraform/"
+    include = ["registry.terraform.io/aliyun/alicloud", 
+               "registry.terraform.io/hashicorp/alicloud",
+              ]   
+  }
+  direct {
+    exclude = ["registry.terraform.io/aliyun/alicloud", 
+               "registry.terraform.io/hashicorp/alicloud",
+              ]  
+  }
+
+  direct {}
+}

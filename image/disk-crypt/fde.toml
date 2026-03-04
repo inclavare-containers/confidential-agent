@@ -1,0 +1,14 @@
+# Cryptpilot FDE Configuration for cai
+# rootfs: dm-verity protected (no encryption) with rw overlay
+# data: OTP (one-time password) encryption
+
+[rootfs]
+rw_overlay = "disk-persist"    # rootfs is read-only with a persist writable overlay on data volume on disk
+
+[data]
+integrity = false      # No integrity check for data volume
+
+[data.encrypt.exec]
+# Read disk passphrase from CAI secret staging directory (initrd phase)
+command = "cat"
+args = ["/run/cai/secrets/disk_key"]

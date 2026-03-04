@@ -1,0 +1,28 @@
+# Packer cache and temp files
+*.hwm
+*.pwd
+*.pwi
+packer_cache/
+.packer.d/
+
+# Build outputs
+image/output/
+image/packer/output/
+
+# Terraform
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/.terraform.lock.hcl
+terraform/terraform.tfvars
+# Custom terraform provider
+terraform-provider-alicloud/
+
+# OS/Editor
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Secrets
+secrets/
