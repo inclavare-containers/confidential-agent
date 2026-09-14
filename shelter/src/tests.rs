@@ -166,7 +166,7 @@ fn renders_release_shelter_deploy_without_ssh_key_name() {
     assert!(!rendered.contains("ssh_key:"));
     assert!(!rendered.contains("/project/secrets/debug_ssh.pub"));
     assert!(rendered.contains("trustiflux:"));
-    assert!(rendered.contains("tng: true"));
+    assert!(rendered.contains("tng: false"));
     assert!(rendered.contains("cryptpilot-fde-host:"));
     assert!(rendered.contains("cryptpilot-fde-guest:"));
     assert!(rendered.contains("disk:"));
@@ -375,6 +375,26 @@ fn renders_gateway_and_guest_setup_without_tng_binary_override() {
     assert!(!rendered.contains("destination: /usr/bin/tng"));
     assert!(!rendered.contains("/usr/local/bin/tng"));
     assert!(!rendered.contains("trusted-network-gateway.service.d"));
+}
+
+#[test]
+fn pins_tng_without_conflicting_auto_install() {
+    let mut spec = AgentSpec::from_yaml(SPEC, Path::new("/project")).unwrap();
+    spec.build.packages.extend([
+        "trusted-network-gateway".to_string(),
+        "trusted-network-gateway-2.9.1-1.al8.x86_64".to_string(),
+    ]);
+    let rendered = render_build_config(&spec, &assets(), &ShelterRenderOptions::default()).unwrap();
+    let yaml: serde_yaml::Value = serde_yaml::from_str(&rendered).unwrap();
+    let packages = yaml["packages"].as_sequence().unwrap();
+    let tng: Vec<_> = packages
+        .iter()
+        .filter_map(serde_yaml::Value::as_str)
+        .filter(|package| package.starts_with("trusted-network-gateway"))
+        .collect();
+    assert_eq!(tng, ["trusted-network-gateway-2.8.0-1.al8.x86_64"]);
+    assert_eq!(yaml["security"]["tng"].as_bool(), Some(false));
+    assert!(rendered.contains("destination: /etc/systemd/system/trusted-network-gateway.service"));
 }
 
 #[test]
