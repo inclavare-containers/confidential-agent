@@ -4023,10 +4023,14 @@ fn secret_fetch_initrd_loads_tdx_guest_module() {
     let setup = secret_fetch_module_setup();
     assert!(setup.contains("instmods tdx_guest"));
     assert!(setup.contains("usr/lib/modprobe.d"));
-    assert!(setup.contains("options tdx_guest tsm_api=1"));
+    assert!(setup.contains("options tdx_guest tsm_api=0"));
+    assert!(setup.contains("shelter-tdx-guest.conf"));
     assert!(setup.contains("usr/lib/modules-load.d"));
     assert!(setup.contains("confidential-agent-tdx.conf"));
-    assert!(setup.contains("tdx_guest\\n"));
+    assert!(setup.contains("confidential-agent-configfs-mount.service"));
+    assert!(setup.contains("mount -t configfs configfs /sys/kernel/config"));
+    assert!(setup.contains("Before=trustiflux-api-server-initrd.service"));
+    assert!(setup.contains("sysinit.target.wants"));
     assert!(setup.contains("rd.retry=300 rd.shell=0 rd.emergency=poweroff"));
     assert!(setup.contains("36-confidential-agent-fail-closed.conf"));
 }

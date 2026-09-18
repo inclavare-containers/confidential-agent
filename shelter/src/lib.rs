@@ -99,13 +99,6 @@ pub fn render_build_config(
 
 fn shelter_packages(spec: &AgentSpec, _assets: &GuestAssets) -> Vec<String> {
     let mut packages = spec.build.packages.clone();
-    // Match the host tools image and guest_setup_script's version checks.
-    // An unversioned request alongside the pin makes DNF --best conflict
-    // when the repository offers a newer TNG release.
-    packages.retain(|package| {
-        package != "trusted-network-gateway" && !package.starts_with("trusted-network-gateway-")
-    });
-    packages.push("trusted-network-gateway-2.8.0-1.al8.x86_64".to_string());
     if !packages.iter().any(|package| package == "libtdx-verify") {
         packages.push("libtdx-verify".to_string());
     }
@@ -531,9 +524,7 @@ impl ShelterSecurity {
                     .flatten(),
             },
             trustiflux: ShelterTrustiflux::challenge_defaults(),
-            // CA stages and controls the TNG unit itself. Disable Shelter's
-            // unversioned auto-install/enable; shelter_packages pins the RPM.
-            tng: false,
+            tng: true,
             disk: ShelterSecurityDisk::cryptpilot_defaults(assets, spec),
         }
     }

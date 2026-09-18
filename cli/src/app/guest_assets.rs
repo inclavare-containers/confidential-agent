@@ -271,8 +271,8 @@ mod tests {
     #[test]
     fn guest_setup_script_pins_packaged_tng_and_keeps_service_disabled() {
         let script = guest_setup_script();
-        assert!(script.contains("trusted-network-gateway-2.8.0-1.al8.x86_64"));
-        assert!(script.contains("expected_tng_version='tng 2.8.0'"));
+        assert!(script.contains("trusted-network-gateway-2.9.2-1.al8.x86_64"));
+        assert!(script.contains("expected_tng_version='tng 2.9.2'"));
         assert!(!script.contains("/opt/confidential-agent/hack/tng-"));
         assert!(script.contains("/etc/systemd/system-preset/00-confidential-agent-tng.preset"));
         assert!(script.contains("disable trusted-network-gateway.service"));

@@ -1164,13 +1164,13 @@ install_attestation_challenge_client() {
     fi
 }
 install_attestation_challenge_client
-expected_tng_nevra='trusted-network-gateway-2.8.0-1.al8.x86_64'
+expected_tng_nevra='trusted-network-gateway-2.9.2-1.al8.x86_64'
 installed_tng_nevra="$(rpm -q trusted-network-gateway 2>/dev/null || true)"
 if [ "$installed_tng_nevra" != "$expected_tng_nevra" ]; then
     echo "unexpected TNG package: got '$installed_tng_nevra', expected '$expected_tng_nevra'" >&2
     exit 1
 fi
-expected_tng_version='tng 2.8.0'
+expected_tng_version='tng 2.9.2'
 installed_tng_version="$(/usr/bin/tng --version | sed -n '1p')"
 if [ "$installed_tng_version" != "$expected_tng_version" ]; then
     echo "unexpected TNG binary: got '$installed_tng_version', expected '$expected_tng_version'" >&2
@@ -1244,12 +1244,44 @@ install() {
     fi
 
     inst_binary /usr/local/bin/confidential-agentd /usr/bin/confidential-agentd
-    inst_multiple bash cat mkdir sleep systemctl
+    inst_multiple bash cat mkdir sleep systemctl mountpoint
     hostonly='' instmods tdx_guest || true
     mkdir -p "$initdir/usr/lib/modprobe.d"
-    printf 'options tdx_guest tsm_api=1\n' > "$initdir/usr/lib/modprobe.d/confidential-agent-tdx.conf"
+    printf 'options tdx_guest tsm_api=0\n' > "$initdir/usr/lib/modprobe.d/confidential-agent-tdx.conf"
+    # The shelter RPM sets options tdx-guest tsm_api=1 in
+    # /etc/modprobe.d/shelter-tdx-guest.conf.  tsm_api=1 disables the
+    # /dev/tdx_guest ioctl quote interface, leaving only the TSM configfs
+    # report path (/sys/kernel/config/tsm/report).  That path requires
+    # configfs to be mounted AND the tsm+tdx-guest modules to register a
+    # configfs provider — which is fragile in the initrd.  Override with
+    # tsm_api=0 so the attestation-agent can fall back to the robust ioctl
+    # interface for TDX quote generation.
+    mkdir -p "$initdir/etc/modprobe.d"
+    printf 'options tdx-guest tsm_api=0\n' > "$initdir/etc/modprobe.d/shelter-tdx-guest.conf"
     mkdir -p "$initdir/usr/lib/modules-load.d"
     printf 'tdx_guest\n' > "$initdir/usr/lib/modules-load.d/confidential-agent-tdx.conf"
+    # Best-effort: also mount configfs early so the TSM report path is
+    # available if the ioctl fallback is later removed in favour of TSM.
+    mkdir -p "$initdir/etc/systemd/system"
+    cat > "$initdir/etc/systemd/system/confidential-agent-configfs-mount.service" <<'CONFCS'
+[Unit]
+Description=Mount configfs for TSM attestation reports
+DefaultDependencies=no
+After=systemd-modules-load.service
+Before=trustiflux-api-server-initrd.service confidential-data-hub-daemon-initrd.service
+Before=sysinit.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c 'mkdir -p /sys/kernel/config && mountpoint -q /sys/kernel/config || mount -t configfs configfs /sys/kernel/config'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=sysinit.target
+CONFCS
+    mkdir -p "$initdir/etc/systemd/system/sysinit.target.wants"
+    ln -s /etc/systemd/system/confidential-agent-configfs-mount.service \
+        "$initdir/etc/systemd/system/sysinit.target.wants/confidential-agent-configfs-mount.service"
     mkdir -p "$initdir/etc/cmdline.d"
     printf '%s\n' 'rd.retry=300 rd.shell=0 rd.emergency=poweroff' > "$initdir/etc/cmdline.d/36-confidential-agent-fail-closed.conf"
 }
