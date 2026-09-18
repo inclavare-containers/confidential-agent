@@ -13,3 +13,4 @@
 /examples/codex/cosign.pub
 __pycache__/
 *.py[cod]
+docs/superpowers/
