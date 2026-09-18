@@ -18,7 +18,7 @@ ensure_shelter() {
 
   "$CA_SHELTER_BIN" --version >/dev/null
   log "using Shelter: $CA_SHELTER_BIN"
-  if [[ "${CA_MODE:-}" != "cleanup" && "${CA_MODE:-}" != "cleanup-openclaw-vllm" && "$CA_REFERENCE_VALUES" == "rekor" && ! -x "$CA_SLSA_GENERATOR" ]]; then
+  if [[ "${CA_MODE:-}" != "cleanup" && "${CA_MODE:-}" != "cleanup-openclaw-vllm" && "${CA_MODE:-}" != "cleanup-vllm-inference" && "$CA_REFERENCE_VALUES" == "rekor" && ! -x "$CA_SLSA_GENERATOR" ]]; then
     die "SLSA generator is required for rekor mode: $CA_SLSA_GENERATOR"
   fi
 }
@@ -414,20 +414,33 @@ start_connect() {
 
   local deadline=$((SECONDS + CA_CONNECT_TIMEOUT_SEC))
   local port=""
+  local readiness_path="${CA_CONNECT_READINESS_PATH:-/openclaw}"
   while ((SECONDS < deadline)); do
     port="$(parse_connect_port "$log_path" || true)"
-    if [[ -n "$port" ]] && curl -fsSL --max-time 5 "http://127.0.0.1:$port/openclaw" >/dev/null 2>&1; then
+    if [[ -n "$port" ]] && curl -fsSL --max-time 5 "http://127.0.0.1:$port$readiness_path" >/dev/null 2>&1; then
       CA_CONNECT_PORT="$port"
-      log "OpenClaw Web is reachable through connect: http://127.0.0.1:$port/openclaw"
+      if [[ "$CA_SERVICE_ID" == "vllm-inference" ]]; then
+        log "vLLM is reachable through connect: http://127.0.0.1:$port/v1/models"
+      else
+        log "OpenClaw Web is reachable through connect: http://127.0.0.1:$port/openclaw"
+      fi
       return
     fi
     if ! kill -0 "$(cat "$pid_path")" >/dev/null 2>&1; then
-      warn "connect process exited before OpenClaw became reachable; see $log_path"
+      if [[ "$CA_SERVICE_ID" == "vllm-inference" ]]; then
+        warn "connect process exited before vLLM became reachable; see $log_path"
+      else
+        warn "connect process exited before OpenClaw became reachable; see $log_path"
+      fi
       return
     fi
     sleep 3
   done
-  warn "connect did not become HTTP-ready within ${CA_CONNECT_TIMEOUT_SEC}s; see $log_path"
+  if [[ "$CA_SERVICE_ID" == "vllm-inference" ]]; then
+    warn "connect did not become HTTP-ready (probe $readiness_path) within ${CA_CONNECT_TIMEOUT_SEC}s; see $log_path"
+  else
+    warn "connect did not become HTTP-ready within ${CA_CONNECT_TIMEOUT_SEC}s; see $log_path"
+  fi
 }
 
 run_web_smoke() {
@@ -462,7 +475,8 @@ stop_connect() {
 
 print_summary() {
   local connect_pid=""
-  [[ -f "$CA_WORK_DIR/${CA_CONNECT_NAME:-connect}.pid" ]] && connect_pid="$(cat "$CA_WORK_DIR/${CA_CONNECT_NAME:-connect}.pid")"
+  local pid_path="$CA_WORK_DIR/${CA_CONNECT_NAME:-connect}.pid"
+  [[ -f "$pid_path" ]] && connect_pid="$(cat "$pid_path" 2>/dev/null || true)"
   cat <<EOF
 
 Confidential Agent one-click summary
@@ -475,16 +489,35 @@ Confidential Agent one-click summary
   instance:  $CA_INSTANCE_TYPE
   cidrs:     ${CA_ALLOWED_CIDRS:-${CA_ALLOWED_CIDR:-not set}}
   deployer:  ${CA_DEPLOYER_CIDR:-not detected}
-  dingtalk:  $CA_ENABLE_DINGTALK
-  pep:       $([[ "${CA_DISABLE_PEP:-0}" == "1" ]] && printf disabled || printf enabled)
   token:     $CA_GATEWAY_TOKEN
 EOF
-  if [[ -n "${CA_CONNECT_PORT:-}" ]]; then
+  if [[ "$CA_SERVICE_ID" != "vllm-inference" ]]; then
     cat <<EOF
+  dingtalk:  $CA_ENABLE_DINGTALK
+  pep:       $([[ "${CA_DISABLE_PEP:-0}" == "1" ]] && printf disabled || printf enabled)
+EOF
+  fi
+  if [[ -n "${CA_CONNECT_PORT:-}" ]]; then
+    if [[ "$CA_SERVICE_ID" == "vllm-inference" ]]; then
+      cat <<EOF
+  vllm:      curl http://127.0.0.1:$CA_CONNECT_PORT/v1/models
+  chat:      curl http://127.0.0.1:$CA_CONNECT_PORT/v1/chat/completions \\
+                 -H 'Content-Type: application/json' \\
+                 -d '{"model":"$CA_VLLM_INFERENCE_SERVED_MODEL_NAME","messages":[{"role":"user","content":"hi"}]}'
+  connect:   running (pid $connect_pid, log $CA_WORK_DIR/${CA_CONNECT_NAME:-connect}.log)
+EOF
+    else
+      cat <<EOF
   web:       http://127.0.0.1:$CA_CONNECT_PORT/openclaw
   ws/api:    ws://127.0.0.1:$CA_CONNECT_PORT
   tui:       openclaw tui --url ws://127.0.0.1:$CA_CONNECT_PORT --token "$CA_GATEWAY_TOKEN"
   connect:   running (pid $connect_pid, log $CA_WORK_DIR/${CA_CONNECT_NAME:-connect}.log)
+EOF
+    fi
+  elif [[ -n "$connect_pid" ]] && kill -0 "$connect_pid" >/dev/null 2>&1; then
+    cat <<EOF
+  connect:   tunnel running (pid $connect_pid); probe ${CA_CONNECT_READINESS_PATH:-/openclaw} at http://127.0.0.1:<port>
+             log: $CA_WORK_DIR/${CA_CONNECT_NAME:-connect}.log
 EOF
   else
     cat <<EOF
@@ -564,6 +597,24 @@ run_deploy_openclaw_vllm() {
   print_summary
 }
 
+run_deploy_vllm_inference() {
+  install_os_dependencies
+  ensure_aliyun_credentials
+  resolve_allowed_cidr
+  ensure_shelter
+  build_confidential_agent
+  install_confidential_agent_cli
+  build_tools_image
+  prepare_vllm_inference_specs
+  build_openclaw_image
+  ensure_operator_peering
+  deploy_openclaw_service
+  sync_active_openclaw_resources
+  wait_for_live_status
+  start_connect
+  print_summary
+}
+
 run_cleanup_service() {
   ensure_aliyun_credentials
   ensure_shelter
@@ -582,5 +633,9 @@ run_cleanup() {
 }
 
 run_cleanup_openclaw_vllm() {
+  run_cleanup_service
+}
+
+run_cleanup_vllm_inference() {
   run_cleanup_service
 }

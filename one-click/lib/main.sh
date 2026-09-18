@@ -76,6 +76,62 @@ EOF
     return
   fi
 
+  if [[ "${CA_ONE_CLICK_TARGET:-openclaw}" == "vllm-inference" ]]; then
+    cat <<EOF
+Usage:
+  one-click/install-vllm-inference.sh [deploy|install-only|cleanup] [options]
+
+Default mode:
+  deploy
+
+Common options:
+  --non-interactive              Do not prompt; fail if required values are missing
+  --yes                          Assume yes for safe replacement prompts
+  --state-dir PATH               Confidential Agent state directory
+  --work-dir PATH                One-click generated files/log directory
+  --tools-image NAME             Docker tools image tag
+  --skip-deps                    Do not install OS packages
+  --skip-rustup                  Do not install Rust with rustup (default)
+  --allow-rustup                 Allow rustup fallback if OS cargo/rust is unavailable
+  --skip-cargo-build             Reuse existing target/release binaries
+  --skip-host-openclaw           Do not install Node.js/OpenClaw CLI on the deploy host
+  --rebuild-tools-image          Rebuild the tools image even if it exists
+  --help                         Show this help
+
+Deploy options:
+  --region REGION                Default: cn-beijing
+  --zone-id ZONE                 Default: cn-beijing-l
+  --instance-type TYPE           Default: ecs.gn8v-tee.4xlarge
+  --disk-gb GB                   Default: 512
+  --allowed-cidr CIDR[,CIDR...]  Operator access CIDR list; may be repeated
+  --gateway-token TOKEN          Connect tunnel token; generated if omitted
+  --vllm-port PORT               vLLM OpenAI-compatible API port; default: 8080
+  --vllm-version VERSION         vLLM package version; default: 0.19.1
+  --vllm-served-model-name NAME  vLLM served model name; default: Qwen3-32B
+  --oss-bucket NAME              OSS bucket holding the encrypted model artifact (required)
+  --oss-endpoint URL             OSS endpoint; default: https://oss-cn-beijing-internal.aliyuncs.com
+  --model-key-file PATH          Local gocryptfs model key file (required, must exist)
+  --reference-values MODE        rekor or sample; default: rekor
+  --cosign-key PATH              Existing cosign private key for rekor mode
+  --slsa-generator PATH          Default: /usr/libexec/shelter/slsa/slsa-generator
+  --build-backend MODE           mkosi or base-image; default: mkosi
+  --base-image PATH              Required when --build-backend base-image is used
+  --skip-build                   Skip confidential image build
+  --skip-deploy                  Skip cloud deploy
+  --no-start-connect             Do not start the local connect tunnel after deploy
+
+Shelter options:
+  --shelter-bin PATH             Existing shelter binary
+  --shelter-rpm PATH             Shelter RPM to install when no binary exists
+
+Examples:
+  one-click/install-vllm-inference.sh --oss-bucket my-bucket --model-key-file /path/key
+  one-click/install-vllm-inference.sh --vllm-served-model-name Qwen3-32B
+  one-click/install-vllm-inference.sh cleanup --state-dir "\$HOME/.confidential-agent"
+EOF
+    return
+  fi
+
   cat <<EOF
 Usage:
   one-click/install.sh [deploy|install-only|cleanup] [options]
@@ -137,6 +193,7 @@ init_defaults() {
   case "$CA_ONE_CLICK_TARGET" in
     openclaw) CA_MODE="deploy-openclaw" ;;
     openclaw-vllm) CA_MODE="deploy-openclaw-vllm" ;;
+    vllm-inference) CA_MODE="deploy-vllm-inference" ;;
     *) die "unsupported CA_ONE_CLICK_TARGET: $CA_ONE_CLICK_TARGET" ;;
   esac
   CA_NON_INTERACTIVE="${CA_NON_INTERACTIVE:-0}"
@@ -166,6 +223,12 @@ init_defaults() {
   CA_OPENCLAW_VLLM_PORT="${CA_OPENCLAW_VLLM_PORT:-${OPENCLAW_VLLM_PORT:-8090}}"
   CA_OPENCLAW_VLLM_VERSION="${CA_OPENCLAW_VLLM_VERSION:-${OPENCLAW_VLLM_VERSION:-0.19.1}}"
   CA_OPENCLAW_VLLM_BUILD_VARIANTS="${CA_OPENCLAW_VLLM_BUILD_VARIANTS:-${OPENCLAW_VLLM_BUILD_VARIANTS:-release}}"
+  CA_VLLM_INFERENCE_PORT="${CA_VLLM_INFERENCE_PORT:-${VLLM_INFERENCE_PORT:-8080}}"
+  CA_VLLM_INFERENCE_VERSION="${CA_VLLM_INFERENCE_VERSION:-${VLLM_INFERENCE_VERSION:-0.19.1}}"
+  CA_VLLM_INFERENCE_SERVED_MODEL_NAME="${CA_VLLM_INFERENCE_SERVED_MODEL_NAME:-${VLLM_INFERENCE_SERVED_MODEL_NAME:-Qwen3-32B}}"
+  CA_OSS_BUCKET="${CA_OSS_BUCKET:-${OSS_BUCKET:-}}"
+  CA_OSS_ENDPOINT="${CA_OSS_ENDPOINT:-${OSS_ENDPOINT:-https://oss-cn-beijing-internal.aliyuncs.com}}"
+  CA_MODEL_KEY_FILE="${CA_MODEL_KEY_FILE:-${MODEL_KEY_FILE:-}}"
   CA_BUILD_BACKEND="${CA_BUILD_BACKEND:-mkosi}"
   CA_BASE_IMAGE="${CA_BASE_IMAGE:-}"
   CA_TOOLS_IMAGE="${CA_TOOLS_IMAGE:-confidential-agent-tools:latest}"
@@ -174,6 +237,7 @@ init_defaults() {
   CA_SLSA_GENERATOR="${CA_SLSA_GENERATOR:-/usr/libexec/shelter/slsa/slsa-generator}"
   CA_STATUS_TIMEOUT_SEC="${CA_STATUS_TIMEOUT_SEC:-900}"
   CA_CONNECT_TIMEOUT_SEC="${CA_CONNECT_TIMEOUT_SEC:-240}"
+  CA_CONNECT_READINESS_PATH="${CA_CONNECT_READINESS_PATH:-/openclaw}"
   CA_BIN="${CA_BIN:-$ROOT_DIR/target/release/confidential-agent}"
   CA_AGENTD_BIN="${CA_AGENTD_BIN:-$(dirname "$CA_BIN")/confidential-agentd}"
   CA_GATEWAY_BIN="${CA_GATEWAY_BIN:-$(dirname "$CA_BIN")/cai-gateway}"
@@ -183,7 +247,7 @@ init_defaults() {
 parse_args() {
   if (($# > 0)); then
     case "$1" in
-      deploy|deploy-openclaw|deploy-openclaw-vllm|install-only|cleanup|cleanup-openclaw-vllm)
+      deploy|deploy-openclaw|deploy-openclaw-vllm|deploy-vllm-inference|install-only|cleanup|cleanup-openclaw-vllm|cleanup-vllm-inference)
         normalize_mode "$1"
         shift
         ;;
@@ -224,10 +288,34 @@ parse_args() {
       --npm-registry) CA_NPM_REGISTRY="${2:?missing value for --npm-registry}"; shift 2 ;;
       --vllm-model-id) CA_OPENCLAW_VLLM_MODEL_ID="${2:?missing value for --vllm-model-id}"; shift 2 ;;
       --vllm-model-dir) CA_OPENCLAW_VLLM_MODEL_DIR="${2:?missing value for --vllm-model-dir}"; shift 2 ;;
-      --vllm-served-model-name) CA_OPENCLAW_VLLM_SERVED_MODEL_NAME="${2:?missing value for --vllm-served-model-name}"; shift 2 ;;
-      --vllm-port) CA_OPENCLAW_VLLM_PORT="${2:?missing value for --vllm-port}"; shift 2 ;;
-      --vllm-version) CA_OPENCLAW_VLLM_VERSION="${2:?missing value for --vllm-version}"; shift 2 ;;
+      --vllm-served-model-name)
+        if [[ "$CA_ONE_CLICK_TARGET" == "vllm-inference" ]]; then
+          CA_VLLM_INFERENCE_SERVED_MODEL_NAME="${2:?missing value for --vllm-served-model-name}"
+        else
+          CA_OPENCLAW_VLLM_SERVED_MODEL_NAME="${2:?missing value for --vllm-served-model-name}"
+        fi
+        shift 2
+        ;;
+      --vllm-port)
+        if [[ "$CA_ONE_CLICK_TARGET" == "vllm-inference" ]]; then
+          CA_VLLM_INFERENCE_PORT="${2:?missing value for --vllm-port}"
+        else
+          CA_OPENCLAW_VLLM_PORT="${2:?missing value for --vllm-port}"
+        fi
+        shift 2
+        ;;
+      --vllm-version)
+        if [[ "$CA_ONE_CLICK_TARGET" == "vllm-inference" ]]; then
+          CA_VLLM_INFERENCE_VERSION="${2:?missing value for --vllm-version}"
+        else
+          CA_OPENCLAW_VLLM_VERSION="${2:?missing value for --vllm-version}"
+        fi
+        shift 2
+        ;;
       --vllm-build-variants) CA_OPENCLAW_VLLM_BUILD_VARIANTS="${2:?missing value for --vllm-build-variants}"; shift 2 ;;
+      --oss-bucket) CA_OSS_BUCKET="${2:?missing value for --oss-bucket}"; shift 2 ;;
+      --oss-endpoint) CA_OSS_ENDPOINT="${2:?missing value for --oss-endpoint}"; shift 2 ;;
+      --model-key-file) CA_MODEL_KEY_FILE="${2:?missing value for --model-key-file}"; shift 2 ;;
       --enable-dingtalk) CA_ENABLE_DINGTALK=1; shift ;;
       --reference-values) CA_REFERENCE_VALUES="${2:?missing value for --reference-values}"; shift 2 ;;
       --cosign-key) CA_COSIGN_KEY="${2:?missing value for --cosign-key}"; shift 2 ;;
@@ -260,6 +348,9 @@ normalize_mode() {
     openclaw-vllm:deploy-openclaw)
       die "use one-click/install.sh for OpenClaw with Bailian API"
       ;;
+    vllm-inference:deploy|vllm-inference:deploy-vllm-inference) CA_MODE="deploy-vllm-inference" ;;
+    vllm-inference:cleanup) CA_MODE="cleanup-vllm-inference" ;;
+    vllm-inference:install-only) CA_MODE="install-only" ;;
     *) die "unsupported mode for $CA_ONE_CLICK_TARGET: $requested" ;;
   esac
 }
@@ -269,6 +360,7 @@ apply_target_defaults() {
   case "$CA_MODE" in
     deploy-openclaw|cleanup) target="openclaw" ;;
     deploy-openclaw-vllm|cleanup-openclaw-vllm) target="openclaw-vllm" ;;
+    deploy-vllm-inference|cleanup-vllm-inference) target="vllm-inference" ;;
     install-only) ;;
     *) die "unsupported mode: $CA_MODE" ;;
   esac
@@ -283,6 +375,7 @@ apply_target_defaults() {
       CA_ZONE_ID="${CA_ZONE_ID:-cn-beijing-i}"
       CA_INSTANCE_TYPE="${CA_INSTANCE_TYPE:-ecs.g9i.xlarge}"
       CA_DISK_GB="${CA_DISK_GB:-200}"
+      CA_CONNECT_READINESS_PATH="${CA_CONNECT_READINESS_PATH:-/openclaw}"
       ;;
     openclaw-vllm)
       CA_SERVICE_ID="openclaw-vllm"
@@ -293,6 +386,18 @@ apply_target_defaults() {
       CA_ZONE_ID="${CA_ZONE_ID:-cn-beijing-l}"
       CA_INSTANCE_TYPE="${CA_INSTANCE_TYPE:-ecs.gn8v-tee.4xlarge}"
       CA_DISK_GB="${CA_DISK_GB:-512}"
+      CA_CONNECT_READINESS_PATH="${CA_CONNECT_READINESS_PATH:-/openclaw}"
+      ;;
+    vllm-inference)
+      CA_SERVICE_ID="vllm-inference"
+      CA_SERVICE_LABEL="Secure LLM Inference"
+      CA_PROJECT_NAME="vllm-inference"
+      CA_SPEC_NAME="vllm-inference.yaml"
+      CA_CONNECT_NAME="connect-vllm-inference"
+      CA_ZONE_ID="${CA_ZONE_ID:-cn-beijing-l}"
+      CA_INSTANCE_TYPE="${CA_INSTANCE_TYPE:-ecs.gn8v-tee.4xlarge}"
+      CA_DISK_GB="${CA_DISK_GB:-512}"
+      CA_CONNECT_READINESS_PATH="${CA_CONNECT_READINESS_PATH:-/health}"
       ;;
     *)
       die "unsupported mode: $CA_MODE"
@@ -327,6 +432,11 @@ validate_options() {
   fi
   if [[ "$CA_MODE" == "deploy-openclaw-vllm" && "${CA_DISABLE_PEP:-0}" == "1" ]]; then
     die "deploy-openclaw-vllm requires PEP because the TDX attestation skill uses cai-pep attest"
+  fi
+  if [[ "$CA_MODE" == "deploy-vllm-inference" ]]; then
+    [[ -n "$CA_OSS_BUCKET" ]] || die "--oss-bucket is required for vllm-inference"
+    [[ -n "$CA_MODEL_KEY_FILE" && -f "$CA_MODEL_KEY_FILE" ]] || die "--model-key-file (existing file) is required for vllm-inference"
+    [[ "$CA_VLLM_INFERENCE_PORT" =~ ^[0-9]+$ ]] || die "--vllm-port must be an integer"
   fi
 }
 
@@ -386,9 +496,11 @@ main() {
   case "$CA_MODE" in
     deploy-openclaw) run_deploy_openclaw ;;
     deploy-openclaw-vllm) run_deploy_openclaw_vllm ;;
+    deploy-vllm-inference) run_deploy_vllm_inference ;;
     install-only) run_install_only ;;
     cleanup) run_cleanup ;;
     cleanup-openclaw-vllm) run_cleanup_openclaw_vllm ;;
+    cleanup-vllm-inference) run_cleanup_vllm_inference ;;
     *) die "unsupported mode: $CA_MODE" ;;
   esac
 }

@@ -128,3 +128,25 @@ prepare_openclaw_vllm_specs() {
   run_confidential_agent_init openclaw-vllm "${args[@]}"
   log "generated OpenClaw vLLM spec at $CA_SPEC_PATH"
 }
+
+append_vllm_inference_args() {
+  local -n args_ref="$1"
+  args_ref+=(
+    --vllm-port "$CA_VLLM_INFERENCE_PORT"
+    --vllm-version "$CA_VLLM_INFERENCE_VERSION"
+    --vllm-served-model-name "$CA_VLLM_INFERENCE_SERVED_MODEL_NAME"
+    --oss-bucket "$CA_OSS_BUCKET"
+    --oss-endpoint "$CA_OSS_ENDPOINT"
+    --model-key-file "$CA_MODEL_KEY_FILE"
+  )
+}
+
+prepare_vllm_inference_specs() {
+  ensure_gateway_token
+  ensure_cosign_key
+  local args=()
+  append_init_common_args args
+  append_vllm_inference_args args
+  run_confidential_agent_init vllm-inference "${args[@]}"
+  log "generated vllm-inference spec at $CA_SPEC_PATH"
+}
