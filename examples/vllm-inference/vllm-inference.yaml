@@ -1,0 +1,55 @@
+schema: confidential-agent/v1
+
+service:
+  id: vllm-inference
+  ports: [8080]
+  connect: [8080]
+  app_service: cai-vllm.service
+
+build:
+  image_name: vllm-inference-agent
+  kernel_cmdline_append: swiotlb=4194304,any rd.driver.blacklist=nouveau modprobe.blacklist=nouveau nouveau.modeset=0
+  resize: 80G
+  with_network: true
+  cleanup:
+    remove_static_libs: false
+  packages: [anolis-epao-release, binutils, ca-certificates, curl, dracut, elfutils-libelf-devel, fuse, fuse-libs, fuse3, fuse3-libs, gocryptfs, gcc, glibc-devel, git, jq, kernel, kernel-devel, kernel-headers, kmod, mailcap, make, openssl3, pciutils, pkgconf-pkg-config, python3.11, python3.11-devel, python3.11-pip, rpm, tar, wget, xz, zlib-devel]
+  files:
+    - source: ./cai-nvidia-cc-stack-install.sh
+      target: /usr/local/sbin/cai-nvidia-cc-stack-install.sh
+      executable: true
+    - source: ./nvidia-persistenced.service
+      target: /usr/local/share/cai/nvidia-persistenced.service
+  scripts: [./install-vllm-inference.sh]
+  variants:
+    release:
+      enabled: true
+
+deploy:
+  provider: aliyun
+  image_variant: release
+  instance_type: ecs.gn8v-tee.4xlarge
+  region: cn-beijing
+  zone_id: cn-beijing-l
+  disk_gb: 512
+
+attestation:
+  tee: tdx
+  mode: challenge
+  reference_values: rekor
+  rekor:
+    cosign_key: ./cosign.key
+    slsa_generator: /usr/libexec/shelter/slsa/slsa-generator
+    required: true
+
+resources:
+  model_decryption_key:
+    source: ./model-decryption-key
+    target: /run/cai/secrets/model-decryption-key
+    mode: "0600"
+    required: true
+  cai_model_env:
+    source: ./cai-model.env
+    target: /etc/cai/model.env
+    mode: "0600"
+    required: true
