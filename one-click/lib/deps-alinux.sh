@@ -4,7 +4,14 @@ detect_os_id() {
   if [[ -r /etc/os-release ]]; then
     # shellcheck disable=SC1091
     . /etc/os-release
-    printf '%s\n' "${ID:-unknown}"
+    # The OpenAnolis edition of Alibaba Cloud Linux 3 ships with ID=centos
+    # but carries ALINUX_MINOR_ID / VARIANT_ID=openanolis and the same
+    # alinux3-* repos. Treat it as alinux so the one-click runs on it.
+    if [[ "${ID:-}" != "alinux" && ( "${VARIANT_ID:-}" == "openanolis" || -n "${ALINUX_MINOR_ID:-}" ) ]]; then
+      printf 'alinux\n'
+    else
+      printf '%s\n' "${ID:-unknown}"
+    fi
   else
     printf 'unknown\n'
   fi
