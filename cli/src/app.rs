@@ -36,7 +36,7 @@ use confidential_agent_core::schema::{
 };
 use confidential_agent_core::schema::{AgentCardPort, AgentCardRekor, DaemonA2aPeerStatus};
 use confidential_agent_core::spec::{
-    AgentSpec, AttestationMode, AttestationTee, ReferenceValueMode,
+    AgentSpec, AttestationMode, AttestationTee, ConnectPort, EncryptionMode, ReferenceValueMode,
 };
 use confidential_agent_core::util::{hex_encode, rekor_payload, sha256_file};
 use confidential_agent_shelter::{

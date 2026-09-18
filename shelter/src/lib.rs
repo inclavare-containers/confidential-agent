@@ -307,7 +307,8 @@ fn security_group_rules(
             ));
         }
     }
-    for port in &spec.service.connect {
+    for cp in &spec.service.connect {
+        let port = cp.port();
         for cidr in options.peerings.cidrs_for_scope(PeeringScope::Connect) {
             rules.push(ShelterDeploySecurityGroupRule::ingress(
                 format!(

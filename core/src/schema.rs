@@ -142,7 +142,7 @@ impl LocalDeployState {
 pub struct LocalServiceNetwork {
     pub ports: Vec<u16>,
     #[serde(default)]
-    pub connect: Vec<u16>,
+    pub connect: Vec<crate::spec::ConnectPort>,
     #[serde(default)]
     pub mcp_ports: Vec<u16>,
 }
@@ -177,7 +177,7 @@ pub struct BootstrapConfig {
     #[serde(default)]
     pub ports: Vec<u16>,
     #[serde(default)]
-    pub connect: Vec<u16>,
+    pub connect: Vec<crate::spec::ConnectPort>,
     #[serde(default)]
     pub mcp_ports: Vec<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -268,15 +268,15 @@ pub struct MeshService {
     #[serde(default)]
     pub ports: Vec<u16>,
     #[serde(default)]
-    pub connect: Vec<u16>,
+    pub connect: Vec<crate::spec::ConnectPort>,
     #[serde(default)]
     pub mcp_ports: Vec<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gateway_public_key: Option<String>,
 }
 
-pub fn confidential_ports(ports: &[u16], connect: &[u16]) -> Vec<u16> {
-    let connect = connect.iter().copied().collect::<BTreeSet<_>>();
+pub fn confidential_ports(ports: &[u16], connect: &[crate::spec::ConnectPort]) -> Vec<u16> {
+    let connect = connect.iter().map(|cp| cp.port()).collect::<BTreeSet<_>>();
     let mut ports = ports
         .iter()
         .copied()
@@ -536,12 +536,12 @@ mod tests {
 
     #[test]
     fn confidential_ports_excludes_connect_ports() {
-        assert_eq!(confidential_ports(&[18789, 18800], &[18789]), vec![18800]);
+        assert_eq!(confidential_ports(&[18789, 18800], &[crate::spec::ConnectPort::Plain(18789)]), vec![18800]);
     }
 
     #[test]
     fn confidential_ports_returns_empty_when_all_are_connect() {
-        assert_eq!(confidential_ports(&[18789], &[18789]), Vec::<u16>::new());
+        assert_eq!(confidential_ports(&[18789], &[crate::spec::ConnectPort::Plain(18789)]), Vec::<u16>::new());
     }
 
     #[test]

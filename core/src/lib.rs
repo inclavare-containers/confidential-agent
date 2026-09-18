@@ -65,7 +65,7 @@ mod schema_tests {
             },
             service: LocalServiceNetwork {
                 ports: vec![18789, 18800],
-                connect: vec![18789],
+                connect: vec![crate::spec::ConnectPort::Plain(18789)],
                 mcp_ports: vec![18800],
             },
             gateway_identity: Some(LocalGatewayIdentity {
@@ -86,7 +86,7 @@ mod schema_tests {
         assert_eq!(decoded.attestation_mode, "challenge");
         assert_eq!(legacy.attestation_mode, "challenge");
         assert_eq!(decoded.service.ports, vec![18789, 18800]);
-        assert_eq!(decoded.service.connect, vec![18789]);
+        assert_eq!(decoded.service.connect, vec![crate::spec::ConnectPort::Plain(18789)]);
         assert_eq!(decoded.service.mcp_ports, vec![18800]);
         assert_eq!(decoded.gateway_identity.unwrap().public_key, "pub");
         assert_eq!(decoded.deploy.private_mesh_ip(), Some("10.0.0.8"));
@@ -109,7 +109,7 @@ mod schema_tests {
                     private_ip: Some("10.0.0.7".to_string()),
                     public_ip: Some("1.2.3.4".to_string()),
                     ports: vec![18789, 18800],
-                    connect: vec![18789],
+                    connect: vec![crate::spec::ConnectPort::Plain(18789)],
                     mcp_ports: vec![18800],
                     gateway_public_key: Some("pub".to_string()),
                 },
@@ -122,7 +122,7 @@ mod schema_tests {
         let decoded: MeshBundle = serde_json::from_str(&encoded).unwrap();
 
         assert_eq!(decoded.services["svc-a"].ports, vec![18789, 18800]);
-        assert_eq!(decoded.services["svc-a"].connect, vec![18789]);
+        assert_eq!(decoded.services["svc-a"].connect, vec![crate::spec::ConnectPort::Plain(18789)]);
         assert_eq!(decoded.services["svc-a"].mcp_ports, vec![18800]);
         assert_eq!(
             decoded.services["svc-a"].gateway_public_key.as_deref(),
@@ -133,10 +133,10 @@ mod schema_tests {
     #[test]
     fn confidential_ports_are_ports_minus_connect() {
         assert_eq!(
-            confidential_ports(&[18789, 3001, 3001, 18800], &[18789]),
+            confidential_ports(&[18789, 3001, 3001, 18800], &[crate::spec::ConnectPort::Plain(18789)]),
             vec![3001, 18800]
         );
-        assert!(confidential_ports(&[18789], &[18789]).is_empty());
+        assert!(confidential_ports(&[18789], &[crate::spec::ConnectPort::Plain(18789)]).is_empty());
     }
 
     #[test]
@@ -147,7 +147,7 @@ mod schema_tests {
             service_id: "svc-a".to_string(),
             mode: "challenge".to_string(),
             ports: vec![18789, 18800],
-            connect: vec![18789],
+            connect: vec![crate::spec::ConnectPort::Plain(18789)],
             mcp_ports: vec![18800],
             gateway_identity: Some(GatewayIdentity {
                 public_key: "pub".to_string(),
@@ -196,7 +196,7 @@ mod schema_tests {
             service_id: "svc-a".to_string(),
             mode: "challenge".to_string(),
             ports: vec![18789],
-            connect: vec![18789],
+            connect: vec![crate::spec::ConnectPort::Plain(18789)],
             mcp_ports: Vec::new(),
             gateway_identity: None,
             resources: Vec::new(),

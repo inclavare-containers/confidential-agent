@@ -1596,7 +1596,7 @@ fn print_status_table(states: &[StatusView]) {
     );
     for state in states {
         let ports = join_ports(&state.service.ports);
-        let connect = join_ports(&state.service.connect);
+        let connect = join_ports(&state.service.connect.iter().map(|cp| cp.port()).collect::<Vec<_>>());
         println!(
             "{:<18} {:<9} {:<28} {:<11} {:<7} {:<16} {:<12} {:<12}",
             state.service_id,

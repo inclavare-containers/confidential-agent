@@ -1273,7 +1273,7 @@ fn draw_services(frame: &mut Frame<'_>, app: &mut TuiApp, area: Rect) {
             &agent.local.service.ports,
             &agent.local.service.connect,
         ));
-        let connect_ports = join_tui_ports(&agent.local.service.connect);
+        let connect_ports = join_tui_ports(&agent.local.service.connect.iter().map(|cp| cp.port()).collect::<Vec<_>>());
         let address = preferred_display_address(agent);
         let evidence_label = if agent.attestation_target().is_none() {
             "n/a"
@@ -1561,7 +1561,7 @@ fn draw_service_network(frame: &mut Frame<'_>, app: &TuiApp, area: Rect) {
         ]),
         Line::from(vec![
             Span::styled("Connect ports  ", muted()),
-            Span::styled(join_tui_ports(&agent.local.service.connect), accent_bold()),
+            Span::styled(join_tui_ports(&agent.local.service.connect.iter().map(|cp| cp.port()).collect::<Vec<_>>()), accent_bold()),
         ]),
         Line::from(vec![
             Span::styled("Mesh ports     ", muted()),
@@ -1949,7 +1949,7 @@ mod tests {
         state.deploy.public_ip = Some("192.0.2.10".to_string());
         state.deploy.private_ip = Some("10.0.0.10".to_string());
         state.service.ports = vec![8000, 8443];
-        state.service.connect = vec![8000];
+        state.service.connect = vec![(confidential_agent_core::spec::ConnectPort::Plain(8000))];
         state.service.mcp_ports = vec![8443];
         state
     }

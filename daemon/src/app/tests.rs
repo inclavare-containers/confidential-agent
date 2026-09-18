@@ -2250,7 +2250,7 @@ fn no_tee_sync_mesh_after_bootstrap_writes_config_directory_and_status() {
     let args = test_run_args(cdh_root.clone());
     let mut bootstrap = test_bootstrap_config("openclaw");
     bootstrap.ports = vec![18789, 18800];
-    bootstrap.connect = vec![18789];
+    bootstrap.connect = vec![confidential_agent_core::spec::ConnectPort::Plain(18789)];
     bootstrap.mcp_ports = vec![18800];
     let mut state = DaemonState::default();
     assert!(apply_bootstrap(&args, &bootstrap, &mut state, false).unwrap());
@@ -2867,7 +2867,7 @@ fn no_tee_sync_mesh_a2a_peer_stale_fallback_persists_state_and_status() {
     let args = test_run_args(cdh_root.clone());
     let mut bootstrap = test_bootstrap_config("openclaw");
     bootstrap.ports = vec![18789];
-    bootstrap.connect = vec![18789];
+    bootstrap.connect = vec![confidential_agent_core::spec::ConnectPort::Plain(18789)];
     let mut state = DaemonState::default();
     assert!(apply_bootstrap(&args, &bootstrap, &mut state, false).unwrap());
     let card = test_agent_card("remote-agent", &[3001]);

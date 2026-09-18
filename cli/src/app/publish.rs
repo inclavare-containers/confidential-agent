@@ -1995,7 +1995,7 @@ mod tests {
             },
             service: LocalServiceNetwork {
                 ports: vec![18789],
-                connect: vec![18789],
+                connect: vec![(confidential_agent_core::spec::ConnectPort::Plain(18789))],
                 mcp_ports: Vec::new(),
             },
             gateway_identity: Some(LocalGatewayIdentity {

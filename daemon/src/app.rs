@@ -10,6 +10,7 @@ use confidential_agent_core::schema::{
     AGENT_CARD_PORT, BOOTSTRAP_SCHEMA_VERSION, DAEMON_STATUS_PORT, DAEMON_STATUS_SCHEMA_VERSION,
     MESH_SCHEMA_VERSION, SERVICE_DIRECTORY_SCHEMA_VERSION,
 };
+use confidential_agent_core::spec::EncryptionMode;
 use confidential_agent_core::util::{hex_encode, rekor_payload, sha256_file};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -2003,24 +2004,30 @@ fn sync_mesh(args: &RunArgs, bootstrap: &BootstrapConfig, state: &mut DaemonStat
         let confidential_port_set = confidential_ports(&bootstrap.ports, &bootstrap.connect)
             .into_iter()
             .collect::<BTreeSet<_>>();
+        let connect_encryption: BTreeMap<u16, EncryptionMode> = bootstrap
+            .connect
+            .iter()
+            .map(|cp| (cp.port(), cp.encryption()))
+            .collect();
         let egress = bootstrap
             .ports
             .iter()
             .enumerate()
             .map(|(idx, port)| {
-                let mut route = json!({
-                    "rats_tls": {
-                        "multiplex": true,
-                    },
-                    "netfilter": {
-                        "capture_dst": { "port": port },
-                        "capture_local_traffic": false,
-                        "listen_port": 39000 + idx as u16,
-                    },
-                    "attest": tng_attest_config(),
-                });
+                let encryption = connect_encryption
+                    .get(port)
+                    .cloned()
+                    .unwrap_or(EncryptionMode::RatsTls);
+                let mut route = tng_egress_protocol(encryption);
+                let obj = route.as_object_mut().expect("protocol config is an object");
+                obj.insert("netfilter".into(), json!({
+                    "capture_dst": { "port": port },
+                    "capture_local_traffic": false,
+                    "listen_port": 39000 + idx as u16,
+                }));
+                obj.insert("attest".into(), tng_attest_config());
                 if confidential_port_set.contains(port) {
-                    route["verify"] = tng_verify_config(Value::Array(Vec::new()));
+                    obj.insert("verify".into(), tng_verify_config(Value::Array(Vec::new())));
                 }
                 route
             })
@@ -2187,7 +2194,7 @@ fn runtime_port_plan(bundle: &MeshBundle, self_id: &str) -> Result<RuntimePortPl
             })
             .with_context(|| format!("active peer service '{service_id}' has no reachable IP"))?
             .to_string();
-        let connect_ports = service.connect.iter().copied().collect::<BTreeSet<_>>();
+        let connect_ports = service.connect.iter().map(|cp| cp.port()).collect::<BTreeSet<_>>();
         let mcp_ports = service.mcp_ports.iter().copied().collect::<BTreeSet<_>>();
         let mut ports = service.ports.clone();
         ports.sort_unstable();
@@ -2288,6 +2295,13 @@ fn tng_attest_config() -> Value {
     })
 }
 
+fn tng_egress_protocol(encryption: EncryptionMode) -> Value {
+    match encryption {
+        EncryptionMode::RatsTls => json!({"rats_tls": {"multiplex": false}}),
+        EncryptionMode::Ohttp => json!({"ohttp": {"key": {"source": "self_generated"}}}),
+    }
+}
+
 fn tng_verify_config(reference_values: Value) -> Value {
     json!({
         "as_type": "builtin",
@@ -2330,33 +2344,37 @@ fn tng_config(bundle: &MeshBundle, self_id: &str, plan: &RuntimePortPlan) -> Res
     let confidential_port_set = confidential_ports(&service.ports, &service.connect)
         .into_iter()
         .collect::<BTreeSet<_>>();
+    let connect_encryption: BTreeMap<u16, EncryptionMode> = service
+        .connect
+        .iter()
+        .map(|cp| (cp.port(), cp.encryption()))
+        .collect();
     let peer_reference_values = if confidential_port_set.is_empty() {
         None
     } else {
         Some(mesh_peer_reference_values(bundle, self_id)?)
     };
     for route_plan in &plan.self_routes {
-        let mut route = json!({
-            "rats_tls": {
-                "multiplex": true,
-            },
-            "netfilter": {
-                "capture_dst": {
-                    "port": route_plan.port,
-                },
-                "capture_local_traffic": false,
-                "listen_port": route_plan.tng_egress_port,
-                "so_mark": DEFAULT_TNG_SO_MARK,
-            },
-            "attest": tng_attest_config(),
-        });
+        let encryption = connect_encryption
+            .get(&route_plan.port)
+            .cloned()
+            .unwrap_or(EncryptionMode::RatsTls);
+        let mut route = tng_egress_protocol(encryption);
+        let obj = route.as_object_mut().expect("protocol config is an object");
+        obj.insert("netfilter".into(), json!({
+            "capture_dst": {"port": route_plan.port},
+            "capture_local_traffic": false,
+            "listen_port": route_plan.tng_egress_port,
+            "so_mark": DEFAULT_TNG_SO_MARK,
+        }));
+        obj.insert("attest".into(), tng_attest_config());
         if confidential_port_set.contains(&route_plan.port) {
-            route["verify"] = tng_verify_config(
+            obj.insert("verify".into(), tng_verify_config(
                 peer_reference_values
                     .as_ref()
                     .cloned()
                     .unwrap_or_else(|| Value::Array(Vec::new())),
-            );
+            ));
         }
         egress.push(route);
     }

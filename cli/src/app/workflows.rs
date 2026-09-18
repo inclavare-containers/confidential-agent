@@ -644,13 +644,12 @@ pub(super) fn render_connect_config(
     let mut ingress = Vec::new();
     let mut client_endpoints = Vec::new();
     for service in services {
-        let remote_ports = service.service.connect.clone();
-
         let host = connect_host(service)?;
         let reference_values = connect_reference_values(&bundle, &service.service_id)?;
-        for remote_port in remote_ports {
-            let preferred = remote_port;
-            let local_port = allocate_local_port(preferred, |port| {
+        for cp in &service.service.connect {
+            let remote_port = cp.port();
+            let encryption = cp.encryption();
+            let local_port = allocate_local_port(remote_port, |port| {
                 used_local_ports.contains(&port) || !port_is_available(port)
             })?;
             used_local_ports.insert(local_port);
@@ -670,26 +669,25 @@ pub(super) fn render_connect_config(
                 protocol: "http".to_string(),
                 http_base_url: format!("http://127.0.0.1:{local_port}"),
             });
-            ingress.push(serde_json::json!({
-                "rats_tls": {
-                    "multiplex": true,
-                },
-                "mapping": {
-                    "in": {
-                        "host": "127.0.0.1",
-                        "port": local_port,
-                    },
-                    "out": {
-                        "host": host,
-                        "port": remote_port,
-                    }
-                },
-                "verify": {
-                    "as_type": "builtin",
-                    "attestation_policy": connect_policy_config(state_dir)?,
-                    "reference_values": reference_values,
+            let mut entry = serde_json::Map::new();
+            match encryption {
+                EncryptionMode::RatsTls => {
+                    entry.insert("rats_tls".into(), serde_json::json!({"multiplex": false}));
                 }
+                EncryptionMode::Ohttp => {
+                    entry.insert("ohttp".into(), serde_json::json!({}));
+                }
+            }
+            entry.insert("mapping".into(), serde_json::json!({
+                "in": {"host": "127.0.0.1", "port": local_port},
+                "out": {"host": host, "port": remote_port}
             }));
+            entry.insert("verify".into(), serde_json::json!({
+                "as_type": "builtin",
+                "attestation_policy": connect_policy_config(state_dir)?,
+                "reference_values": reference_values,
+            }));
+            ingress.push(serde_json::Value::Object(entry));
         }
     }
 
@@ -1180,7 +1178,7 @@ mod tests {
         id: &str,
         phase: &str,
         ports: Vec<u16>,
-        connect: Vec<u16>,
+        connect: Vec<ConnectPort>,
     ) -> LocalServiceState {
         LocalServiceState {
             schema: LOCAL_SERVICE_STATE_SCHEMA_VERSION.to_string(),
@@ -1266,8 +1264,8 @@ mod tests {
     #[test]
     fn connect_services_filters_by_id() {
         let states = vec![
-            test_service_state("alpha", "active", vec![8080], vec![8080]),
-            test_service_state("beta", "active", vec![9090], vec![9090]),
+            test_service_state("alpha", "active", vec![8080], vec![(confidential_agent_core::spec::ConnectPort::Plain(8080))]),
+            test_service_state("beta", "active", vec![9090], vec![(confidential_agent_core::spec::ConnectPort::Plain(9090))]),
         ];
         let result = connect_services(&states, Some("alpha")).unwrap();
         assert_eq!(result.len(), 1);
@@ -1280,7 +1278,7 @@ mod tests {
             "alpha",
             "deployed",
             vec![8080],
-            vec![8080],
+            vec![confidential_agent_core::spec::ConnectPort::Plain(8080)],
         )];
         assert!(connect_services(&states, Some("alpha")).is_err());
     }
@@ -1293,11 +1291,10 @@ mod tests {
 
     #[test]
     fn connect_services_all_active_when_no_filter() {
-        let states = vec![
-            test_service_state("alpha", "active", vec![8080], vec![8080]),
-            test_service_state("beta", "deployed", vec![9090], vec![9090]),
-            test_service_state("gamma", "active", vec![7070], vec![7070]),
-        ];
+        let alpha = test_service_state("alpha", "active", vec![8080], vec![confidential_agent_core::spec::ConnectPort::Plain(8080)]);
+        let beta = test_service_state("beta", "deployed", vec![9090], vec![confidential_agent_core::spec::ConnectPort::Plain(9090)]);
+        let gamma = test_service_state("gamma", "active", vec![7070], vec![confidential_agent_core::spec::ConnectPort::Plain(7070)]);
+        let states = vec![alpha, beta, gamma];
         let result = connect_services(&states, None).unwrap();
         assert_eq!(result.len(), 2);
     }
@@ -1567,7 +1564,7 @@ resources: {}
     #[test]
     fn render_mesh_bundle_includes_only_active_services() {
         let states = vec![
-            test_service_state("alpha", "active", vec![8080], vec![8080]),
+            test_service_state("alpha", "active", vec![8080], vec![(confidential_agent_core::spec::ConnectPort::Plain(8080))]),
             test_service_state("beta", "deleted", vec![9090], vec![]),
         ];
         let rv = ReferenceValueArtifacts {

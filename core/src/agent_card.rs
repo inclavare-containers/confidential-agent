@@ -144,7 +144,7 @@ pub fn derive_tng_client_config_with_local_ports(
         let local_port = local_port_for(port.port)?;
         ingress.push(json!({
             "rats_tls": {
-                "multiplex": true,
+                "multiplex": false,
             },
             "mapping": {
                 "in": {
@@ -198,8 +198,8 @@ pub fn render_agent_card(
         spec.service
             .connect
             .iter()
-            .map(|port| AgentInterface {
-                url: format!("http://{target_ip}:{port}/a2a"),
+            .map(|cp| AgentInterface {
+                url: format!("http://{target_ip}:{}/a2a", cp.port()),
                 protocol_binding: "JSONRPC".to_string(),
                 protocol_version: "1.0".to_string(),
                 tenant: None,
@@ -225,9 +225,9 @@ pub fn render_agent_card(
             .service
             .connect
             .iter()
-            .map(|port| AgentCardPort {
-                name: format!("port-{port}"),
-                port: *port,
+            .map(|cp| AgentCardPort {
+                name: format!("port-{}", cp.port()),
+                port: cp.port(),
             })
             .collect(),
         reference_values: sample_reference_values.cloned(),
@@ -554,7 +554,7 @@ mod tests {
         assert_eq!(ingress[0]["mapping"]["out"]["host"], "1.2.3.4");
         assert_eq!(ingress[0]["mapping"]["out"]["port"], 18789);
         assert_eq!(ingress[0]["mapping"]["in"]["host"], "127.0.0.1");
-        assert_eq!(ingress[0]["rats_tls"]["multiplex"], true);
+        assert_eq!(ingress[0]["rats_tls"]["multiplex"], false);
         assert_eq!(
             ingress[0]["verify"]["attestation_policy"]["path"],
             DEFAULT_TNG_POLICY_PATH

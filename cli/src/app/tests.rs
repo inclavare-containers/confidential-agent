@@ -225,7 +225,7 @@ resources: {}
 
 #[test]
 fn build_start_rejects_active_and_deployed_services() {
-    let active = local_state("openclaw", vec![18789], vec![18789]);
+    let active = local_state("openclaw", vec![18789], vec![(confidential_agent_core::spec::ConnectPort::Plain(18789))]);
     let mut deployed = active.clone();
     deployed.phase = "deployed".to_string();
     let mut deleted = active.clone();
@@ -239,7 +239,7 @@ fn build_start_rejects_active_and_deployed_services() {
 
 #[test]
 fn deploy_start_only_accepts_built_or_deleted_current_builds() {
-    let mut built = local_state("openclaw", vec![18789], vec![18789]);
+    let mut built = local_state("openclaw", vec![18789], vec![(confidential_agent_core::spec::ConnectPort::Plain(18789))]);
     built.phase = "built".to_string();
     let mut deleted = built.clone();
     deleted.phase = "deleted".to_string();
@@ -255,7 +255,7 @@ fn deploy_start_only_accepts_built_or_deleted_current_builds() {
 #[test]
 fn image_rm_removes_local_service_state_for_deleted_service() {
     let temp = tempfile::tempdir().unwrap();
-    let mut service = local_state("openclaw", vec![18789], vec![18789]);
+    let mut service = local_state("openclaw", vec![18789], vec![(confidential_agent_core::spec::ConnectPort::Plain(18789))]);
     service.phase = "deleted".to_string();
     write_state(temp.path(), &service);
     let service_dir = temp.path().join("services/openclaw");
@@ -285,7 +285,7 @@ fn image_rm_removes_local_service_state_for_deleted_service() {
 #[test]
 fn image_rm_rejects_active_service_even_with_force() {
     let temp = tempfile::tempdir().unwrap();
-    let service = local_state("openclaw", vec![18789], vec![18789]);
+    let service = local_state("openclaw", vec![18789], vec![(confidential_agent_core::spec::ConnectPort::Plain(18789))]);
     write_state(temp.path(), &service);
     let mut cli = test_cli();
     cli.state_dir = temp.path().to_path_buf();
@@ -308,7 +308,7 @@ fn image_rm_rejects_active_service_even_with_force() {
 #[test]
 fn image_rm_rejects_unknown_service_phase() {
     let temp = tempfile::tempdir().unwrap();
-    let mut service = local_state("openclaw", vec![18789], vec![18789]);
+    let mut service = local_state("openclaw", vec![18789], vec![(confidential_agent_core::spec::ConnectPort::Plain(18789))]);
     service.phase = "failed".to_string();
     write_state(temp.path(), &service);
     let mut cli = test_cli();
@@ -332,7 +332,7 @@ fn image_rm_rejects_unknown_service_phase() {
 #[test]
 fn image_list_marks_current_build_and_local_image_presence() {
     let temp = tempfile::tempdir().unwrap();
-    let mut state = local_state("openclaw", vec![18789], vec![18789]);
+    let mut state = local_state("openclaw", vec![18789], vec![(confidential_agent_core::spec::ConnectPort::Plain(18789))]);
     state.phase = "built".to_string();
     state.build.build_id = "openclaw-agent-release-20260508123045123".to_string();
     let paths = context_paths(temp.path(), "openclaw");
@@ -370,7 +370,7 @@ fn image_list_marks_current_build_and_local_image_presence() {
 #[test]
 fn image_list_includes_published_image_status() {
     let temp = tempfile::tempdir().unwrap();
-    let mut state = local_state("openclaw", vec![18789], vec![18789]);
+    let mut state = local_state("openclaw", vec![18789], vec![(confidential_agent_core::spec::ConnectPort::Plain(18789))]);
     state.phase = "built".to_string();
     state.build.build_id = "openclaw-agent-release-20260602112233".to_string();
     let paths = context_paths(temp.path(), "openclaw");
@@ -494,7 +494,7 @@ fn local_state_without_published_fields_deserializes_with_defaults() {
 #[test]
 fn status_view_separates_phase_from_local_image_presence() {
     let temp = tempfile::tempdir().unwrap();
-    let mut state = local_state("openclaw", vec![18789], vec![18789]);
+    let mut state = local_state("openclaw", vec![18789], vec![(confidential_agent_core::spec::ConnectPort::Plain(18789))]);
     state.phase = "deleted".to_string();
     state.deploy.public_ip = None;
     state.deploy.private_ip = None;
@@ -511,7 +511,7 @@ fn status_view_separates_phase_from_local_image_presence() {
     assert_eq!(views[0].cloud.tee, None);
 }
 
-fn local_state(service_id: &str, ports: Vec<u16>, connect: Vec<u16>) -> LocalServiceState {
+fn local_state(service_id: &str, ports: Vec<u16>, connect: Vec<ConnectPort>) -> LocalServiceState {
     LocalServiceState {
             schema: LOCAL_SERVICE_STATE_SCHEMA_VERSION.to_string(),
             service_id: service_id.to_string(),
@@ -1427,7 +1427,7 @@ resources: {}
 "#,
     )
     .unwrap();
-    let mut state = local_state("openclaw", vec![18789], vec![18789]);
+    let mut state = local_state("openclaw", vec![18789], vec![(confidential_agent_core::spec::ConnectPort::Plain(18789))]);
     state.spec.path = spec_path;
     state.deploy.terraform_dir = Some(
         state_dir
@@ -1550,7 +1550,7 @@ resources: {}
         )
         .unwrap();
     }
-    let mut state = local_state("openclaw", vec![18789], vec![18789]);
+    let mut state = local_state("openclaw", vec![18789], vec![(confidential_agent_core::spec::ConnectPort::Plain(18789))]);
     state.phase = "built".to_string();
     state.build.build_id = release_id.to_string();
     state.build.variant = "release".to_string();
@@ -1942,7 +1942,7 @@ resources: {}
     .unwrap();
     let build_id = "openclaw-agent-release-20260508123045123";
     let paths = context_paths(temp.path(), "openclaw");
-    let mut state = local_state("openclaw", vec![18789], vec![18789]);
+    let mut state = local_state("openclaw", vec![18789], vec![(confidential_agent_core::spec::ConnectPort::Plain(18789))]);
     state.phase = "built".to_string();
     state.build.build_id = build_id.to_string();
     state.build.image_path =
@@ -2241,7 +2241,7 @@ resources: {}
 "#,
     )
     .unwrap();
-    let mut state = local_state("openclaw", vec![18789], vec![18789]);
+    let mut state = local_state("openclaw", vec![18789], vec![(confidential_agent_core::spec::ConnectPort::Plain(18789))]);
     state.phase = "active".to_string();
     state.spec.path = spec_path;
     state.deploy.published_image_id = Some("m-2ze123abc".to_string());
@@ -2514,7 +2514,7 @@ fn debug_ssh_key_generator_output_is_accepted_by_ssh_keygen_when_available() {
 
 #[test]
 fn debug_ssh_hint_uses_generated_private_key_and_public_ip() {
-    let mut state = local_state("openclaw", vec![18789], vec![18789]);
+    let mut state = local_state("openclaw", vec![18789], vec![(confidential_agent_core::spec::ConnectPort::Plain(18789))]);
     state.build.variant = "debug".to_string();
     state.build.debug_ssh = Some(confidential_agent_core::schema::LocalDebugSshKey {
         private_key: PathBuf::from("/state/services/openclaw/secrets/debug_ssh"),
@@ -2542,7 +2542,7 @@ fn debug_ssh_command_errors_when_state_missing() {
 #[test]
 fn debug_ssh_command_errors_without_debug_key() {
     let temp = tempfile::tempdir().unwrap();
-    let state = local_state("openclaw", vec![18789], vec![18789]);
+    let state = local_state("openclaw", vec![18789], vec![(confidential_agent_core::spec::ConnectPort::Plain(18789))]);
     write_state(temp.path(), &state);
 
     let err = resolve_debug_ssh_command(temp.path(), "openclaw", &[]).unwrap_err();
@@ -2638,7 +2638,7 @@ fn debug_ssh_command_treats_empty_public_ip_as_absent() {
 }
 
 fn debug_ssh_state(service_id: &str) -> LocalServiceState {
-    let mut state = local_state(service_id, vec![18789], vec![18789]);
+    let mut state = local_state(service_id, vec![18789], vec![(confidential_agent_core::spec::ConnectPort::Plain(18789))]);
     state.build.variant = "debug".to_string();
     state.build.debug_ssh = Some(LocalDebugSshKey {
         private_key: PathBuf::from(format!("/state/services/{service_id}/secrets/debug_ssh")),
@@ -2689,7 +2689,7 @@ resources: {}
 #[test]
 fn destroy_leaves_local_state_active_when_shelter_destroy_fails() {
     let temp = tempfile::tempdir().unwrap();
-    let mut service = local_state("openclaw", vec![18789], vec![18789]);
+    let mut service = local_state("openclaw", vec![18789], vec![(confidential_agent_core::spec::ConnectPort::Plain(18789))]);
     service.deploy.terraform_dir = Some(temp.path().join("services/openclaw/terraform/active"));
     write_state(temp.path(), &service);
     write_manifest(temp.path(), "openclaw", &service.build.build_id);
@@ -2735,7 +2735,7 @@ fn destroy_leaves_local_state_active_when_shelter_destroy_fails() {
 #[test]
 fn destroy_keeps_local_build_artifacts_after_shelter_destroy_succeeds() {
     let temp = tempfile::tempdir().unwrap();
-    let mut service = local_state("openclaw", vec![18789], vec![18789]);
+    let mut service = local_state("openclaw", vec![18789], vec![(confidential_agent_core::spec::ConnectPort::Plain(18789))]);
     let service_dir = temp.path().join("services/openclaw");
     service.deploy.terraform_dir = Some(service_dir.join("terraform/active"));
     service.deploy.instance_id = Some("i-test".to_string());
@@ -2848,7 +2848,7 @@ fn destroy_keeps_local_build_artifacts_after_shelter_destroy_succeeds() {
 #[test]
 fn destroy_is_idempotent_for_deleted_service_without_cloud_state() {
     let temp = tempfile::tempdir().unwrap();
-    let mut service = local_state("openclaw", vec![18789], vec![18789]);
+    let mut service = local_state("openclaw", vec![18789], vec![(confidential_agent_core::spec::ConnectPort::Plain(18789))]);
     service.phase = "deleted".to_string();
     service.deploy.run_id.clear();
     service.deploy.resource_name.clear();
@@ -2879,7 +2879,7 @@ fn destroy_is_idempotent_for_deleted_service_without_cloud_state() {
 
 #[test]
 fn live_status_skips_deleted_services() {
-    let mut service = local_state("openclaw", vec![18789], vec![18789]);
+    let mut service = local_state("openclaw", vec![18789], vec![(confidential_agent_core::spec::ConnectPort::Plain(18789))]);
     service.phase = "deleted".to_string();
     service.deploy.public_ip = Some("127.0.0.1".to_string());
 
@@ -3036,7 +3036,7 @@ resources: {}
 "#,
     )
     .unwrap();
-    let mut state = local_state("openclaw", vec![18789], vec![18789]);
+    let mut state = local_state("openclaw", vec![18789], vec![(confidential_agent_core::spec::ConnectPort::Plain(18789))]);
     state.phase = "built".to_string();
     state.build.image_path = temp.path().join("missing.qcow2");
     write_state(temp.path(), &state);
@@ -3104,7 +3104,7 @@ resources: {}
 "#,
     )
     .unwrap();
-    let mut state = local_state("openclaw", vec![18789], vec![18789]);
+    let mut state = local_state("openclaw", vec![18789], vec![(confidential_agent_core::spec::ConnectPort::Plain(18789))]);
     state.phase = "built".to_string();
     state.spec.path = spec.clone();
     state.build.image_path = temp.path().join("missing.qcow2");
@@ -3149,7 +3149,7 @@ resources: {}
 #[test]
 fn published_image_requires_build_result_metadata() {
     let temp = tempfile::tempdir().unwrap();
-    let mut state = local_state("openclaw", vec![18789], vec![18789]);
+    let mut state = local_state("openclaw", vec![18789], vec![(confidential_agent_core::spec::ConnectPort::Plain(18789))]);
     state.phase = "built".to_string();
     state.build.image_path = temp.path().join("missing.qcow2");
     state.build.published.insert(
@@ -3198,7 +3198,7 @@ resources: {}
 #[test]
 fn published_image_for_deploy_skips_stale_entry_and_uses_valid_one() {
     let temp = tempfile::tempdir().unwrap();
-    let mut state = local_state("openclaw", vec![18789], vec![18789]);
+    let mut state = local_state("openclaw", vec![18789], vec![(confidential_agent_core::spec::ConnectPort::Plain(18789))]);
     state.phase = "built".to_string();
     state.build.image_path = temp.path().join("image.qcow2");
     fs::write(&state.build.image_path, "image").unwrap();
@@ -3288,7 +3288,7 @@ resources: {}
     )
     .unwrap();
     let spec = AgentSpec::from_path(&spec_path).unwrap();
-    let mut state = local_state("openclaw", vec![18789], vec![18789]);
+    let mut state = local_state("openclaw", vec![18789], vec![(confidential_agent_core::spec::ConnectPort::Plain(18789))]);
     state.phase = "deployed".to_string();
     state.deploy.run_id = "20260429110011".to_string();
     state.deploy.resource_name = "openclaw-20260429110011".to_string();
@@ -3334,7 +3334,7 @@ resources: {}
     )
     .unwrap();
     let spec = AgentSpec::from_path(&spec_path).unwrap();
-    let mut state = local_state("openclaw", vec![18789], vec![18789]);
+    let mut state = local_state("openclaw", vec![18789], vec![(confidential_agent_core::spec::ConnectPort::Plain(18789))]);
     state.gateway_identity = None;
 
     let activated = activate_existing_service_state(temp.path(), &spec_path, &spec, state).unwrap();
@@ -3367,7 +3367,7 @@ fn ensure_gateway_identity_rejects_mismatched_public_key() {
 
 #[test]
 fn mesh_port_conflict_is_rejected() {
-    let states = vec![local_state("openclaw", vec![18789], vec![18789])];
+    let states = vec![local_state("openclaw", vec![18789], vec![(confidential_agent_core::spec::ConnectPort::Plain(18789))])];
     let err = validate_mesh_port_conflicts(&states, "mcp", &[18789]).unwrap_err();
     assert!(err
         .to_string()
@@ -3376,7 +3376,7 @@ fn mesh_port_conflict_is_rejected() {
 
 #[test]
 fn built_services_do_not_reserve_mesh_ports() {
-    let mut built = local_state("openclaw", vec![18789], vec![18789]);
+    let mut built = local_state("openclaw", vec![18789], vec![(confidential_agent_core::spec::ConnectPort::Plain(18789))]);
     built.phase = "built".to_string();
 
     validate_mesh_port_conflicts(&[built], "mcp", &[18789]).unwrap();
@@ -3398,7 +3398,7 @@ fn filtered_mesh_sync_requires_active_local_state() {
 
 #[test]
 fn render_mesh_bundle_includes_service_ports_and_sample_reference_values() {
-    let services = vec![local_state("cai-e2e", vec![18789], vec![18789])];
+    let services = vec![local_state("cai-e2e", vec![18789], vec![(confidential_agent_core::spec::ConnectPort::Plain(18789))])];
     let mut sample = BTreeMap::new();
     sample.insert(
         "cai-e2e".to_string(),
@@ -3415,7 +3415,7 @@ fn render_mesh_bundle_includes_service_ports_and_sample_reference_values() {
 
     assert_eq!(bundle.generation, 7);
     assert_eq!(bundle.services["cai-e2e"].ports, vec![18789]);
-    assert_eq!(bundle.services["cai-e2e"].connect, vec![18789]);
+    assert_eq!(bundle.services["cai-e2e"].connect, vec![(confidential_agent_core::spec::ConnectPort::Plain(18789))]);
     assert_eq!(
         bundle.reference_values["cai-e2e"]["measurement.uki.SHA-384"][0],
         "abc123"
@@ -3424,7 +3424,7 @@ fn render_mesh_bundle_includes_service_ports_and_sample_reference_values() {
 
 #[test]
 fn render_mesh_bundle_omits_deleted_services() {
-    let mut openclaw = local_state("openclaw", vec![18789], vec![18789]);
+    let mut openclaw = local_state("openclaw", vec![18789], vec![(confidential_agent_core::spec::ConnectPort::Plain(18789))]);
     let mut mcp = local_state("mcp", vec![3001], Vec::new());
     mcp.phase = "deleted".to_string();
     let mut sample = BTreeMap::new();
@@ -3450,7 +3450,7 @@ fn render_mesh_bundle_omits_deleted_services() {
 #[test]
 fn connect_requires_public_ip() {
     let temp = tempfile::tempdir().unwrap();
-    let mut service = local_state("openclaw", vec![18789], vec![18789]);
+    let mut service = local_state("openclaw", vec![18789], vec![(confidential_agent_core::spec::ConnectPort::Plain(18789))]);
     service.deploy.public_ip = None;
     write_state(temp.path(), &service);
 
@@ -3484,8 +3484,8 @@ fn connect_ignores_services_without_connect_ports() {
 #[test]
 fn connect_renders_all_connect_services() {
     let temp = tempfile::tempdir().unwrap();
-    let openclaw = local_state("openclaw", vec![49152], vec![49152]);
-    let worker = local_state("worker", vec![49153], vec![49153]);
+    let openclaw = local_state("openclaw", vec![49152], vec![(confidential_agent_core::spec::ConnectPort::Plain(49152))]);
+    let worker = local_state("worker", vec![49153], vec![(confidential_agent_core::spec::ConnectPort::Plain(49153))]);
     let mcp = local_state("mcp", vec![3001], Vec::new());
     write_state(temp.path(), &openclaw);
     write_state(temp.path(), &worker);
@@ -3507,7 +3507,7 @@ fn connect_renders_all_connect_services() {
     assert_eq!(config["add_ingress"].as_array().unwrap().len(), 2);
     assert_eq!(config["add_ingress"][0]["mapping"]["out"]["port"], 49152);
     assert_eq!(config["add_ingress"][1]["mapping"]["out"]["port"], 49153);
-    assert_eq!(config["add_ingress"][0]["rats_tls"]["multiplex"], true);
+    assert_eq!(config["add_ingress"][0]["rats_tls"]["multiplex"], false);
     assert_eq!(
         config["add_ingress"][0]["verify"]["attestation_policy"]["type"],
         "path"
@@ -3533,8 +3533,8 @@ fn connect_renders_all_connect_services() {
 #[test]
 fn connect_service_filter_renders_only_requested_service() {
     let temp = tempfile::tempdir().unwrap();
-    let openclaw = local_state("openclaw", vec![49152], vec![49152]);
-    let worker = local_state("worker", vec![49153], vec![49153]);
+    let openclaw = local_state("openclaw", vec![49152], vec![(confidential_agent_core::spec::ConnectPort::Plain(49152))]);
+    let worker = local_state("worker", vec![49153], vec![(confidential_agent_core::spec::ConnectPort::Plain(49153))]);
     write_state(temp.path(), &openclaw);
     write_state(temp.path(), &worker);
 
@@ -3560,7 +3560,7 @@ fn connect_service_filter_renders_only_requested_service() {
 #[test]
 fn connect_service_filter_rejects_unknown_service() {
     let temp = tempfile::tempdir().unwrap();
-    let openclaw = local_state("openclaw", vec![49152], vec![49152]);
+    let openclaw = local_state("openclaw", vec![49152], vec![(confidential_agent_core::spec::ConnectPort::Plain(49152))]);
     write_state(temp.path(), &openclaw);
     write_mesh_bundle(
         temp.path(),
@@ -3682,7 +3682,7 @@ fn from_card_connect_allocates_available_local_ports() {
     assert_eq!(config["add_ingress"].as_array().unwrap().len(), 2);
     assert_eq!(config["add_ingress"][0]["mapping"]["in"]["port"], 18790);
     assert_eq!(config["add_ingress"][0]["mapping"]["out"]["port"], 18789);
-    assert_eq!(config["add_ingress"][0]["rats_tls"]["multiplex"], true);
+    assert_eq!(config["add_ingress"][0]["rats_tls"]["multiplex"], false);
     assert_eq!(
         config["add_ingress"][0]["verify"]["attestation_policy"]["type"],
         "path"
@@ -3768,7 +3768,7 @@ fn collect_sample_reference_values_uses_state_reference_value_path() {
         r#"{"measurement.uki.SHA-384":["from-build-result"]}"#,
     )
     .unwrap();
-    let mut service = local_state("cai-e2e", vec![18789], vec![18789]);
+    let mut service = local_state("cai-e2e", vec![18789], vec![(confidential_agent_core::spec::ConnectPort::Plain(18789))]);
     service.build.sample_rv = Some(sample);
     let services = vec![service];
     let values = collect_reference_values_from_dir(temp.path(), &services).unwrap();

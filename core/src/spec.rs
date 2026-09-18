@@ -28,11 +28,57 @@ pub struct ServiceSpec {
     pub id: String,
     pub ports: Vec<u16>,
     #[serde(default)]
-    pub connect: Vec<u16>,
+    pub connect: Vec<ConnectPort>,
     #[serde(default)]
     pub mcp_ports: Vec<u16>,
     #[serde(default)]
     pub app_service: Option<String>,
+}
+
+/// Per-port connect configuration. Supports two YAML forms:
+/// - `8080` (plain integer, defaults to `rats-tls` encryption)
+/// - `{port: 8080, encryption: ohttp}` (explicit per-port config)
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum ConnectPort {
+    Plain(u16),
+    Config {
+        port: u16,
+        #[serde(default = "default_encryption")]
+        encryption: EncryptionMode,
+    },
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum EncryptionMode {
+    RatsTls,
+    Ohttp,
+}
+
+fn default_encryption() -> EncryptionMode {
+    EncryptionMode::RatsTls
+}
+
+impl ConnectPort {
+    pub fn port(&self) -> u16 {
+        match self {
+            ConnectPort::Plain(port) | ConnectPort::Config { port, .. } => *port,
+        }
+    }
+
+    pub fn encryption(&self) -> EncryptionMode {
+        match self {
+            ConnectPort::Plain(_) => EncryptionMode::RatsTls,
+            ConnectPort::Config { encryption, .. } => encryption.clone(),
+        }
+    }
+}
+
+impl Default for EncryptionMode {
+    fn default() -> Self {
+        EncryptionMode::RatsTls
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -533,7 +579,7 @@ impl AgentSpec {
                 if interface.port == 0 {
                     bail!("a2a.interfaces[{idx}].port must be greater than 0");
                 }
-                if !self.service.connect.contains(&interface.port) {
+                if !self.service.connect.iter().any(|cp| cp.port() == interface.port) {
                     bail!("a2a.interfaces[{idx}].port must be listed in service.connect");
                 }
                 if !interface.path.starts_with('/') {
@@ -600,26 +646,27 @@ fn validate_ports(field: &str, ports: &[u16]) -> Result<()> {
     Ok(())
 }
 
-fn validate_connect_ports(ports: &[u16], connect: &[u16]) -> Result<()> {
+fn validate_connect_ports(ports: &[u16], connect: &[ConnectPort]) -> Result<()> {
     let allowed = ports.iter().copied().collect::<BTreeSet<_>>();
     let mut seen = BTreeSet::new();
-    for port in connect {
-        if *port == 0 {
+    for cp in connect {
+        let port = cp.port();
+        if port == 0 {
             bail!("service.connect must contain ports greater than 0");
         }
-        if !allowed.contains(port) {
+        if !allowed.contains(&port) {
             bail!("service.connect port {port} must be listed in service.ports");
         }
-        if !seen.insert(*port) {
+        if !seen.insert(port) {
             bail!("service.connect contains duplicate port {port}");
         }
     }
     Ok(())
 }
 
-fn validate_mcp_ports(ports: &[u16], connect: &[u16], mcp_ports: &[u16]) -> Result<()> {
+fn validate_mcp_ports(ports: &[u16], connect: &[ConnectPort], mcp_ports: &[u16]) -> Result<()> {
     let allowed = ports.iter().copied().collect::<BTreeSet<_>>();
-    let connect = connect.iter().copied().collect::<BTreeSet<_>>();
+    let connect = connect.iter().map(|cp| cp.port()).collect::<BTreeSet<_>>();
     let mut seen = BTreeSet::new();
     for port in mcp_ports {
         if *port == 0 {
@@ -957,7 +1004,7 @@ resources:
 
         assert_eq!(spec.service.id, "openclaw");
         assert_eq!(spec.service.ports, vec![18789, 18800]);
-        assert_eq!(spec.service.connect, vec![18789]);
+        assert_eq!(spec.service.connect, vec![ConnectPort::Plain(18789)]);
         assert_eq!(spec.service.mcp_ports, vec![18800]);
         assert_eq!(
             spec.service.app_service.as_deref(),
