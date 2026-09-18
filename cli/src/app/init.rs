@@ -29,6 +29,9 @@ struct InitProject {
     vllm_port: u16,
     vllm_version: String,
     vllm_build_variants: VllmBuildVariants,
+    oss_bucket: String,
+    oss_endpoint: String,
+    model_key_file: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,6 +83,7 @@ pub(super) fn cmd_init(cli: &Cli, args: &InitArgs) -> Result<()> {
         InitTarget::Hermes => write_hermes_project(&project, args)?,
         InitTarget::Codex => write_codex_project(args, &project)?,
         InitTarget::Claudecode => write_claude_code_project(args, &project)?,
+        InitTarget::VllmInference => write_vllm_inference_project(cli, args, &project)?,
     }
 
     AgentSpec::from_path(&project.spec_path).with_context(|| {
@@ -155,6 +159,28 @@ fn resolve_project(args: &InitArgs, target: InitTarget) -> Result<InitProject> {
     } else {
         VllmBuildVariants::default()
     };
+    let vllm_model_dir = if target == InitTarget::VllmInference {
+        "/tmp/model".to_string()
+    } else {
+        args.vllm_model_dir.clone()
+    };
+    let vllm_port = if target == InitTarget::VllmInference {
+        8080
+    } else {
+        args.vllm_port
+    };
+    let (oss_bucket, model_key_file) = if target == InitTarget::VllmInference {
+        (
+            args.oss_bucket
+                .clone()
+                .context("vllm-inference requires --oss-bucket")?,
+            args.model_key_file
+                .clone()
+                .context("vllm-inference requires --model-key-file")?,
+        )
+    } else {
+        (String::new(), PathBuf::new())
+    };
 
     Ok(InitProject {
         target,
@@ -179,11 +205,14 @@ fn resolve_project(args: &InitArgs, target: InitTarget) -> Result<InitProject> {
         dingtalk_client_id,
         dingtalk_client_secret,
         vllm_model_id: args.vllm_model_id.clone(),
-        vllm_model_dir: args.vllm_model_dir.clone(),
+        vllm_model_dir,
         vllm_served_model_name: args.vllm_served_model_name.clone(),
-        vllm_port: args.vllm_port,
+        vllm_port,
         vllm_version: args.vllm_version.clone(),
         vllm_build_variants,
+        oss_bucket,
+        oss_endpoint: args.oss_endpoint.clone(),
+        model_key_file,
     })
 }
 
@@ -214,7 +243,7 @@ fn guard_output_dir(dir: &Path, force: bool) -> Result<()> {
 }
 
 fn resolve_dashscope_key(args: &InitArgs, target: InitTarget) -> Result<Option<String>> {
-    if matches!(target, InitTarget::OpenclawVllm) {
+    if matches!(target, InitTarget::OpenclawVllm | InitTarget::VllmInference) {
         return Ok(None);
     }
     let key = args
@@ -348,6 +377,7 @@ fn prompt_target() -> Result<InitTarget> {
     println!("  3) hermes");
     println!("  4) codex");
     println!("  5) claudecode");
+    println!("  6) vllm-inference");
     loop {
         print!("Target [1]: ");
         std::io::stdout().flush().ok();
@@ -358,7 +388,8 @@ fn prompt_target() -> Result<InitTarget> {
             "3" | "hermes" | "hermes-agent" => return Ok(InitTarget::Hermes),
             "4" | "codex" => return Ok(InitTarget::Codex),
             "5" | "claudecode" | "claude-code" => return Ok(InitTarget::Claudecode),
-            _ => println!("Enter 1-5 or a target name."),
+            "6" | "vllm-inference" => return Ok(InitTarget::VllmInference),
+            _ => println!("Enter 1-6 or a target name."),
         }
     }
 }
@@ -425,6 +456,54 @@ fn write_openclaw_project(cli: &Cli, args: &InitArgs, project: &InitProject) -> 
         &serde_json::to_string_pretty(&config)?,
     )?;
     let spec = openclaw_yaml(project, pep_bin.as_deref())?;
+    write_file(&project.spec_path, &spec, 0o644)?;
+    Ok(())
+}
+
+fn write_vllm_inference_project(
+    cli: &Cli,
+    args: &InitArgs,
+    project: &InitProject,
+) -> Result<()> {
+    let _ = (cli, args);
+    let repo = find_repo_root()?;
+    // NVIDIA stack reused verbatim from openclaw-vllm
+    for file in [
+        "cai-nvidia-cc-stack-install.sh",
+        "nvidia-persistenced.service",
+    ] {
+        fs::copy(
+            repo.join("examples/openclaw-vllm").join(file),
+            project.dir.join(file),
+        )
+        .with_context(|| format!("failed to copy vllm-inference support file '{file}'"))?;
+    }
+    set_mode(&project.dir.join("cai-nvidia-cc-stack-install.sh"), 0o755)?;
+
+    let vllm_port = project.vllm_port.to_string();
+    write_install_script_with_exports(
+        &repo.join("examples/vllm-inference/install-vllm-inference.sh"),
+        &project.dir.join("install-vllm-inference.sh"),
+        &[("OPENCLAW_VLLM_VERSION", &project.vllm_version)],
+    )?;
+
+    // cai-model.env resource (non-secret: public-read ciphertext bucket)
+    let env = format!(
+        "MODEL_OSS_BUCKET={}\nMODEL_OSS_ENDPOINT={}\nMODEL_MOUNT_POINT={}\nVLLM_PORT={}\nVLLM_SERVED_MODEL_NAME={}\n",
+        project.oss_bucket,
+        project.oss_endpoint,
+        project.vllm_model_dir,
+        vllm_port,
+        project.vllm_served_model_name,
+    );
+    write_secret_file(&project.dir.join("cai-model.env"), &env)?;
+
+    // model-decryption-key resource (secret: copied from operator-provided key file)
+    fs::copy(&project.model_key_file, project.dir.join("model-decryption-key"))
+        .with_context(|| "failed to copy model-decryption-key")?;
+    set_mode(&project.dir.join("model-decryption-key"), 0o600)?;
+
+    let spec = vllm_inference_yaml(project)?;
     write_file(&project.spec_path, &spec, 0o644)?;
     Ok(())
 }
@@ -967,6 +1046,70 @@ fn openclaw_vllm_variants_yaml(variants: VllmBuildVariants) -> String {
     out
 }
 
+fn vllm_inference_yaml(project: &InitProject) -> Result<String> {
+    Ok(format!(
+        r#"schema: confidential-agent/v1
+
+service:
+  id: vllm-inference
+  ports: [8080]
+  connect: [8080]
+  app_service: cai-vllm.service
+
+build:
+{base_image}  image_name: vllm-inference-agent
+  kernel_cmdline_append: swiotlb=4194304,any rd.driver.blacklist=nouveau modprobe.blacklist=nouveau nouveau.modeset=0
+  resize: 80G
+  with_network: true
+  cleanup:
+    remove_static_libs: false
+  packages: [anolis-epao-release, binutils, ca-certificates, curl, dracut, elfutils-libelf-devel, fuse, fuse-libs, fuse3, fuse3-libs, gocryptfs, gcc, glibc-devel, git, jq, kernel, kernel-devel, kernel-headers, kmod, mailcap, make, openssl3, pciutils, pkgconf-pkg-config, python3.11, python3.11-devel, python3.11-pip, rpm, tar, wget, xz, zlib-devel]
+  files:
+    - source: ./cai-nvidia-cc-stack-install.sh
+      target: /usr/local/sbin/cai-nvidia-cc-stack-install.sh
+      executable: true
+    - source: ./nvidia-persistenced.service
+      target: /usr/local/share/cai/nvidia-persistenced.service
+  scripts: [./install-vllm-inference.sh]
+  variants:
+    release:
+      enabled: true
+
+deploy:
+  provider: aliyun
+  image_variant: release
+  instance_type: {instance_type}
+  region: {region}
+  zone_id: {zone_id}
+  disk_gb: {disk_gb}
+
+attestation:
+  tee: tdx
+  mode: challenge
+  reference_values: {reference_values}
+{rekor}
+resources:
+  model_decryption_key:
+    source: ./model-decryption-key
+    target: /run/cai/secrets/model-decryption-key
+    mode: "0600"
+    required: true
+  cai_model_env:
+    source: ./cai-model.env
+    target: /etc/cai/model.env
+    mode: "0600"
+    required: true
+"#,
+        base_image = base_image_line(project)?,
+        instance_type = yaml_quote(&project.instance_type)?,
+        region = yaml_quote(&project.region)?,
+        zone_id = yaml_quote(&project.zone_id)?,
+        disk_gb = project.disk_gb,
+        reference_values = yaml_quote(reference_values_name(project.reference_values))?,
+        rekor = rekor_block(project)?,
+    ))
+}
+
 fn hermes_yaml(project: &InitProject) -> Result<String> {
     Ok(format!(
         r#"schema: confidential-agent/v1
@@ -1429,7 +1572,7 @@ fn default_zone_id(region: &str) -> &'static str {
 }
 
 fn default_instance_type(region: &str, target: InitTarget) -> &'static str {
-    if target == InitTarget::OpenclawVllm {
+    if target == InitTarget::OpenclawVllm || target == InitTarget::VllmInference {
         return "ecs.gn8v-tee.4xlarge";
     }
     match region {
@@ -1442,7 +1585,7 @@ fn default_instance_type(region: &str, target: InitTarget) -> &'static str {
 fn default_disk_gb(target: InitTarget) -> u32 {
     match target {
         InitTarget::Openclaw => 200,
-        InitTarget::OpenclawVllm => 512,
+        InitTarget::OpenclawVllm | InitTarget::VllmInference => 512,
         InitTarget::Hermes => 30,
         InitTarget::Codex | InitTarget::Claudecode => 60,
     }
@@ -1470,6 +1613,7 @@ impl InitTarget {
             InitTarget::Hermes => "hermes-agent",
             InitTarget::Codex => "codex",
             InitTarget::Claudecode => "claude-code",
+            InitTarget::VllmInference => "vllm-inference",
         }
     }
 
@@ -1480,6 +1624,7 @@ impl InitTarget {
             InitTarget::Hermes => "hermes-agent.yaml",
             InitTarget::Codex => "codex.yaml",
             InitTarget::Claudecode => "claude-code.yaml",
+            InitTarget::VllmInference => "vllm-inference.yaml",
         }
     }
 
@@ -1490,6 +1635,7 @@ impl InitTarget {
             InitTarget::Hermes => "hermes",
             InitTarget::Codex => "codex",
             InitTarget::Claudecode => "claudecode",
+            InitTarget::VllmInference => "vllm-inference",
         }
     }
 }
@@ -1507,6 +1653,9 @@ mod tests {
         assert_eq!(InitTarget::Openclaw.service_id(), "openclaw");
         assert_eq!(InitTarget::OpenclawVllm.spec_name(), "openclaw-vllm.yaml");
         assert_eq!(InitTarget::Claudecode.command_name(), "claudecode");
+        assert_eq!(InitTarget::VllmInference.service_id(), "vllm-inference");
+        assert_eq!(InitTarget::VllmInference.spec_name(), "vllm-inference.yaml");
+        assert_eq!(InitTarget::VllmInference.command_name(), "vllm-inference");
     }
 
     #[test]
@@ -1640,6 +1789,9 @@ mod tests {
                 release: false,
                 debug: true,
             },
+            oss_bucket: String::new(),
+            oss_endpoint: "https://oss-cn-beijing-internal.aliyuncs.com".to_string(),
+            model_key_file: PathBuf::new(),
         };
         let yaml = openclaw_vllm_yaml(&project, Path::new("/usr/local/bin/cai-pep")).unwrap();
         assert!(yaml.contains("release:\n      enabled: false"));
@@ -1678,6 +1830,9 @@ mod tests {
             vllm_port: 8090,
             vllm_version: "0.19.1".to_string(),
             vllm_build_variants: VllmBuildVariants::default(),
+            oss_bucket: String::new(),
+            oss_endpoint: "https://oss-cn-beijing-internal.aliyuncs.com".to_string(),
+            model_key_file: PathBuf::new(),
         };
         let config = openclaw_json(&project, false).unwrap();
         assert_eq!(config["plugins"]["entries"]["dingtalk"]["enabled"], true);
@@ -1698,7 +1853,10 @@ mod tests {
         let previous = std::env::var_os("CA_PEP_BIN");
         std::env::set_var("CA_PEP_BIN", &pep);
 
-        for target in ["openclaw", "openclaw-vllm", "hermes", "codex", "claudecode"] {
+        let key_file = temp.path().join("model.key");
+        fs::write(&key_file, "test-passphrase\n").unwrap();
+
+        for target in ["openclaw", "openclaw-vllm", "hermes", "codex", "claudecode", "vllm-inference"] {
             let cli = Cli::parse_from([
                 "confidential-agent",
                 "--state-dir",
@@ -1719,6 +1877,10 @@ mod tests {
                 "abcdef0123456789abcdef0123456789",
                 "--codex-app-server-token",
                 "codex-token",
+                "--model-key-file",
+                key_file.to_str().unwrap(),
+                "--oss-bucket",
+                "test-bucket:/qwen",
             ]);
             let Commands::Init(args) = &cli.command else {
                 panic!("expected init command");
@@ -1737,12 +1899,101 @@ mod tests {
                 .join(service_id)
                 .join("NEXT_STEPS.md")
                 .exists());
+            if target == "vllm-inference" {
+                let text = std::fs::read_to_string(&spec).unwrap();
+                assert!(text.contains("mode: challenge"));
+                assert!(text.contains("id: vllm-inference"));
+                assert!(text.contains("ports: [8080]"));
+                assert!(!text.contains("a2a:"));
+                assert!(text.contains("model_decryption_key"));
+                assert!(text.contains("cai_model_env"));
+                let model_env = std::fs::read_to_string(
+                    temp.path().join("init").join("vllm-inference").join("cai-model.env"),
+                )
+                .unwrap();
+                assert!(model_env.contains("VLLM_PORT=8080"));
+            }
         }
 
         if let Some(value) = previous {
             std::env::set_var("CA_PEP_BIN", value);
         } else {
             std::env::remove_var("CA_PEP_BIN");
+        }
+    }
+
+    #[test]
+    fn vllm_inference_init_succeeds_without_dashscope_key() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let pep = temp.path().join("cai-pep");
+        fs::write(&pep, "#!/bin/sh\nexit 0\n").unwrap();
+        set_mode(&pep, 0o755).unwrap();
+        let previous_pep = std::env::var_os("CA_PEP_BIN");
+        std::env::set_var("CA_PEP_BIN", &pep);
+        // vllm-inference uses a local vLLM model, not Bailian/DashScope, so it
+        // must NOT require a DashScope key. Ensure no env leak masks the test.
+        let previous_dashscope = std::env::var_os("DASHSCOPE_API_KEY");
+        let previous_bailian = std::env::var_os("BAILIAN_API_KEY");
+        std::env::remove_var("DASHSCOPE_API_KEY");
+        std::env::remove_var("BAILIAN_API_KEY");
+
+        let key_file = temp.path().join("model.key");
+        fs::write(&key_file, "test-passphrase\n").unwrap();
+
+        let cli = Cli::parse_from([
+            "confidential-agent",
+            "--state-dir",
+            temp.path().join("state").to_str().unwrap(),
+            "init",
+            "vllm-inference",
+            "--non-interactive",
+            "--force",
+            "--output-dir",
+            temp.path().join("init").to_str().unwrap(),
+            "--reference-values",
+            "sample",
+            "--model-key-file",
+            key_file.to_str().unwrap(),
+            "--oss-bucket",
+            "test-bucket:/qwen",
+            "--gateway-token",
+            "0123456789abcdef0123456789abcdef",
+        ]);
+        let Commands::Init(args) = &cli.command else {
+            panic!("expected init command");
+        };
+        cmd_init(&cli, args).unwrap();
+
+        let spec = temp
+            .path()
+            .join("init")
+            .join("vllm-inference")
+            .join("vllm-inference.yaml");
+        AgentSpec::from_path(&spec).unwrap();
+        let text = std::fs::read_to_string(&spec).unwrap();
+        assert!(text.contains("id: vllm-inference"));
+        assert!(text.contains("mode: challenge"));
+        assert!(text.contains("ports: [8080]"));
+        let model_env = std::fs::read_to_string(
+            temp.path()
+                .join("init")
+                .join("vllm-inference")
+                .join("cai-model.env"),
+        )
+        .unwrap();
+        assert!(model_env.contains("VLLM_PORT=8080"));
+
+        if let Some(value) = previous_pep {
+            std::env::set_var("CA_PEP_BIN", value);
+        } else {
+            std::env::remove_var("CA_PEP_BIN");
+        }
+        if let Some(value) = previous_dashscope {
+            std::env::set_var("DASHSCOPE_API_KEY", value);
+        }
+        if let Some(value) = previous_bailian {
+            std::env::set_var("BAILIAN_API_KEY", value);
         }
     }
 }

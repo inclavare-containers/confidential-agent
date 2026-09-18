@@ -205,6 +205,8 @@ pub(crate) enum InitTarget {
     Codex,
     #[value(name = "claudecode", alias = "claude-code")]
     Claudecode,
+    #[value(name = "vllm-inference")]
+    VllmInference,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
@@ -281,6 +283,12 @@ pub(crate) struct InitArgs {
     pub(crate) vllm_version: String,
     #[arg(long, default_value = "release")]
     pub(crate) vllm_build_variants: String,
+    #[arg(long)]
+    pub(crate) model_key_file: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) oss_bucket: Option<String>,
+    #[arg(long, default_value = "https://oss-cn-beijing-internal.aliyuncs.com")]
+    pub(crate) oss_endpoint: String,
     #[arg(long)]
     pub(crate) enable_dingtalk: bool,
     #[arg(long, env = "DINGTALK_BOT_CLIENT_ID")]
