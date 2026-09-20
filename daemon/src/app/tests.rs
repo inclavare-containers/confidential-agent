@@ -773,7 +773,7 @@ fn tng_config_adds_egress_for_self_ports() {
     );
     assert_eq!(config["add_egress"][0]["netfilter"]["listen_port"], 39000);
     assert_eq!(config["add_egress"][0]["attest"]["aa_type"], "uds");
-    assert_eq!(config["add_egress"][0]["rats_tls"]["multiplex"], true);
+    assert_eq!(config["add_egress"][0]["rats_tls"]["multiplex"], false);
     assert!(config["add_egress"][0].get("verify").is_none());
     assert_eq!(config["add_ingress"].as_array().unwrap().len(), 0);
 }
@@ -932,7 +932,7 @@ fn tng_config_adds_mode_specific_ingress_for_peer_ports() {
         .get("policy_ids")
         .is_none());
     assert_eq!(config["add_ingress"][0]["rats_tls"]["multiplex"], true);
-    assert_eq!(config["add_egress"][0]["rats_tls"]["multiplex"], true);
+    assert_eq!(config["add_egress"][0]["rats_tls"]["multiplex"], false);
     assert_eq!(
         config["add_ingress"][0]["verify"]["reference_values"][0]["type"],
         "sample"
