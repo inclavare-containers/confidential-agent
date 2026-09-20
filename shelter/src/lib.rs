@@ -3,7 +3,7 @@ use confidential_agent_core::peerings::{PeeringScope, PeeringsFile};
 use confidential_agent_core::schema::{confidential_ports, AGENT_CARD_PORT, DAEMON_STATUS_PORT};
 use confidential_agent_core::spec::{
     AgentSpec, AttestationMode, AttestationTee, BuildCleanupSpec, BuildContainerSpec,
-    ReferenceValueMode, RekorSpec,
+    ReferenceValueMode, RekorSpec, SlbSpec,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -244,6 +244,12 @@ fn render_deploy_config(
         security_group_id: deploy.security_group_id.clone(),
         user_data: options.deploy_user_data.clone(),
         tags,
+        replicas: if spec.deploy.replicas > 1 {
+            Some(spec.deploy.replicas)
+        } else {
+            None
+        },
+        slb: spec.deploy.slb.clone(),
     })
 }
 
@@ -720,6 +726,10 @@ struct ShelterDeployConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     user_data: Option<String>,
     tags: BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    replicas: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    slb: Option<SlbSpec>,
 }
 
 #[derive(Debug, Serialize)]

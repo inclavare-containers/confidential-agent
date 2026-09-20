@@ -1,6 +1,6 @@
 use super::*;
 use confidential_agent_core::peerings::{PeeringEntry, PeeringRole};
-use confidential_agent_core::spec::AgentSpec;
+use confidential_agent_core::spec::{AgentSpec, SlbType};
 use std::fs;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -552,4 +552,92 @@ fn render_deploy_without_cloud_image_id_keeps_local_image_import() {
     assert!(!deploy_section.contains("image_id:"));
     assert!(deploy_section.contains("image:\n"));
     assert!(deploy_section.contains("nvme_support: supported"));
+}
+
+#[test]
+fn render_deploy_config_passes_replicas_and_slb() {
+    let spec = AgentSpec::from_yaml(
+        &SPEC.replace(
+            "  disk_gb: 200\n",
+            "  disk_gb: 200\n  replicas: 3\n  slb:\n    enabled: true\n    slb_type: nlb\n",
+        ),
+        Path::new("/project"),
+    )
+    .unwrap();
+    let config = render_deploy_config(
+        &spec,
+        &ShelterRenderOptions {
+            peerings: operator_peerings(),
+            ..ShelterRenderOptions::default()
+        },
+    )
+    .unwrap();
+
+    assert_eq!(config.replicas, Some(3));
+    assert!(config.slb.is_some());
+    assert!(config.slb.as_ref().unwrap().enabled);
+    assert_eq!(config.slb.as_ref().unwrap().slb_type, SlbType::Nlb);
+}
+
+#[test]
+fn render_deploy_config_omits_replicas_and_slb_when_single_instance() {
+    let spec = AgentSpec::from_yaml(SPEC, Path::new("/project")).unwrap();
+    let config = render_deploy_config(
+        &spec,
+        &ShelterRenderOptions {
+            peerings: operator_peerings(),
+            ..ShelterRenderOptions::default()
+        },
+    )
+    .unwrap();
+
+    assert_eq!(config.replicas, None);
+    assert!(config.slb.is_none());
+}
+
+#[test]
+fn render_deploy_config_serializes_replicas_and_slb_in_yaml() {
+    let spec = AgentSpec::from_yaml(
+        &SPEC.replace(
+            "  disk_gb: 200\n",
+            "  disk_gb: 200\n  replicas: 3\n  slb:\n    enabled: true\n    slb_type: nlb\n",
+        ),
+        Path::new("/project"),
+    )
+    .unwrap();
+    let rendered = render_build_config(
+        &spec,
+        &assets(),
+        &ShelterRenderOptions {
+            include_deploy: true,
+            peerings: operator_peerings(),
+            ..ShelterRenderOptions::default()
+        },
+    )
+    .unwrap();
+
+    let deploy_section = rendered.split("deploy:").nth(1).unwrap();
+    assert!(deploy_section.contains("replicas: 3"));
+    assert!(deploy_section.contains("slb:"));
+    assert!(deploy_section.contains("enabled: true"));
+    assert!(deploy_section.contains("slb_type: nlb"));
+}
+
+#[test]
+fn render_deploy_config_omits_replicas_from_yaml_when_single_instance() {
+    let spec = AgentSpec::from_yaml(SPEC, Path::new("/project")).unwrap();
+    let rendered = render_build_config(
+        &spec,
+        &assets(),
+        &ShelterRenderOptions {
+            include_deploy: true,
+            peerings: operator_peerings(),
+            ..ShelterRenderOptions::default()
+        },
+    )
+    .unwrap();
+
+    let deploy_section = rendered.split("deploy:").nth(1).unwrap();
+    assert!(!deploy_section.contains("replicas:"));
+    assert!(!deploy_section.contains("slb:"));
 }
