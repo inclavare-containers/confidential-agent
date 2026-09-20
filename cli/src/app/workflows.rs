@@ -648,6 +648,14 @@ pub(super) fn render_connect_config(
     let mut client_endpoints = Vec::new();
     for service in services {
         let host = connect_host(service)?;
+        // When an SLB VIP is set (multi-node replicas > 1), route ingress to the
+        // SLB VIP instead of an individual instance public IP.
+        let host = service
+            .deploy
+            .slb_vip
+            .as_deref()
+            .filter(|ip| !ip.trim().is_empty())
+            .unwrap_or(host);
         let reference_values = connect_reference_values(&bundle, &service.service_id)?;
         for cp in &service.service.connect {
             let remote_port = cp.port();

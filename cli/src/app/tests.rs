@@ -3582,6 +3582,58 @@ fn connect_service_filter_rejects_unknown_service() {
 }
 
 #[test]
+fn render_connect_config_uses_slb_vip_when_set() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut service = local_state(
+        "vllm-inference",
+        vec![8080],
+        vec![ConnectPort::Plain(8080)],
+    );
+    service.deploy.slb_vip = Some("10.0.1.100".to_string());
+    write_state(temp.path(), &service);
+
+    let mut sample = BTreeMap::new();
+    sample.insert(
+        "vllm-inference".to_string(),
+        serde_json::json!({"measurement.uki.SHA-384": ["vllm-rv"]}),
+    );
+    write_mesh_bundle(temp.path(), vec![service.clone()], sample);
+
+    let config = render_connect_config(temp.path(), None).unwrap();
+
+    assert_eq!(
+        config["add_ingress"][0]["mapping"]["out"]["host"],
+        "10.0.1.100"
+    );
+}
+
+#[test]
+fn render_connect_config_falls_back_to_public_ip_when_no_slb_vip() {
+    let temp = tempfile::tempdir().unwrap();
+    let service = local_state(
+        "vllm-inference",
+        vec![8080],
+        vec![ConnectPort::Plain(8080)],
+    );
+    write_state(temp.path(), &service);
+
+    let mut sample = BTreeMap::new();
+    sample.insert(
+        "vllm-inference".to_string(),
+        serde_json::json!({"measurement.uki.SHA-384": ["vllm-rv"]}),
+    );
+    write_mesh_bundle(temp.path(), vec![service.clone()], sample);
+
+    let config = render_connect_config(temp.path(), None).unwrap();
+
+    // local_state sets public_ip = "39.0.0.1"
+    assert_eq!(
+        config["add_ingress"][0]["mapping"]["out"]["host"],
+        "39.0.0.1"
+    );
+}
+
+#[test]
 fn connect_reference_values_prefers_sample_when_rekor_is_also_present() {
     let bundle = MeshBundle {
         schema: MESH_SCHEMA_VERSION.to_string(),
