@@ -2077,6 +2077,117 @@ resources: {}
 }
 
 #[test]
+fn resolve_deploy_observation_reads_multi_instance_outputs() {
+    let temp = tempfile::tempdir().unwrap();
+    let deploy_result = temp.path().join("deploy-result.json");
+    fs::write(
+        &deploy_result,
+        serde_json::to_string_pretty(&serde_json::json!({
+            "id": "vllm-inference-agent-release",
+            "image_path": "/image.qcow2",
+            "reference_value": null,
+            "rekor_value": null,
+            "deploy": {
+                "name": "vllm-20260429103011",
+                "instance_id": null,
+                "public_ip": null,
+                "private_ip": null,
+                "components": null,
+                "outputs": {
+                    "instance_ids": {"value": ["i-aaa", "i-bbb", "i-ccc"]},
+                    "instance_private_ips": {"value": ["10.0.1.1", "10.0.1.2", "10.0.1.3"]},
+                    "slb_vip": {"value": "10.0.1.100"}
+                }
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let prepared = PreparedConfig {
+        rendered_config: PathBuf::from("/state/shelter.yaml"),
+        shelter_build_id: "vllm-inference-agent-release".to_string(),
+        shelter_work_dir: temp.path().join("shelter"),
+        build_result: temp
+            .path()
+            .join("shelter/images/vllm-inference-agent-release/build-result.json"),
+        deploy_result,
+        deploy_names: None,
+        terraform_dir: None,
+        debug_ssh: None,
+        cloud_image_id: None,
+    };
+    let spec = AgentSpec::from_yaml(
+        r#"
+schema: confidential-agent/v1
+service:
+  id: vllm-inference
+  ports: [8080]
+  connect: [8080]
+build:
+  base_image: /images/base.qcow2
+  image_name: vllm-inference-agent
+deploy:
+  provider: aliyun
+  image_variant: release
+  instance_type: ecs.gn8v-tee.4xlarge
+  region: cn-beijing
+  zone_id: cn-beijing-l
+  replicas: 3
+  slb:
+    enabled: true
+    slb_type: nlb
+attestation:
+  tee: tdx
+  mode: challenge
+  reference_values: sample
+resources: {}
+"#,
+        Path::new("/project"),
+    )
+    .unwrap();
+
+    let observation = resolve_deploy_observation(&prepared, &spec).unwrap();
+
+    assert_eq!(observation.instance_ids, vec!["i-aaa", "i-bbb", "i-ccc"]);
+    assert_eq!(
+        observation.instance_private_ips,
+        vec!["10.0.1.1", "10.0.1.2", "10.0.1.3"]
+    );
+    assert_eq!(observation.slb_vip.as_deref(), Some("10.0.1.100"));
+    assert!(observation.instance_id.is_none());
+    assert!(observation.public_ip.is_none());
+}
+
+#[test]
+fn deploy_result_string_list_handles_bare_and_wrapped_arrays() {
+    // Bare array
+    let bare = serde_json::json!(["10.0.1.1", "10.0.1.2"]);
+    assert_eq!(
+        deploy_result_string_list(Some(&bare)),
+        vec!["10.0.1.1".to_string(), "10.0.1.2".to_string()]
+    );
+
+    // Wrapped object with `value` key
+    let wrapped = serde_json::json!({"value": ["10.0.1.1", "10.0.1.2"]});
+    assert_eq!(
+        deploy_result_string_list(Some(&wrapped)),
+        vec!["10.0.1.1".to_string(), "10.0.1.2".to_string()]
+    );
+
+    // Empty / null / missing
+    assert!(deploy_result_string_list(Some(&serde_json::Value::Null)).is_empty());
+    assert!(deploy_result_string_list(None).is_empty());
+    assert!(deploy_result_string_list(Some(&serde_json::json!("single"))).is_empty());
+
+    // Filters empty strings
+    let with_empty = serde_json::json!(["10.0.1.1", "", "  "]);
+    assert_eq!(
+        deploy_result_string_list(Some(&with_empty)),
+        vec!["10.0.1.1".to_string()]
+    );
+}
+
+#[test]
 fn service_state_preserves_generated_image_import_name_without_explicit_image_source() {
     let temp = tempfile::tempdir().unwrap();
     let spec_path = temp.path().join("openclaw.yaml");

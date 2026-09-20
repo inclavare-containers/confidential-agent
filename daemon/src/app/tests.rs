@@ -626,6 +626,7 @@ fn app_service_ready_requires_systemd_active_state() {
         app_service: Some("cai-openclaw-gateway.service".to_string()),
         peers: Vec::new(),
         agent_card: None,
+        tng_peers: Vec::new(),
     };
 
     let ready = ensure_app_service_ready(&bootstrap);
@@ -676,6 +677,7 @@ fn app_service_ready_requires_service_port_to_accept_connections() {
         app_service: Some("cai-openclaw-gateway.service".to_string()),
         peers: Vec::new(),
         agent_card: None,
+        tng_peers: Vec::new(),
     };
 
     assert!(ensure_app_service_ready(&bootstrap));
@@ -1281,6 +1283,7 @@ fn bootstrap_reapplies_resource_when_target_content_drifted() {
         app_service: None,
         peers: Vec::new(),
         agent_card: None,
+        tng_peers: Vec::new(),
     };
     let args = RunArgs {
         cdh_root,
@@ -1579,6 +1582,7 @@ fn bootstrap_ready_accepts_mutable_resource_content_drift_after_apply() {
         app_service: None,
         peers: Vec::new(),
         agent_card: None,
+        tng_peers: Vec::new(),
     };
     let state = DaemonState {
         bootstrap_generation: 7,
@@ -2011,6 +2015,7 @@ fn bootstrap_rejects_oversized_resource() {
         app_service: None,
         peers: Vec::new(),
         agent_card: None,
+        tng_peers: Vec::new(),
     };
     let args = RunArgs {
         cdh_root,
@@ -2059,6 +2064,7 @@ fn bootstrap_rejects_non_regular_resource_even_when_empty() {
         app_service: None,
         peers: Vec::new(),
         agent_card: None,
+        tng_peers: Vec::new(),
     };
     let args = RunArgs {
         cdh_root,
@@ -2126,6 +2132,7 @@ fn bootstrap_ready_requires_matching_generation_and_resource_digests() {
         app_service: None,
         peers: Vec::new(),
         agent_card: None,
+        tng_peers: Vec::new(),
     };
     let mut state = DaemonState {
         bootstrap_generation: 7,
@@ -2183,6 +2190,7 @@ fn bootstrap_ready_accepts_present_digestless_resources() {
         app_service: None,
         peers: Vec::new(),
         agent_card: None,
+        tng_peers: Vec::new(),
     };
     let mut state = DaemonState {
         bootstrap_generation: 7,
@@ -3882,6 +3890,7 @@ fn test_bootstrap_config(service_id: &str) -> BootstrapConfig {
         app_service: None,
         peers: Vec::new(),
         agent_card: None,
+        tng_peers: Vec::new(),
     }
 }
 

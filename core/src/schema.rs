@@ -196,6 +196,10 @@ pub struct BootstrapConfig {
     pub peers: Vec<BootstrapPeer>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_card: Option<AgentCard>,
+    /// TNG gossip peer IPs for multi-node OHTTP key sharing (serf `peer_shared`).
+    /// Populated by the CLI when `replicas > 1`; empty for single-instance deploys.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tng_peers: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

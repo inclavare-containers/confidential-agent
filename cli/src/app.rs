@@ -305,6 +305,9 @@ struct DeployObservation {
     security_group_id: Option<String>,
     public_ip: Option<String>,
     private_ip: Option<String>,
+    instance_ids: Vec<String>,
+    instance_private_ips: Vec<String>,
+    slb_vip: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -876,6 +879,7 @@ fn render_bootstrap(paths: &ContextPaths, spec: &AgentSpec) -> Result<BootstrapC
         app_service: spec.service.app_service.clone(),
         peers: Vec::new(),
         agent_card: None,
+        tng_peers: Vec::new(),
     })
 }
 

@@ -183,6 +183,11 @@ pub(super) fn resolve_deploy_observation(
             .or_else(|| deploy_result.deploy.outputs.get("private_ip")),
     )
     .or_else(|| spec.deploy.private_ip.clone());
+    let instance_ids = deploy_result_string_list(deploy_result.deploy.outputs.get("instance_ids"));
+    let instance_private_ips =
+        deploy_result_string_list(deploy_result.deploy.outputs.get("instance_private_ips"));
+    let slb_vip =
+        deploy_result_value_as_string(deploy_result.deploy.outputs.get("slb_vip"));
     Ok(DeployObservation {
         instance_id: deploy_result_value_as_string(
             deploy_result
@@ -196,6 +201,9 @@ pub(super) fn resolve_deploy_observation(
         ),
         public_ip,
         private_ip,
+        instance_ids,
+        instance_private_ips,
+        slb_vip,
     })
 }
 
@@ -228,6 +236,26 @@ pub(super) fn deploy_result_value_as_string(value: Option<&serde_json::Value>) -
         serde_json::Value::Null => None,
         other => non_empty_string(&other.to_string()),
     }
+}
+
+/// Extracts a list of non-empty strings from a Terraform-style deploy result output.
+/// Handles both bare arrays (`["a","b"]`) and wrapped objects (`{"value": ["a","b"]}`).
+pub(super) fn deploy_result_string_list(value: Option<&serde_json::Value>) -> Vec<String> {
+    let array = match value {
+        Some(serde_json::Value::Array(arr)) => arr,
+        Some(serde_json::Value::Object(map)) => match map.get("value") {
+            Some(serde_json::Value::Array(arr)) => arr,
+            _ => return Vec::new(),
+        },
+        _ => return Vec::new(),
+    };
+    array
+        .iter()
+        .filter_map(|item| match item {
+            serde_json::Value::String(s) => non_empty_string(s),
+            _ => None,
+        })
+        .collect()
 }
 
 pub(super) fn non_empty_string(value: &str) -> Option<String> {

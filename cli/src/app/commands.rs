@@ -399,7 +399,14 @@ pub(super) fn cmd_deploy(cli: &Cli, args: &DeployArgs) -> Result<()> {
                 Some(&injection_ip),
             )?;
         } else {
-            println!("[ca] injecting attested resources to {injection_ip}...");
+            if !observation.instance_private_ips.is_empty() {
+                println!(
+                    "[ca] injecting attested resources to {} instance(s)...",
+                    observation.instance_private_ips.len()
+                );
+            } else {
+                println!("[ca] injecting attested resources to {injection_ip}...");
+            }
             inject_resources(
                 cli,
                 &cli.state_dir,
@@ -407,6 +414,7 @@ pub(super) fn cmd_deploy(cli: &Cli, args: &DeployArgs) -> Result<()> {
                 &prepared.build_result,
                 &prepared.shelter_build_id,
                 &injection_ip,
+                &observation.instance_private_ips,
             )?;
         }
         println!("[ca] waiting for guest daemon status at {injection_ip}:{DAEMON_STATUS_PORT}...");
@@ -503,6 +511,7 @@ pub(super) fn cmd_inject(cli: &Cli, args: &InjectArgs) -> Result<()> {
             &build_variant.build_result,
             &build_variant.shelter_build_id,
             &args.target_ip,
+            &state.deploy.instance_private_ips,
         )?;
     }
     let mut active_state =

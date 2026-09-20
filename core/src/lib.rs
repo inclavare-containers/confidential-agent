@@ -170,6 +170,7 @@ mod schema_tests {
             app_service: Some("app.service".to_string()),
             peers: Vec::new(),
             agent_card: None,
+            tng_peers: Vec::new(),
         };
 
         let encoded = serde_json::to_string(&bootstrap).unwrap();
@@ -271,6 +272,7 @@ mod schema_tests {
                 supports_authenticated_extended_card: Some(false),
                 signatures: Vec::new(),
             }),
+            tng_peers: Vec::new(),
         };
 
         let encoded = serde_json::to_string(&bootstrap).unwrap();

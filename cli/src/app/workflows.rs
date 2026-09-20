@@ -10,6 +10,7 @@ pub(super) fn inject_resources(
     build_result: &Path,
     build_id: &str,
     target_ip: &str,
+    instance_ips: &[String],
 ) -> Result<()> {
     spec.ensure_mvp_supported()?;
     let tee = tee_name(spec.attestation.tee);
@@ -27,6 +28,9 @@ pub(super) fn inject_resources(
     )?;
 
     let mut bootstrap = render_bootstrap(&paths, spec)?;
+    // Populate TNG gossip peers for multi-node OHTTP key sharing (serf
+    // `peer_shared`).  Empty for single-instance deploys.
+    bootstrap.tng_peers = instance_ips.to_vec();
 
     let guest_rv_source = guest_reference_value_source(
         &paths,
@@ -76,26 +80,7 @@ pub(super) fn inject_resources(
 
     write_bootstrap_file(&paths.bootstrap_file, &bootstrap)?;
 
-    challenge_inject(
-        cli,
-        state_dir,
-        target_ip,
-        "default/local-resources/cagent_bootstrap_config",
-        &paths.bootstrap_file,
-        tee,
-    )?;
-
-    if let Some(source) = &guest_rv_source {
-        challenge_inject(
-            cli,
-            state_dir,
-            target_ip,
-            &resource_path(REFERENCE_VALUE_LIST_RESOURCE_ID),
-            source,
-            tee,
-        )?;
-    }
-
+    // Resolve disk passphrase (used for both disk and data passphrase resources).
     let disk_passphrase = match &spec.secrets.disk_passphrase {
         Some(path) => {
             if !path.exists() {
@@ -105,23 +90,25 @@ pub(super) fn inject_resources(
         }
         None => ensure_disk_passphrase(&paths)?,
     };
-    challenge_inject(
-        cli,
-        state_dir,
-        target_ip,
-        "default/local-resources/disk_passphrase",
-        &disk_passphrase,
-        tee,
-    )?;
-    challenge_inject(
-        cli,
-        state_dir,
-        target_ip,
-        "default/local-resources/data_passphrase",
-        &disk_passphrase,
-        tee,
-    )?;
 
+    // Build the ordered list of (resource_path, source_path) pairs to inject.
+    // This is built once and delivered to every target instance.
+    let mut injections: Vec<(String, PathBuf)> = Vec::new();
+    injections.push((
+        "default/local-resources/cagent_bootstrap_config".to_string(),
+        paths.bootstrap_file.clone(),
+    ));
+    if let Some(source) = &guest_rv_source {
+        injections.push((resource_path(REFERENCE_VALUE_LIST_RESOURCE_ID), source.clone()));
+    }
+    injections.push((
+        "default/local-resources/disk_passphrase".to_string(),
+        disk_passphrase.clone(),
+    ));
+    injections.push((
+        "default/local-resources/data_passphrase".to_string(),
+        disk_passphrase,
+    ));
     for (id, resource) in &spec.resources {
         if !resource.source.exists() {
             bail!(
@@ -130,14 +117,42 @@ pub(super) fn inject_resources(
                 resource.source.display()
             );
         }
-        challenge_inject(
-            cli,
-            state_dir,
-            target_ip,
-            &resource_path(id),
-            &resource.source,
-            tee,
-        )?;
+        injections.push((resource_path(id), resource.source.clone()));
+    }
+
+    // Determine target IPs: use instance private IPs for multi-node, else the
+    // single target IP resolved from the deploy observation.
+    let targets: Vec<&str> = if !instance_ips.is_empty() {
+        instance_ips.iter().map(|s| s.as_str()).collect()
+    } else {
+        vec![target_ip]
+    };
+
+    if targets.len() > 1 {
+        println!(
+            "[ca] injecting attested resources to {} instances in parallel...",
+            targets.len()
+        );
+        let injections = &injections;
+        std::thread::scope(|s| {
+            let mut handles = Vec::new();
+            for &ip in &targets {
+                handles.push(s.spawn(move || {
+                    for (rp, src) in injections {
+                        challenge_inject(cli, state_dir, ip, rp, src, tee)?;
+                    }
+                    Ok::<(), anyhow::Error>(())
+                }));
+            }
+            handles
+                .into_iter()
+                .map(|h| h.join().unwrap())
+                .collect::<Result<Vec<()>, anyhow::Error>>()
+        })?;
+    } else {
+        for (rp, src) in &injections {
+            challenge_inject(cli, state_dir, target_ip, rp, src, tee)?;
+        }
     }
 
     println!("injected resources for service {}", spec.service.id);
@@ -264,9 +279,9 @@ pub(super) fn build_service_state(
             public_ip: observation.public_ip.clone(),
             tee: tee_name(spec.attestation.tee).to_string(),
             published_image_id: prepared.cloud_image_id.clone(),
-            instance_ids: Vec::new(),
-            instance_private_ips: Vec::new(),
-            slb_vip: None,
+            instance_ids: observation.instance_ids.clone(),
+            instance_private_ips: observation.instance_private_ips.clone(),
+            slb_vip: observation.slb_vip.clone(),
         },
         service: LocalServiceNetwork {
             ports: spec.service.ports.clone(),
