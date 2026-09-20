@@ -1082,6 +1082,11 @@ deploy:
   region: {region}
   zone_id: {zone_id}
   disk_gb: {disk_gb}
+  # Multi-node: uncomment to deploy N replicas behind an SLB.
+  # replicas: 3
+  # slb:
+  #   enabled: true
+  #   slb_type: nlb            # nlb (L4) or alb (L7)
 
 attestation:
   tee: tdx

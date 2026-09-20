@@ -32,6 +32,11 @@ deploy:
   region: cn-beijing
   zone_id: cn-beijing-l
   disk_gb: 512
+  # Multi-node: uncomment to deploy N replicas behind an SLB.
+  # replicas: 3
+  # slb:
+  #   enabled: true
+  #   slb_type: nlb            # nlb (L4) or alb (L7)
 
 attestation:
   tee: tdx
