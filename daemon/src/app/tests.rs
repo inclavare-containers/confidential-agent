@@ -765,7 +765,7 @@ fn tng_config_adds_egress_for_self_ports() {
     .unwrap();
 
     let plan = runtime_port_plan(&bundle, "self").unwrap();
-    let config = tng_config(&bundle, "self", &plan).unwrap();
+    let config = tng_config(&bundle, "self", &plan, &[]).unwrap();
 
     assert_eq!(
         config["add_egress"][0]["netfilter"]["capture_dst"]["port"],
@@ -816,7 +816,7 @@ fn tng_config_adds_verify_for_confidential_self_ports() {
     .unwrap();
 
     let plan = runtime_port_plan(&bundle, "self").unwrap();
-    let config = tng_config(&bundle, "self", &plan).unwrap();
+    let config = tng_config(&bundle, "self", &plan, &[]).unwrap();
 
     assert!(config["add_egress"][0].get("verify").is_none());
     assert_eq!(
@@ -914,7 +914,7 @@ fn tng_config_adds_mode_specific_ingress_for_peer_ports() {
     .unwrap();
 
     let plan = runtime_port_plan(&bundle, "openclaw").unwrap();
-    let config = tng_config(&bundle, "openclaw", &plan).unwrap();
+    let config = tng_config(&bundle, "openclaw", &plan, &[]).unwrap();
 
     assert_eq!(config["add_ingress"][0]["mapping"]["in"]["port"], 39400);
     assert_eq!(
@@ -947,6 +947,73 @@ fn tng_config_adds_mode_specific_ingress_for_peer_ports() {
     assert_eq!(config["add_ingress"][2]["verify"]["as_type"], "builtin");
     assert!(config["add_ingress"][2].get("attest").is_none());
     assert_eq!(config["add_ingress"].as_array().unwrap().len(), 3);
+}
+
+#[test]
+fn tng_egress_protocol_uses_peer_shared_when_peers_present() {
+    let peers = vec!["10.0.1.1".to_string(), "10.0.1.2".to_string()];
+    let route = tng_egress_protocol(EncryptionMode::Ohttp, &peers);
+
+    assert_eq!(route["ohttp"]["key"]["source"], "peer_shared");
+    assert_eq!(route["ohttp"]["key"]["rotation_interval"], 300);
+    assert_eq!(route["ohttp"]["key"]["host"], "0.0.0.0");
+    assert_eq!(route["ohttp"]["key"]["port"], 8301);
+    let peer_list = route["ohttp"]["key"]["peers"].as_array().unwrap();
+    assert_eq!(peer_list.len(), 2);
+    assert_eq!(peer_list[0], "10.0.1.1:8301");
+    assert_eq!(peer_list[1], "10.0.1.2:8301");
+    assert_eq!(
+        route["ohttp"]["key"]["attest"]["aa_addr"],
+        "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+    );
+}
+
+#[test]
+fn tng_egress_protocol_uses_self_generated_without_peers() {
+    let route = tng_egress_protocol(EncryptionMode::Ohttp, &[]);
+    assert_eq!(route["ohttp"]["key"]["source"], "self_generated");
+    assert!(route["ohttp"]["key"].get("peers").is_none());
+}
+
+#[test]
+fn tng_egress_protocol_rats_tls_ignores_peers() {
+    let peers = vec!["10.0.1.1".to_string()];
+    let route = tng_egress_protocol(EncryptionMode::RatsTls, &peers);
+    assert_eq!(route["rats_tls"]["multiplex"], false);
+    assert!(route.get("ohttp").is_none());
+}
+
+#[test]
+fn tng_config_uses_peer_shared_egress_when_bootstrap_has_peers() {
+    let bundle: MeshBundle = serde_json::from_value(json!({
+        "schema": "confidential-agent/mesh-bundle/v1",
+        "generation": 1,
+        "updated_at": 0,
+        "services": {
+            "self": {
+                "phase": "active",
+                "ports": [8080],
+                "connect": [{"port": 8080, "encryption": "ohttp"}]
+            }
+        },
+        "reference_values": {},
+        "rekor_reference_values": {}
+    }))
+    .unwrap();
+
+    let plan = runtime_port_plan(&bundle, "self").unwrap();
+    let peers = vec!["10.0.1.1".to_string(), "10.0.1.2".to_string()];
+    let config = tng_config(&bundle, "self", &plan, &peers).unwrap();
+
+    assert_eq!(
+        config["add_egress"][0]["ohttp"]["key"]["source"],
+        "peer_shared"
+    );
+    let peer_list = config["add_egress"][0]["ohttp"]["key"]["peers"]
+        .as_array()
+        .unwrap();
+    assert_eq!(peer_list.len(), 2);
+    assert_eq!(peer_list[0], "10.0.1.1:8301");
 }
 
 #[test]

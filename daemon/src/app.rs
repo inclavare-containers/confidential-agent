@@ -43,6 +43,8 @@ const TNG_EGRESS_PORT_BASE: u16 = 39000;
 const GATEWAY_SERVER_PORT_BASE: u16 = 39200;
 const TNG_INGRESS_PORT_BASE: u16 = 39400;
 const DEFAULT_TNG_SO_MARK: u32 = 565;
+const TNG_SERF_PORT: u16 = 8301;
+const TNG_KEY_ROTATION_INTERVAL: u32 = 300;
 const SERVICE_RESTART_MIN_INTERVAL_SEC: u64 = 30;
 const ACTIVE_BOOTSTRAP_IDLE_POLL_SEC: u64 = 30;
 const DEFAULT_POLICY_PATH: &str = "/opt/confidential-agent/policies/trustee-opa-default.rego";
@@ -1994,7 +1996,7 @@ fn sync_mesh(args: &RunArgs, bootstrap: &BootstrapConfig, state: &mut DaemonStat
         )?;
         let plan = runtime_port_plan(&bundle, &bootstrap.service_id)?;
         let dir = service_directory(&bundle, &bootstrap.service_id, &plan);
-        let cfg = tng_config(&bundle, &bootstrap.service_id, &plan)?;
+        let cfg = tng_config(&bundle, &bootstrap.service_id, &plan, &bootstrap.tng_peers)?;
         let gateway_cfg = gateway_config(&bundle, &bootstrap.service_id, bootstrap, &plan)?;
         state.mesh_generation = bundle.generation;
         (cfg, dir, gateway_cfg)
@@ -2018,7 +2020,7 @@ fn sync_mesh(args: &RunArgs, bootstrap: &BootstrapConfig, state: &mut DaemonStat
                     .get(port)
                     .cloned()
                     .unwrap_or(EncryptionMode::RatsTls);
-                let mut route = tng_egress_protocol(encryption);
+                let mut route = tng_egress_protocol(encryption, &bootstrap.tng_peers);
                 let obj = route.as_object_mut().expect("protocol config is an object");
                 obj.insert("netfilter".into(), json!({
                     "capture_dst": { "port": port },
@@ -2295,10 +2297,38 @@ fn tng_attest_config() -> Value {
     })
 }
 
-fn tng_egress_protocol(encryption: EncryptionMode) -> Value {
+/// Builds the TNG egress protocol config for the given encryption mode.
+///
+/// When `peers` is non-empty and the encryption is OHTTP, the key source is
+/// `peer_shared` with a serf gossip cluster so that all instances share OHTTP
+/// keys.  When `peers` is empty, falls back to `self_generated`.
+fn tng_egress_protocol(encryption: EncryptionMode, peers: &[String]) -> Value {
     match encryption {
         EncryptionMode::RatsTls => json!({"rats_tls": {"multiplex": false}}),
-        EncryptionMode::Ohttp => json!({"ohttp": {"key": {"source": "self_generated"}}}),
+        EncryptionMode::Ohttp => {
+            if peers.is_empty() {
+                json!({"ohttp": {"key": {"source": "self_generated"}}})
+            } else {
+                let peer_list: Vec<String> = peers
+                    .iter()
+                    .map(|ip| format!("{ip}:{TNG_SERF_PORT}"))
+                    .collect();
+                json!({
+                    "ohttp": {
+                        "key": {
+                            "source": "peer_shared",
+                            "rotation_interval": TNG_KEY_ROTATION_INTERVAL,
+                            "host": "0.0.0.0",
+                            "port": TNG_SERF_PORT,
+                            "peers": peer_list,
+                            "attest": {
+                                "aa_addr": DEFAULT_AA_SOCK
+                            }
+                        }
+                    }
+                })
+            }
+        }
     }
 }
 
@@ -2332,7 +2362,12 @@ fn mesh_peer_reference_values(bundle: &MeshBundle, self_id: &str) -> Result<Valu
     Ok(Value::Array(values))
 }
 
-fn tng_config(bundle: &MeshBundle, self_id: &str, plan: &RuntimePortPlan) -> Result<Value> {
+fn tng_config(
+    bundle: &MeshBundle,
+    self_id: &str,
+    plan: &RuntimePortPlan,
+    tng_peers: &[String],
+) -> Result<Value> {
     let mut egress = Vec::new();
     let service = bundle
         .services
@@ -2359,7 +2394,7 @@ fn tng_config(bundle: &MeshBundle, self_id: &str, plan: &RuntimePortPlan) -> Res
             .get(&route_plan.port)
             .cloned()
             .unwrap_or(EncryptionMode::RatsTls);
-        let mut route = tng_egress_protocol(encryption);
+        let mut route = tng_egress_protocol(encryption, tng_peers);
         let obj = route.as_object_mut().expect("protocol config is an object");
         obj.insert("netfilter".into(), json!({
             "capture_dst": {"port": route_plan.port},
