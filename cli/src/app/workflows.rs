@@ -264,6 +264,9 @@ pub(super) fn build_service_state(
             public_ip: observation.public_ip.clone(),
             tee: tee_name(spec.attestation.tee).to_string(),
             published_image_id: prepared.cloud_image_id.clone(),
+            instance_ids: Vec::new(),
+            instance_private_ips: Vec::new(),
+            slb_vip: None,
         },
         service: LocalServiceNetwork {
             ports: spec.service.ports.clone(),
@@ -1217,6 +1220,9 @@ mod tests {
                 bucket: None,
                 tee: "tdx".to_string(),
                 published_image_id: None,
+                instance_ids: Vec::new(),
+                instance_private_ips: Vec::new(),
+                slb_vip: None,
             },
             service: LocalServiceNetwork {
                 ports: ports.clone(),

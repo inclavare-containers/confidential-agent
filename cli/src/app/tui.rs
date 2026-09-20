@@ -918,6 +918,9 @@ fn panic_fallback_state() -> LocalServiceState {
             public_ip: None,
             tee: String::new(),
             published_image_id: None,
+            instance_ids: Vec::new(),
+            instance_private_ips: Vec::new(),
+            slb_vip: None,
         },
         service: LocalServiceNetwork {
             ports: Vec::new(),

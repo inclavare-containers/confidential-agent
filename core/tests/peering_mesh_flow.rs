@@ -77,6 +77,9 @@ fn service_state(
             public_ip: Some(public_ip.to_string()),
             tee: "tdx".to_string(),
             published_image_id: None,
+            instance_ids: Vec::new(),
+            instance_private_ips: Vec::new(),
+            slb_vip: None,
         },
         service: LocalServiceNetwork {
             ports,

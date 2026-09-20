@@ -117,6 +117,12 @@ pub struct LocalDeployState {
     pub tee: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub published_image_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub instance_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub instance_private_ips: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slb_vip: Option<String>,
 }
 
 impl LocalDeployState {
@@ -573,6 +579,9 @@ mod tests {
             public_ip: Some("1.2.3.4".to_string()),
             tee: "tdx".to_string(),
             published_image_id: None,
+            instance_ids: Vec::new(),
+            instance_private_ips: Vec::new(),
+            slb_vip: None,
         };
         assert_eq!(state.preferred_injection_ip(), Some("1.2.3.4"));
     }
@@ -593,6 +602,9 @@ mod tests {
             public_ip: None,
             tee: "tdx".to_string(),
             published_image_id: None,
+            instance_ids: Vec::new(),
+            instance_private_ips: Vec::new(),
+            slb_vip: None,
         };
         assert_eq!(state.preferred_injection_ip(), Some("10.0.0.1"));
     }
@@ -613,6 +625,9 @@ mod tests {
             public_ip: Some("  ".to_string()),
             tee: "tdx".to_string(),
             published_image_id: None,
+            instance_ids: Vec::new(),
+            instance_private_ips: Vec::new(),
+            slb_vip: None,
         };
         assert_eq!(state.preferred_injection_ip(), Some("10.0.0.1"));
     }
@@ -633,6 +648,9 @@ mod tests {
             public_ip: None,
             tee: "tdx".to_string(),
             published_image_id: None,
+            instance_ids: Vec::new(),
+            instance_private_ips: Vec::new(),
+            slb_vip: None,
         };
         assert_eq!(state.preferred_injection_ip(), None);
     }
@@ -653,6 +671,9 @@ mod tests {
             public_ip: None,
             tee: "tdx".to_string(),
             published_image_id: None,
+            instance_ids: Vec::new(),
+            instance_private_ips: Vec::new(),
+            slb_vip: None,
         };
         assert_eq!(state.private_mesh_ip(), None);
     }
@@ -673,5 +694,79 @@ mod tests {
     #[test]
     fn default_resource_mode_is_0600() {
         assert_eq!(default_resource_mode(), "0600");
+    }
+
+    #[test]
+    fn local_deploy_state_round_trips_multi_instance() {
+        let state = LocalDeployState {
+            provider: "aliyun".to_string(),
+            run_id: "run".to_string(),
+            resource_name: "res".to_string(),
+            terraform_dir: None,
+            image_source: None,
+            image_import_name: None,
+            bucket: None,
+            instance_id: Some("i-aaa".to_string()),
+            security_group_id: None,
+            private_ip: Some("10.0.1.1".to_string()),
+            public_ip: None,
+            tee: "tdx".to_string(),
+            published_image_id: None,
+            instance_ids: vec!["i-aaa".to_string(), "i-bbb".to_string()],
+            instance_private_ips: vec!["10.0.1.1".to_string(), "10.0.1.2".to_string()],
+            slb_vip: Some("10.0.1.100".to_string()),
+        };
+
+        let encoded = serde_json::to_string(&state).unwrap();
+        let decoded: LocalDeployState = serde_json::from_str(&encoded).unwrap();
+
+        assert_eq!(
+            decoded.instance_ids,
+            vec!["i-aaa".to_string(), "i-bbb".to_string()]
+        );
+        assert_eq!(
+            decoded.instance_private_ips,
+            vec!["10.0.1.1".to_string(), "10.0.1.2".to_string()]
+        );
+        assert_eq!(decoded.slb_vip, Some("10.0.1.100".to_string()));
+    }
+
+    #[test]
+    fn local_deploy_state_omits_empty_multi_instance_fields() {
+        let state = LocalDeployState {
+            provider: "aliyun".to_string(),
+            run_id: "run".to_string(),
+            resource_name: "res".to_string(),
+            terraform_dir: None,
+            image_source: None,
+            image_import_name: None,
+            bucket: None,
+            instance_id: None,
+            security_group_id: None,
+            private_ip: None,
+            public_ip: None,
+            tee: "tdx".to_string(),
+            published_image_id: None,
+            instance_ids: Vec::new(),
+            instance_private_ips: Vec::new(),
+            slb_vip: None,
+        };
+
+        let encoded = serde_json::to_string(&state).unwrap();
+
+        assert!(!encoded.contains("instance_ids"));
+        assert!(!encoded.contains("instance_private_ips"));
+        assert!(!encoded.contains("slb_vip"));
+    }
+
+    #[test]
+    fn local_deploy_state_deserializes_without_multi_instance_fields() {
+        let json =
+            r#"{"provider":"aliyun","run_id":"run","resource_name":"res","tee":"tdx"}"#;
+        let state: LocalDeployState = serde_json::from_str(json).unwrap();
+
+        assert!(state.instance_ids.is_empty());
+        assert!(state.instance_private_ips.is_empty());
+        assert!(state.slb_vip.is_none());
     }
 }

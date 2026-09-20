@@ -1992,6 +1992,9 @@ mod tests {
                 public_ip: None,
                 tee: "tdx".to_string(),
                 published_image_id: None,
+                instance_ids: Vec::new(),
+                instance_private_ips: Vec::new(),
+                slb_vip: None,
             },
             service: LocalServiceNetwork {
                 ports: vec![18789],

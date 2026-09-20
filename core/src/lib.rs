@@ -62,6 +62,9 @@ mod schema_tests {
                 public_ip: Some("1.2.3.4".to_string()),
                 tee: "tdx".to_string(),
                 published_image_id: None,
+                instance_ids: Vec::new(),
+                instance_private_ips: Vec::new(),
+                slb_vip: None,
             },
             service: LocalServiceNetwork {
                 ports: vec![18789, 18800],

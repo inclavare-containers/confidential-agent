@@ -2149,6 +2149,9 @@ fn clear_deploy_runtime_state(deploy: &mut LocalDeployState) {
     deploy.public_ip = None;
     deploy.tee.clear();
     deploy.published_image_id = None;
+    deploy.instance_ids.clear();
+    deploy.instance_private_ips.clear();
+    deploy.slb_vip = None;
 }
 
 fn deploy_runtime_state_present(deploy: &LocalDeployState) -> bool {
@@ -2164,6 +2167,9 @@ fn deploy_runtime_state_present(deploy: &LocalDeployState) -> bool {
         || deploy.public_ip.is_some()
         || deploy.published_image_id.is_some()
         || !deploy.tee.is_empty()
+        || !deploy.instance_ids.is_empty()
+        || !deploy.instance_private_ips.is_empty()
+        || deploy.slb_vip.is_some()
 }
 
 pub(super) fn deploy_shelter_args(prepared: &PreparedConfig) -> Vec<OsString> {
@@ -2527,6 +2533,9 @@ mod tests {
             public_ip: Some("203.0.113.10".to_string()),
             tee: "tdx".to_string(),
             published_image_id: Some("m-123".to_string()),
+            instance_ids: Vec::new(),
+            instance_private_ips: Vec::new(),
+            slb_vip: None,
         }
     }
 
