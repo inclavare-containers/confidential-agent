@@ -237,6 +237,35 @@ pub struct DeploySpec {
     pub vswitch_id: Option<String>,
     #[serde(default)]
     pub security_group_id: Option<String>,
+    #[serde(default = "default_replica_count")]
+    pub replicas: u32,
+    #[serde(default)]
+    pub slb: Option<SlbSpec>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SlbSpec {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_slb_type")]
+    pub slb_type: SlbType,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SlbType {
+    #[default]
+    Nlb,
+    Alb,
+}
+
+fn default_replica_count() -> u32 {
+    1
+}
+
+fn default_slb_type() -> SlbType {
+    SlbType::Nlb
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -509,6 +538,30 @@ impl AgentSpec {
         }
         if self.deploy.zone_id.trim().is_empty() {
             bail!("deploy.zone_id must not be empty");
+        }
+        if self.deploy.replicas == 0 {
+            bail!("deploy.replicas must be greater than 0");
+        }
+        if self.deploy.replicas > 1
+            && self
+                .deploy
+                .slb
+                .as_ref()
+                .map_or(true, |s| !s.enabled)
+        {
+            bail!("deploy.replicas > 1 requires deploy.slb.enabled = true (TNG has no client-side load balancing)");
+        }
+        if let Some(slb) = &self.deploy.slb {
+            if slb.enabled && slb.slb_type == SlbType::Alb {
+                let has_rats_tls = self
+                    .service
+                    .connect
+                    .iter()
+                    .any(|cp| cp.encryption() == EncryptionMode::RatsTls);
+                if has_rats_tls {
+                    bail!("deploy.slb.slb_type alb (L7) is incompatible with RATS-TLS (L4 TLS); use slb_type: nlb or switch to OHTTP encryption");
+                }
+            }
         }
         validate_variant("release", &self.build.variants.release)?;
         if let Some(debug) = &self.build.variants.debug {
@@ -1812,5 +1865,120 @@ a2a:
         let err = AgentSpec::from_yaml(&yaml, Path::new("/project")).unwrap_err();
 
         assert!(err.to_string().contains("expected_issuer"));
+    }
+
+    #[test]
+    fn deploy_spec_replicas_defaults_to_one() {
+        let spec = AgentSpec::from_yaml(SPEC, Path::new("/project")).unwrap();
+
+        assert_eq!(spec.deploy.replicas, 1);
+        assert!(spec.deploy.slb.is_none());
+    }
+
+    #[test]
+    fn deploy_spec_parses_replicas_and_slb() {
+        let yaml = SPEC.replace(
+            "  disk_gb: 200\n",
+            "  disk_gb: 200\n  replicas: 3\n  slb:\n    enabled: true\n    slb_type: nlb\n",
+        );
+
+        let spec = AgentSpec::from_yaml(&yaml, Path::new("/project")).unwrap();
+
+        assert_eq!(spec.deploy.replicas, 3);
+        assert!(spec.deploy.slb.as_ref().unwrap().enabled);
+        assert_eq!(spec.deploy.slb.as_ref().unwrap().slb_type, SlbType::Nlb);
+    }
+
+    #[test]
+    fn deploy_spec_slb_defaults_to_nlb_when_type_omitted() {
+        let yaml = SPEC.replace(
+            "  disk_gb: 200\n",
+            "  disk_gb: 200\n  replicas: 3\n  slb:\n    enabled: true\n",
+        );
+
+        let spec = AgentSpec::from_yaml(&yaml, Path::new("/project")).unwrap();
+
+        assert_eq!(
+            spec.deploy.slb.as_ref().unwrap().slb_type,
+            SlbType::Nlb
+        );
+    }
+
+    #[test]
+    fn rejects_zero_replicas() {
+        let yaml = SPEC.replace("  disk_gb: 200\n", "  disk_gb: 200\n  replicas: 0\n");
+
+        let err = AgentSpec::from_yaml(&yaml, Path::new("/project")).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("deploy.replicas must be greater than 0"));
+    }
+
+    #[test]
+    fn rejects_replicas_gt_one_without_slb() {
+        let yaml = SPEC.replace("  disk_gb: 200\n", "  disk_gb: 200\n  replicas: 3\n");
+
+        let err = AgentSpec::from_yaml(&yaml, Path::new("/project")).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("deploy.replicas > 1 requires deploy.slb.enabled = true"));
+    }
+
+    #[test]
+    fn rejects_replicas_gt_one_with_slb_disabled() {
+        let yaml = SPEC.replace(
+            "  disk_gb: 200\n",
+            "  disk_gb: 200\n  replicas: 3\n  slb:\n    enabled: false\n    slb_type: nlb\n",
+        );
+
+        let err = AgentSpec::from_yaml(&yaml, Path::new("/project")).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("deploy.replicas > 1 requires deploy.slb.enabled = true"));
+    }
+
+    #[test]
+    fn accepts_nlb_with_rats_tls() {
+        let yaml = SPEC.replace(
+            "  disk_gb: 200\n",
+            "  disk_gb: 200\n  replicas: 3\n  slb:\n    enabled: true\n    slb_type: nlb\n",
+        );
+
+        // SPEC has connect: [18789] which defaults to RATS-TLS.
+        AgentSpec::from_yaml(&yaml, Path::new("/project")).unwrap();
+    }
+
+    #[test]
+    fn rejects_alb_with_rats_tls() {
+        let yaml = SPEC.replace(
+            "  disk_gb: 200\n",
+            "  disk_gb: 200\n  replicas: 3\n  slb:\n    enabled: true\n    slb_type: alb\n",
+        );
+
+        let err = AgentSpec::from_yaml(&yaml, Path::new("/project")).unwrap_err();
+
+        assert!(err.to_string().contains(
+            "deploy.slb.slb_type alb (L7) is incompatible with RATS-TLS"
+        ));
+    }
+
+    #[test]
+    fn accepts_alb_with_ohttp() {
+        let yaml = SPEC
+            .replace(
+                "  connect: [18789]",
+                "  connect:\n    - port: 18789\n      encryption: ohttp",
+            )
+            .replace(
+                "  disk_gb: 200\n",
+                "  disk_gb: 200\n  replicas: 3\n  slb:\n    enabled: true\n    slb_type: alb\n",
+            );
+
+        let spec = AgentSpec::from_yaml(&yaml, Path::new("/project")).unwrap();
+
+        assert_eq!(spec.deploy.slb.as_ref().unwrap().slb_type, SlbType::Alb);
     }
 }
