@@ -2307,7 +2307,7 @@ fn tng_egress_protocol(encryption: EncryptionMode, peers: &[String]) -> Value {
         EncryptionMode::RatsTls => json!({"rats_tls": {"multiplex": false}}),
         EncryptionMode::Ohttp => {
             if peers.is_empty() {
-                json!({"ohttp": {"key": {"source": "self_generated"}}})
+                json!({"ohttp": {"key": {"source": "self_generated", "rotation_interval": TNG_KEY_ROTATION_INTERVAL}}})
             } else {
                 let peer_list: Vec<String> = peers
                     .iter()
