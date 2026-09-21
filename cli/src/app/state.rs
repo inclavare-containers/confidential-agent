@@ -186,6 +186,8 @@ pub(super) fn resolve_deploy_observation(
     let instance_ids = deploy_result_string_list(deploy_result.deploy.outputs.get("instance_ids"));
     let instance_private_ips =
         deploy_result_string_list(deploy_result.deploy.outputs.get("instance_private_ips"));
+    let instance_public_ips =
+        deploy_result_string_list(deploy_result.deploy.outputs.get("instance_public_ips"));
     let slb_vip =
         deploy_result_value_as_string(deploy_result.deploy.outputs.get("slb_vip"));
     Ok(DeployObservation {
@@ -203,6 +205,7 @@ pub(super) fn resolve_deploy_observation(
         private_ip,
         instance_ids,
         instance_private_ips,
+        instance_public_ips,
         slb_vip,
     })
 }

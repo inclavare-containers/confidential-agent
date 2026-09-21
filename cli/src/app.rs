@@ -307,6 +307,7 @@ struct DeployObservation {
     private_ip: Option<String>,
     instance_ids: Vec<String>,
     instance_private_ips: Vec<String>,
+    instance_public_ips: Vec<String>,
     slb_vip: Option<String>,
 }
 

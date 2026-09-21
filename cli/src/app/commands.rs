@@ -415,6 +415,7 @@ pub(super) fn cmd_deploy(cli: &Cli, args: &DeployArgs) -> Result<()> {
                 &prepared.shelter_build_id,
                 &injection_ip,
                 &observation.instance_private_ips,
+                &observation.instance_public_ips,
             )?;
         }
         println!("[ca] waiting for guest daemon status at {injection_ip}:{DAEMON_STATUS_PORT}...");
@@ -512,6 +513,7 @@ pub(super) fn cmd_inject(cli: &Cli, args: &InjectArgs) -> Result<()> {
             &build_variant.shelter_build_id,
             &args.target_ip,
             &state.deploy.instance_private_ips,
+            &state.deploy.instance_public_ips,
         )?;
     }
     let mut active_state =
@@ -2544,6 +2546,7 @@ mod tests {
             published_image_id: Some("m-123".to_string()),
             instance_ids: Vec::new(),
             instance_private_ips: Vec::new(),
+            instance_public_ips: Vec::new(),
             slb_vip: None,
         }
     }

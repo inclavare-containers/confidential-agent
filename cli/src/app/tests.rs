@@ -553,6 +553,7 @@ fn local_state(service_id: &str, ports: Vec<u16>, connect: Vec<ConnectPort>) -> 
                 published_image_id: None,
                 instance_ids: Vec::new(),
                 instance_private_ips: Vec::new(),
+                instance_public_ips: Vec::new(),
                 slb_vip: None,
             },
             service: LocalServiceNetwork {

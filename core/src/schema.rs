@@ -121,6 +121,8 @@ pub struct LocalDeployState {
     pub instance_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub instance_private_ips: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub instance_public_ips: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slb_vip: Option<String>,
 }
@@ -585,6 +587,7 @@ mod tests {
             published_image_id: None,
             instance_ids: Vec::new(),
             instance_private_ips: Vec::new(),
+            instance_public_ips: Vec::new(),
             slb_vip: None,
         };
         assert_eq!(state.preferred_injection_ip(), Some("1.2.3.4"));
@@ -608,6 +611,7 @@ mod tests {
             published_image_id: None,
             instance_ids: Vec::new(),
             instance_private_ips: Vec::new(),
+            instance_public_ips: Vec::new(),
             slb_vip: None,
         };
         assert_eq!(state.preferred_injection_ip(), Some("10.0.0.1"));
@@ -631,6 +635,7 @@ mod tests {
             published_image_id: None,
             instance_ids: Vec::new(),
             instance_private_ips: Vec::new(),
+            instance_public_ips: Vec::new(),
             slb_vip: None,
         };
         assert_eq!(state.preferred_injection_ip(), Some("10.0.0.1"));
@@ -654,6 +659,7 @@ mod tests {
             published_image_id: None,
             instance_ids: Vec::new(),
             instance_private_ips: Vec::new(),
+            instance_public_ips: Vec::new(),
             slb_vip: None,
         };
         assert_eq!(state.preferred_injection_ip(), None);
@@ -677,6 +683,7 @@ mod tests {
             published_image_id: None,
             instance_ids: Vec::new(),
             instance_private_ips: Vec::new(),
+            instance_public_ips: Vec::new(),
             slb_vip: None,
         };
         assert_eq!(state.private_mesh_ip(), None);
@@ -718,6 +725,7 @@ mod tests {
             published_image_id: None,
             instance_ids: vec!["i-aaa".to_string(), "i-bbb".to_string()],
             instance_private_ips: vec!["10.0.1.1".to_string(), "10.0.1.2".to_string()],
+            instance_public_ips: vec!["203.0.113.21".to_string(), "203.0.113.22".to_string()],
             slb_vip: Some("10.0.1.100".to_string()),
         };
 
@@ -753,6 +761,7 @@ mod tests {
             published_image_id: None,
             instance_ids: Vec::new(),
             instance_private_ips: Vec::new(),
+            instance_public_ips: Vec::new(),
             slb_vip: None,
         };
 

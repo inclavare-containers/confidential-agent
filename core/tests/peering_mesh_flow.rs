@@ -79,6 +79,7 @@ fn service_state(
             published_image_id: None,
             instance_ids: Vec::new(),
             instance_private_ips: Vec::new(),
+            instance_public_ips: Vec::new(),
             slb_vip: None,
         },
         service: LocalServiceNetwork {

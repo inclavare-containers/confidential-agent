@@ -11,6 +11,7 @@ pub(super) fn inject_resources(
     build_id: &str,
     target_ip: &str,
     instance_ips: &[String],
+    instance_public_ips: &[String],
 ) -> Result<()> {
     spec.ensure_mvp_supported()?;
     let tee = tee_name(spec.attestation.tee);
@@ -120,10 +121,12 @@ pub(super) fn inject_resources(
         injections.push((resource_path(id), resource.source.clone()));
     }
 
-    // Determine target IPs: use instance private IPs for multi-node, else the
-    // single target IP resolved from the deploy observation.
-    let targets: Vec<&str> = if !instance_ips.is_empty() {
-        instance_ips.iter().map(|s| s.as_str()).collect()
+    // Determine target IPs: for multi-node, inject over the instances' PUBLIC
+    // IPs so the deploy host can reach them without VPC routing; serf gossip
+    // peers (tng_peers above) use the private IPs. Fall back to the single
+    // target IP resolved from the deploy observation when no public IPs.
+    let targets: Vec<&str> = if !instance_public_ips.is_empty() {
+        instance_public_ips.iter().map(|s| s.as_str()).collect()
     } else {
         vec![target_ip]
     };
@@ -281,6 +284,7 @@ pub(super) fn build_service_state(
             published_image_id: prepared.cloud_image_id.clone(),
             instance_ids: observation.instance_ids.clone(),
             instance_private_ips: observation.instance_private_ips.clone(),
+            instance_public_ips: observation.instance_public_ips.clone(),
             slb_vip: observation.slb_vip.clone(),
         },
         service: LocalServiceNetwork {
@@ -590,11 +594,25 @@ pub(super) fn sync_mesh_for_services(
                 &bundle_path,
             )?;
         } else {
-            let Some(target_ip) = service.deploy.preferred_injection_ip() else {
-                bail!(
+            let target_ip = service.deploy.preferred_injection_ip().ok_or_else(|| {
+                anyhow::anyhow!(
                     "service '{}' has no IP for mesh injection",
                     service.service_id
-                );
+                )
+            })?;
+            // For multi-node the CDH resource-injection port (8006) is not
+            // behind the SLB, so deliver the mesh bundle to each instance's
+            // public IP rather than the (SLB) public_ip. Single-instance
+            // deploys fall back to the resolved target IP.
+            let mesh_targets: Vec<&str> = if !service.deploy.instance_public_ips.is_empty() {
+                service
+                    .deploy
+                    .instance_public_ips
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect()
+            } else {
+                vec![target_ip]
             };
             prepare_challenge_reference_values(
                 cli,
@@ -604,14 +622,16 @@ pub(super) fn sync_mesh_for_services(
                 service.build.rekor_meta.as_ref(),
                 &service.reference_values,
             )?;
-            challenge_inject(
-                cli,
-                state_dir,
-                target_ip,
-                "default/local-resources/cagent_mesh_bundle",
-                &bundle_path,
-                &service.deploy.tee,
-            )?;
+            for ip in mesh_targets {
+                challenge_inject(
+                    cli,
+                    state_dir,
+                    ip,
+                    "default/local-resources/cagent_mesh_bundle",
+                    &bundle_path,
+                    &service.deploy.tee,
+                )?;
+            }
         }
         delivered.push(service.service_id.clone());
     }
@@ -1245,6 +1265,7 @@ mod tests {
                 published_image_id: None,
                 instance_ids: Vec::new(),
                 instance_private_ips: Vec::new(),
+                instance_public_ips: Vec::new(),
                 slb_vip: None,
             },
             service: LocalServiceNetwork {
