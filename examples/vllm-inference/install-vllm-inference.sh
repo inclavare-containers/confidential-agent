@@ -18,6 +18,13 @@ if [[ -f "$BUILD_POSTINSTALL_MARKER" ]]; then
   exit 0
 fi
 
+# Debug image variant only: install openssh-server so the guest daemon can
+# enable+start sshd when the debug-ssh marker is present. Release images stay
+# sshd-free; this block is a no-op without the marker.
+if [[ -f /etc/confidential-agent/debug-ssh-enabled ]]; then
+  dnf install -y openssh-server || yum install -y openssh-server || true
+fi
+
 ensure_build_dependencies() {
   local missing=()
   for cmd in curl gcc git jq make python3.11 rpm sha256sum wget; do
