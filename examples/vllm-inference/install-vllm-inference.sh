@@ -417,7 +417,7 @@ cat >/usr/local/bin/cai-vllm-run.sh <<'UNIT'
 set -euo pipefail
 source /etc/cai/model.env
 exec /root/.venv/bin/vllm serve "$MODEL_MOUNT_POINT" \
-  --host 127.0.0.1 --port "$VLLM_PORT" \
+  --host 0.0.0.0 --port "$VLLM_PORT" \
   --served-model-name "$VLLM_SERVED_MODEL_NAME"
 UNIT
 chmod 0755 /usr/local/bin/cai-vllm-run.sh
