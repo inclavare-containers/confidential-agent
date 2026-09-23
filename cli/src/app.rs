@@ -141,6 +141,7 @@ struct PrepareOptions {
     peerings: PeeringsFile,
     cloud_image_id: Option<String>,
     deploy_user_data: Option<String>,
+    deployer_cidr: Option<String>,
 }
 
 impl BuildManifest {
@@ -534,6 +535,7 @@ fn prepare(
             peerings: options.peerings.clone(),
             cloud_image_id: options.cloud_image_id.clone(),
             deploy_user_data: options.deploy_user_data.clone(),
+            deployer_cidr: options.deployer_cidr.clone(),
         },
     )?;
 

@@ -514,6 +514,7 @@ pub(super) fn render_service_config_from_state(
             deploy_user_data,
             mesh_peer_cidrs,
             peerings: read_peerings_or_empty(state_dir)?,
+            deployer_cidr: std::env::var("CA_DEPLOYER_CIDR").ok(),
         },
     )?;
     fs::write(&paths.rendered_config, rendered)

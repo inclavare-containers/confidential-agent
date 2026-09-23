@@ -47,6 +47,10 @@ pub struct ShelterRenderOptions {
     pub deploy_user_data: Option<String>,
     pub mesh_peer_cidrs: Vec<String>,
     pub peerings: PeeringsFile,
+    /// The deploy host's egress IP/CIDR (e.g. "203.0.113.10/32"), detected
+    /// by the one-click installer via `detect_public_ip()`. Passed to
+    /// DeployConfig.deployer_cidr for ALB SG rule generation.
+    pub deployer_cidr: Option<String>,
 }
 
 pub fn render_build_config(
@@ -250,6 +254,7 @@ fn render_deploy_config(
             None
         },
         slb: spec.deploy.slb.clone(),
+        deployer_cidr: options.deployer_cidr.clone(),
     })
 }
 
@@ -730,6 +735,8 @@ struct ShelterDeployConfig {
     replicas: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     slb: Option<SlbSpec>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    deployer_cidr: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

@@ -353,6 +353,7 @@ pub(super) fn cmd_deploy(cli: &Cli, args: &DeployArgs) -> Result<()> {
             peerings,
             cloud_image_id: published_image_id.clone(),
             deploy_user_data,
+            deployer_cidr: std::env::var("CA_DEPLOYER_CIDR").ok(),
         },
     )?;
     let mut deploy_manifest = read_build_manifest(&paths.manifest)?;
