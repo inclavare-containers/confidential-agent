@@ -1,4 +1,5 @@
 use super::*;
+use std::net::ToSocketAddrs;
 
 const REKOR_RV_SET_ATTEMPTS: usize = 2;
 const REKOR_RV_SET_RETRY_DELAY: Duration = Duration::from_secs(10);
@@ -671,6 +672,37 @@ pub(super) fn update_mesh_generation(
     Ok(())
 }
 
+/// Resolve a connect target host to a literal IPv4 address.
+///
+/// TNG's ingress `mapping.in/out.host` is deserialized as `Option<Ipv4Addr>`
+/// (see TNG `config/mapping_rule.rs` `MappingDe`), so a DNS name (e.g. an ALB
+/// `*.aliyuncsslb.com` address) is rejected with "data did not match any
+/// variant of untagged enum MappingDe". Classic SLB/NLB expose an IP VIP, but
+/// ALB exposes a DNS name, so resolve it here. TNG is expected to gain domain
+/// mapping targets later; until then this bridges the gap.
+///
+/// If the host is already an IPv4 literal it is returned unchanged. If DNS
+/// resolution fails or yields no IPv4, the original host is returned so TNG
+/// surfaces the error rather than failing silently.
+fn resolve_host_to_ipv4(host: &str) -> String {
+    if host.parse::<std::net::Ipv4Addr>().is_ok() {
+        return host.to_string();
+    }
+    let resolved = (host, 0u16)
+        .to_socket_addrs()
+        .ok()
+        .and_then(|mut addrs| {
+            addrs.find_map(|a| match a.ip() {
+                std::net::IpAddr::V4(v4) => Some(v4.to_string()),
+                _ => None,
+            })
+        });
+    match resolved {
+        Some(ip) => ip,
+        None => host.to_string(),
+    }
+}
+
 pub(super) fn render_connect_config(
     state_dir: &Path,
     service_filter: Option<&str>,
@@ -692,6 +724,8 @@ pub(super) fn render_connect_config(
             .as_deref()
             .filter(|ip| !ip.trim().is_empty())
             .unwrap_or(host);
+        // ALB addresses are DNS names; TNG mapping hosts must be IPv4 literals.
+        let host = resolve_host_to_ipv4(&host);
         let reference_values = connect_reference_values(&bundle, &service.service_id)?;
         for cp in &service.service.connect {
             let remote_port = cp.port();
