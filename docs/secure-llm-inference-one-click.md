@@ -128,6 +128,7 @@ export ALICLOUD_SECRET_KEY="<YOUR_SECRET_KEY>"
 | `--model-key-file`  | 本地 gocryptfs 模型解密密钥文件路径（必须存在，部署时注入）。 |
 | `--oss-bucket`      | OSS Bucket 中模型密文路径，格式为 `<bucket>:<path>`。       |
 | `--oss-endpoint`    | OSS Endpoint，默认 `https://oss-cn-beijing-internal.aliyuncs.com`。 |
+| `--replicas`        | vLLM 副本数，默认 `1`（单节点）；`>1` 时部署 N 个副本，前置 ALB 并使用 OHTTP 加密的 connect 隧道（多节点场景下 `slb_type=alb` 与 `connect.encryption=ohttp` 固定不可换）。 |
 
 ### 步骤二：执行一键部署
 
@@ -145,6 +146,7 @@ curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-a
 | Zone                 | `cn-beijing-l`                                         | 支持 gn8v-tee 实例规格的可用区。              |
 | Instance Type        | `ecs.gn8v-tee.4xlarge`                                 | 默认 TDX 异构机密计算实例规格。               |
 | System Disk          | `512G`                                                 | 镜像与运行态所需磁盘空间。                    |
+| Replicas            | `1`                                                    | vLLM 副本数；`>1` 时部署多副本 + ALB + OHTTP connect 隧道。 |
 | vLLM Version         | `0.19.1`                                               | vLLM 推理引擎版本。                           |
 | vLLM Port            | `8080`                                                 | vLLM OpenAI 兼容 API 端口。                   |
 | Served Model Name    | `Qwen3-32B`                                            | vLLM 对外暴露的模型名称。                     |
@@ -165,6 +167,23 @@ curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-a
   --oss-bucket <bucket>:/<model-path> \
   --model-key-file <path-to-model-decryption-key>
 ```
+
+多副本（N 个 vLLM 实例 + ALB + OHTTP 加密 connect 隧道）部署示例：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-agent/one-click/one-click/install-vllm-inference.sh | sh -s -- \
+  --non-interactive \
+  --yes \
+  --region cn-beijing \
+  --zone-id cn-beijing-l \
+  --instance-type ecs.gn8v-tee.4xlarge \
+  --disk-gb 512 \
+  --replicas 2 \
+  --oss-bucket <bucket>:/<model-path> \
+  --model-key-file <path-to-model-decryption-key>
+```
+
+`--replicas > 1` 时，spec 自动带上 `replicas: N`、`slb: {enabled: true, slb_type: alb}`、`connect: [{port: 8080, encryption: ohttp}]`；`confidential-agent connect` 通过 ALB 经 OHTTP 隧道访问推理服务，TDX 远程证明在隧道建立时完成。
 
 ### 步骤三：等待部署完成并确认
 
