@@ -10,6 +10,7 @@ struct InitProject {
     zone_id: String,
     instance_type: String,
     disk_gb: u32,
+    replicas: u32,
     reference_values: InitReferenceValues,
     cosign_key: Option<PathBuf>,
     slsa_generator: PathBuf,
@@ -191,6 +192,7 @@ fn resolve_project(args: &InitArgs, target: InitTarget) -> Result<InitProject> {
         zone_id,
         instance_type,
         disk_gb,
+        replicas: args.replicas,
         reference_values,
         cosign_key: args.cosign_key.clone(),
         slsa_generator: args.slsa_generator.clone(),
@@ -1047,13 +1049,31 @@ fn openclaw_vllm_variants_yaml(variants: VllmBuildVariants) -> String {
 }
 
 fn vllm_inference_yaml(project: &InitProject) -> Result<String> {
+    // Multi-node (replicas > 1): ALB + OHTTP-encrypted connect are fixed for
+    // this scenario (ALB requires OHTTP per spec validation; classic SLB has a
+    // FULLNAT return-path issue), so a single --replicas knob drives the whole
+    // multi-node config. Single-node stays plain connect.
+    let (connect_line, multinode) = if project.replicas > 1 {
+        (
+            "[{port: 8080, encryption: ohttp}]",
+            format!(
+                "  replicas: {}\n  slb:\n    enabled: true\n    slb_type: alb",
+                project.replicas
+            ),
+        )
+    } else {
+        (
+            "[8080]",
+            "  # Multi-node: pass --replicas N (N>1) to deploy N replicas behind\n  # an ALB with OHTTP-encrypted connect.".to_string(),
+        )
+    };
     Ok(format!(
         r#"schema: confidential-agent/v1
 
 service:
   id: vllm-inference
   ports: [8080]
-  connect: [8080]
+  connect: {connect_line}
   app_service: cai-vllm.service
 
 build:
@@ -1082,12 +1102,7 @@ deploy:
   region: {region}
   zone_id: {zone_id}
   disk_gb: {disk_gb}
-  # Multi-node: uncomment to deploy N replicas behind an SLB.
-  # replicas: 3
-  # slb:
-  #   enabled: true
-  #   slb_type: nlb            # nlb (L4) or alb (L7)
-
+{multinode}
 attestation:
   tee: tdx
   mode: challenge
@@ -1110,6 +1125,8 @@ resources:
         region = yaml_quote(&project.region)?,
         zone_id = yaml_quote(&project.zone_id)?,
         disk_gb = project.disk_gb,
+        connect_line = connect_line,
+        multinode = multinode,
         reference_values = yaml_quote(reference_values_name(project.reference_values))?,
         rekor = rekor_block(project)?,
     ))
@@ -1771,6 +1788,7 @@ mod tests {
             zone_id: "cn-beijing-l".to_string(),
             instance_type: "ecs.gn8v-tee.4xlarge".to_string(),
             disk_gb: 512,
+            replicas: 1,
             reference_values: InitReferenceValues::Sample,
             cosign_key: None,
             slsa_generator: PathBuf::from("/usr/libexec/shelter/slsa/slsa-generator"),
@@ -1804,6 +1822,60 @@ mod tests {
         assert!(yaml.contains("image_variant: debug"));
     }
 
+    fn vllm_inference_project(replicas: u32) -> InitProject {
+        InitProject {
+            target: InitTarget::VllmInference,
+            service_id: "vllm-inference",
+            dir: PathBuf::from("/tmp/vllm-inference"),
+            spec_path: PathBuf::from("/tmp/vllm-inference/vllm-inference.yaml"),
+            region: "cn-beijing".to_string(),
+            zone_id: "cn-beijing-l".to_string(),
+            instance_type: "ecs.gn8v-tee.4xlarge".to_string(),
+            disk_gb: 512,
+            replicas,
+            reference_values: InitReferenceValues::Sample,
+            cosign_key: None,
+            slsa_generator: PathBuf::from("/usr/libexec/shelter/slsa/slsa-generator"),
+            base_image: None,
+            dashscope_key: None,
+            dashscope_base_url: String::new(),
+            dashscope_anthropic_base_url: String::new(),
+            model: String::new(),
+            gateway_token: None,
+            disable_pep: false,
+            enable_dingtalk: false,
+            dingtalk_client_id: None,
+            dingtalk_client_secret: None,
+            vllm_model_id: String::new(),
+            vllm_model_dir: String::new(),
+            vllm_served_model_name: "Qwen3-32B".to_string(),
+            vllm_port: 8080,
+            vllm_version: "0.19.1".to_string(),
+            vllm_build_variants: VllmBuildVariants::default(),
+            oss_bucket: String::new(),
+            oss_endpoint: "https://oss-cn-beijing-internal.aliyuncs.com".to_string(),
+            model_key_file: PathBuf::new(),
+        }
+    }
+
+    #[test]
+    fn vllm_inference_yaml_multinode_when_replicas_gt_1() {
+        // --replicas N (N>1) drives the whole multi-node config: ALB + OHTTP
+        // connect are fixed for the vllm-inference scenario.
+        let yaml = vllm_inference_yaml(&vllm_inference_project(2)).unwrap();
+        assert!(yaml.contains("replicas: 2"));
+        assert!(yaml.contains("slb:\n    enabled: true\n    slb_type: alb"));
+        assert!(yaml.contains("connect: [{port: 8080, encryption: ohttp}]"));
+    }
+
+    #[test]
+    fn vllm_inference_yaml_single_node_when_replicas_is_1() {
+        let yaml = vllm_inference_yaml(&vllm_inference_project(1)).unwrap();
+        assert!(yaml.contains("connect: [8080]"));
+        assert!(!yaml.contains("\n  replicas:"));
+        assert!(!yaml.contains("\n  slb:"));
+    }
+
     #[test]
     fn openclaw_json_includes_dingtalk_when_enabled() {
         let project = InitProject {
@@ -1815,6 +1887,7 @@ mod tests {
             zone_id: "cn-beijing-i".to_string(),
             instance_type: "ecs.g9i.xlarge".to_string(),
             disk_gb: 200,
+            replicas: 1,
             reference_values: InitReferenceValues::Sample,
             cosign_key: None,
             slsa_generator: PathBuf::from("/usr/libexec/shelter/slsa/slsa-generator"),

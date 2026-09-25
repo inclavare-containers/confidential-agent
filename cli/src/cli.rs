@@ -240,6 +240,12 @@ pub(crate) struct InitArgs {
     pub(crate) instance_type: Option<String>,
     #[arg(long)]
     pub(crate) disk_gb: Option<u32>,
+    /// Number of replicas to deploy. For vllm-inference, replicas > 1 enables
+    /// multi-node behind an ALB with OHTTP-encrypted connect (the slb_type and
+    /// connect encryption are fixed for that scenario); replicas == 1 is a
+    /// single-node deploy.
+    #[arg(long, default_value_t = 1)]
+    pub(crate) replicas: u32,
     #[arg(long, value_enum, default_value = "mkosi")]
     pub(crate) build_backend: InitBuildBackend,
     #[arg(long)]

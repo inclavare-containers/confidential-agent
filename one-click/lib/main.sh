@@ -103,6 +103,7 @@ Deploy options:
   --zone-id ZONE                 Default: cn-beijing-l
   --instance-type TYPE           Default: ecs.gn8v-tee.4xlarge
   --disk-gb GB                   Default: 512
+  --replicas N                   Default: 1 (single-node); N>1 = N replicas behind an ALB with OHTTP-encrypted connect
   --allowed-cidr CIDR[,CIDR...]  Operator access CIDR list; may be repeated
   --gateway-token TOKEN          Connect tunnel token; generated if omitted
   --vllm-port PORT               vLLM OpenAI-compatible API port; default: 8080
@@ -212,6 +213,7 @@ init_defaults() {
   CA_ZONE_ID="${CA_ZONE_ID:-}"
   CA_INSTANCE_TYPE="${CA_INSTANCE_TYPE:-}"
   CA_DISK_GB="${CA_DISK_GB:-}"
+  CA_REPLICAS="${CA_REPLICAS:-1}"
   CA_REFERENCE_VALUES="${CA_REFERENCE_VALUES:-rekor}"
   CA_BAILIAN_MODEL="${CA_BAILIAN_MODEL:-qwen3.7-max}"
   CA_OPENCLAW_VERSION="${CA_OPENCLAW_VERSION:-2026.5.7}"
@@ -272,6 +274,7 @@ parse_args() {
       --zone-id) CA_ZONE_ID="${2:?missing value for --zone-id}"; shift 2 ;;
       --instance-type) CA_INSTANCE_TYPE="${2:?missing value for --instance-type}"; shift 2 ;;
       --disk-gb) CA_DISK_GB="${2:?missing value for --disk-gb}"; shift 2 ;;
+      --replicas) CA_REPLICAS="${2:?missing value for --replicas}"; shift 2 ;;
       --allowed-cidr)
         if [[ -n "${CA_ALLOWED_CIDR:-}" ]]; then
           CA_ALLOWED_CIDR="$CA_ALLOWED_CIDR,${2:?missing value for --allowed-cidr}"

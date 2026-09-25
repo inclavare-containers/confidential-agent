@@ -52,6 +52,7 @@ append_init_common_args() {
     --zone-id "$CA_ZONE_ID"
     --instance-type "$CA_INSTANCE_TYPE"
     --disk-gb "$CA_DISK_GB"
+    --replicas "$CA_REPLICAS"
     --reference-values "$CA_REFERENCE_VALUES"
     --gateway-token "$CA_GATEWAY_TOKEN"
     --openclaw-version "$CA_OPENCLAW_VERSION"
