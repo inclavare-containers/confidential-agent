@@ -419,13 +419,28 @@ pub(super) fn cmd_deploy(cli: &Cli, args: &DeployArgs) -> Result<()> {
                 &observation.instance_public_ips,
             )?;
         }
-        println!("[ca] waiting for guest daemon status at {injection_ip}:{DAEMON_STATUS_PORT}...");
-        wait_for_daemon_status(&injection_ip).with_context(|| {
-            format!(
-                "guest daemon status did not become reachable for service '{}'; check security group rules, confidential-agentd.service, and guest journal",
-                spec.service.id
-            )
-        })?;
+        // The daemon status API (DAEMON_STATUS_PORT) and the CDH
+        // resource-injection port (8006) are per-instance and NOT fronted by
+        // the ALB, which only forwards the connect listener on 8080. For
+        // multi-node, wait on each instance's public IP; single-instance falls
+        // back to the resolved injection IP.
+        let daemon_hosts: Vec<String> = if !observation.instance_public_ips.is_empty() {
+            observation.instance_public_ips.clone()
+        } else {
+            vec![injection_ip.clone()]
+        };
+        println!(
+            "[ca] waiting for guest daemon status on {} host(s) at port {DAEMON_STATUS_PORT}...",
+            daemon_hosts.len()
+        );
+        for host in &daemon_hosts {
+            wait_for_daemon_status(host).with_context(|| {
+                format!(
+                    "guest daemon status did not become reachable for service '{}' at {host}:{DAEMON_STATUS_PORT}; check security group rules, confidential-agentd.service, and guest journal",
+                    spec.service.id
+                )
+            })?;
+        }
         println!("[ca] generating and delivering mesh bundle...");
         let mut active_state = build_service_state(
             &cli.state_dir,
@@ -1551,24 +1566,49 @@ pub(super) fn collect_live_status(
                     live_error: Some("service is not active or deployed".to_string()),
                 };
             }
-            let public_ip = state.deploy.public_ip.as_deref().unwrap_or("").trim();
-            if public_ip.is_empty() {
+            // The daemon status API (port 8088) is per-instance and not fronted
+            // by the ALB, which only forwards the connect listener on 8080. For
+            // multi-node, probe each instance public IP; single-instance falls
+            // back to the recorded public_ip.
+            let hosts: Vec<String> = if !state.deploy.instance_public_ips.is_empty() {
+                state.deploy.instance_public_ips.clone()
+            } else {
+                state
+                    .deploy
+                    .public_ip
+                    .iter()
+                    .filter(|ip| !ip.trim().is_empty())
+                    .cloned()
+                    .collect()
+            };
+            if hosts.is_empty() {
                 return LiveStatusView {
                     local,
                     daemon: None,
                     live_error: Some("service has no public_ip".to_string()),
                 };
             }
-            match fetch_daemon_status(public_ip) {
-                Ok(status) => LiveStatusView {
+            let mut last_err = String::new();
+            let mut daemon: Option<DaemonStatus> = None;
+            for host in &hosts {
+                match fetch_daemon_status(host) {
+                    Ok(status) => {
+                        daemon = Some(status);
+                        break;
+                    }
+                    Err(err) => last_err = err.to_string(),
+                }
+            }
+            match daemon {
+                Some(status) => LiveStatusView {
                     local,
                     daemon: Some(status),
                     live_error: None,
                 },
-                Err(err) => LiveStatusView {
+                None => LiveStatusView {
                     local,
                     daemon: None,
-                    live_error: Some(err.to_string()),
+                    live_error: Some(last_err),
                 },
             }
         })
