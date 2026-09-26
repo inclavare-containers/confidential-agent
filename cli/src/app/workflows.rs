@@ -764,6 +764,8 @@ pub(super) fn render_connect_config(
                 "out": {"host": host, "port": remote_port}
             }));
             entry.insert("verify".into(), serde_json::json!({
+                "model": "background_check",
+                "as_provider": "coco",
                 "as_type": "builtin",
                 "attestation_policy": connect_policy_config(state_dir)?,
                 "reference_values": reference_values,
