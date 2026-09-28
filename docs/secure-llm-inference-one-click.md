@@ -34,20 +34,22 @@ Confidential Agent 部署中的核心数据均在 TEE（Trusted Execution Enviro
 
 部署流程如下：
 
-1. **凭证准备** ：在部署机上导出阿里云 AccessKey，准备模型解密密钥文件和 OSS 模型密文路径。
+1. **准备加密模型** ：下载模型并使用 gocryptfs 加密，将密文上传到公共读 OSS Bucket；也可使用提供的预加密 Qwen3.8-27B 模型跳过该步。
 
-2. **一键部署** ：执行一键部署脚本，自动完成依赖安装、可信镜像构建、参考值上链、云资源创建、远程证明和机密资源注入。
+2. **凭证准备** ：在部署机上导出阿里云 AccessKey，准备模型解密密钥文件和 OSS 模型密文路径。
 
-3. **建立加密通道** ：脚本自动启动 TNG connect 隧道，建立部署机与 TDX 实例之间的 OHTTP 加密通道。
+3. **一键部署** ：执行一键部署脚本，自动完成依赖安装、可信镜像构建、参考值上链、云资源创建、远程证明和机密资源注入。
 
-4. **访问推理服务** ：在部署机（脚本已自动启动 connect 隧道）或安装了 confidential-agent 的访问机上运行 `confidential-agent connect start --service vllm-inference` 启动本地 connect 监听（默认 `127.0.0.1:8080`），再使用 OpenAI 兼容 API 发起推理请求，所有流量经 OHTTP 加密通道进入 TDX 实例。目标实例禁用 SSH/远程登录，无需也无法登录实例。
+4. **建立加密通道** ：脚本自动启动 TNG connect 隧道，建立部署机与 TDX 实例之间的 OHTTP 加密通道。
+
+5. **访问推理服务** ：在部署机（脚本已自动启动 connect 隧道）或安装了 confidential-agent 的访问机上运行 `confidential-agent connect start --service vllm-inference` 启动本地 connect 监听（默认 `127.0.0.1:8080`），再使用 OpenAI 兼容 API 发起推理请求，所有流量经 OHTTP 加密通道进入 TDX 实例。目标实例禁用 SSH/远程登录，无需也无法登录实例。
 
 前提条件
 ---------
 
 * 已开通阿里云 ECS 服务，账号具备创建 TDX 机密计算实例、VPC、交换机、安全组、OSS Bucket、自定义镜像等资源的权限。
 
-* 已准备一台 Alibaba Cloud Linux 3 ECS 实例作为部署机，可用磁盘空间不低于 80 GB。
+* 已准备一台 Alibaba Cloud Linux 3 ECS 实例作为部署机，可用磁盘空间不低于 200 GB（如在该部署机上执行步骤一的模型加密，需额外容纳明文与密文两份模型拷贝）。
 
   **重要**
 
@@ -55,46 +57,9 @@ Confidential Agent 部署中的核心数据均在 TEE（Trusted Execution Enviro
 
 * 已获取阿里云访问凭证。建议使用 RAM 用户最小权限、RAM 角色或 STS 临时凭证，避免长期存储主账号 AccessKey。
 
-* 已使用 gocryptfs 加密模型，并将密文上传到一个公共读的 OSS Bucket。模型解密密钥文件（passphrase）需妥善保管，部署时通过 `--model-key-file` 传入。
-
 * 部署机可以访问公网，用于拉取源码、系统包、Rekor 透明日志和阿里云 OpenAPI。
 
-### 准备加密模型
-
-本方案的模型以 gocryptfs 密文形式存储在 OSS 中。请在部署前完成模型加密与上传。
-
-1. 安装 gocryptfs。Alinux 3 可直接通过 yum 安装：
-
-   ```bash
-   sudo yum install gocryptfs -y
-   ```
-
-2. 创建模型解密密钥文件。建议使用随机生成的强密钥：
-
-   ```bash
-   cat << EOF > ~/model-decryption-key
-   <您的随机密钥>
-   EOF
-   ```
-
-3. 初始化 gocryptfs 加密目录并挂载：
-
-   ```bash
-   mkdir -p ~/mount/cipher ~/mount/plain
-   cat ~/model-decryption-key | gocryptfs -init ~/mount/cipher
-   cat ~/model-decryption-key | gocryptfs ~/mount/cipher ~/mount/plain
-   ```
-
-4. 将明文模型复制到挂载点，完成加密后卸载：
-
-   ```bash
-   cp -r <明文模型路径>/. ~/mount/plain
-   fusermount -u ~/mount/plain
-   ```
-
-   加密后的密文存储在 `~/mount/cipher` 目录中。
-
-5. 将密文上传到 OSS Bucket。需准备一个与即将部署的实例相同地域的 OSS Bucket，并将加密模型密文上传。因模型文件较大，推荐使用 ossbrowser 上传。Bucket 需设置为公共读，以便实例内 s3fs 以匿名方式挂载密文。
+* （可选）如需使用自有模型，请在步骤一中完成 gocryptfs 加密与 OSS 上传；也可直接使用步骤一提供的预加密 Qwen3.8-27B 模型跳过该操作。
 
 操作步骤
 ---------
@@ -103,7 +68,115 @@ Confidential Agent 部署中的核心数据均在 TEE（Trusted Execution Enviro
 
 本文以 `ecs.gn8v-tee.4xlarge` 实例规格、地域 `cn-beijing`、可用区 `cn-beijing-l` 为默认配置。
 
-### 步骤一：准备凭证
+### 步骤一：准备加密模型
+
+本方案的模型以 gocryptfs 密文形式存储在 OSS 中。请在部署前完成模型加密与上传。该步骤包括下载模型、加密模型和上传模型三个环节，由于模型文件较大，整个过程耗时较长。
+
+**说明**
+
+如果您希望快速体验此方案，可以使用我们为您准备的加密模型文件进行试用。选择下表中的预加密模型后，您将能够跳过该步骤，直接进入[步骤二：准备凭证](#步骤二准备凭证)。
+
+| 模型名称 | 加密方式 | 加密密码 | OSS地域 | 模型存储位置 |
+|----------|----------|----------|---------|--------------|
+| Qwen3.8-27B | Gocryptfs | 0Bn4Q1wwY9fN3P | cn-beijing | conf-ai:/qwen3.8-27b-gocryptfs/ |
+
+#### 1.下载模型
+
+部署前，需先加密模型并上传到云存储。请在本地或可信环境中完成模型加密。以部署 Qwen3.8-27B 模型为例，指导如下。
+
+**说明**
+
+如果您已经拥有自己的模型，请跳过本章节，直接进入 2.加密模型 章节，并将后续示例中的模型路径替换为目标模型的实际路径。
+
+以使用 modelscope 工具下载 Qwen3.8-27B 模型为例（需要 Python 3.9 或更高版本），在终端中执行如下命令下载模型。
+
+```bash
+pip3 install modelscope importlib-metadata
+modelscope download --model Qwen/Qwen3.8-27B
+```
+
+成功执行命令后，模型将被下载到 `~/.cache/modelscope/hub/models/Qwen/Qwen3.8-27B/` 目录下。
+
+#### 2.加密模型
+
+本方案采用 Gocryptfs 加密方式：基于 AES256-GCM，符合开源 Gocryptfs 标准的加密模式。
+
+1. 安装 Gocryptfs 加密工具（仅支持默认参数的 v2.4.0 版本），选择以下任意一种方式安装：
+
+   **方式一：（推荐）从 yum 源安装**
+
+   如果您使用 Alinux 3 或者 AnolisOS 23 操作系统，可以直接利用 yum 源安装 gocryptfs。
+
+   **Alinux 3**
+
+   ```bash
+   sudo yum install gocryptfs -y
+   ```
+
+   **AnolisOS 23**
+
+   ```bash
+   sudo yum install anolis-epao-release -y
+   sudo yum install gocryptfs -y
+   ```
+
+   **方式二：直接下载预编译 binary**
+
+   ```bash
+   # 下载预编译 Gocryptfs 压缩包
+   wget https://github.jobcher.com/gh/https://github.com/rfjakob/gocryptfs/releases/download/v2.4.0/gocryptfs_v2.4.0_linux-static_amd64.tar.gz
+
+   # 解压并安装
+   tar xf gocryptfs_v2.4.0_linux-static_amd64.tar.gz
+   sudo install -m 0755 ./gocryptfs /usr/local/bin
+   ```
+
+2. 创建 Gocryptfs 密钥文件作为模型加密密钥。后续部署时需通过 `--model-key-file` 将该密钥传入实例。
+
+   本方案使用 `0Bn4Q1wwY9fN3P` 作为加密模型使用的密钥，密钥内容存储在 `cachefs-password` 文件中。在实际生产中，建议使用随机生成的强密钥。
+
+   ```bash
+   cat << EOF > ~/cachefs-password
+   0Bn4Q1wwY9fN3P
+   EOF
+   ```
+
+3. 使用已创建的密钥加密模型。
+
+   1. 配置明文模型的路径。
+
+      ```bash
+      PLAINTEXT_MODEL_PATH=~/.cache/modelscope/hub/models/Qwen/Qwen3.8-27B/
+      ```
+
+   2. 使用 Gocryptfs 对模型目录树进行加密。加密完成后，模型将以密文形式存储在 `~/mount/cipher` 目录中。
+
+      ```bash
+      mkdir -p ~/mount
+      cd ~/mount
+      mkdir -p cipher plain
+
+      # 安装 Gocryptfs 运行时依赖
+      sudo yum install -y fuse
+
+      # initialize gocryptfs
+      cat ~/cachefs-password | gocryptfs -init cipher
+
+      # mount to plain
+      cat ~/cachefs-password | gocryptfs cipher plain
+
+      # move AI model to ~/mount/plain
+      cp -r ${PLAINTEXT_MODEL_PATH}/. ~/mount/plain
+
+      # unmount after encryption is complete
+      fusermount -u ~/mount/plain
+      ```
+
+#### 3.上传模型
+
+您需要准备一个与即将部署的实例相同地域的 OSS Bucket，并将加密模型上传到阿里云 OSS 对象存储，以便后续从实例拉取并部署。因模型文件较大，推荐使用 ossbrowser 将加密模型上传到该目录。Bucket 需设置为公共读，以便实例内 s3fs 以匿名方式挂载密文。
+
+### 步骤二：准备凭证
 
 一键部署脚本需要通过阿里云 AccessKey 创建云资源（ECS 实例、VPC、安全组等），并通过模型解密密钥文件在远程证明通过后注入实例。在部署机上执行以下命令，将阿里云凭证导出为环境变量。请将尖括号中的占位符替换为实际值。
 
@@ -130,12 +203,12 @@ export ALICLOUD_SECRET_KEY="<YOUR_SECRET_KEY>"
 | `--oss-endpoint`    | OSS Endpoint，默认 `https://oss-cn-beijing-internal.aliyuncs.com`。 |
 | `--replicas`        | vLLM 副本数，默认 `1`（单节点，OHTTP 加密 connect 隧道，无 ALB）；`>1` 时部署 N 个副本，前置 ALB，connect 隧道同样为 OHTTP 加密（`slb_type=alb` 与 `connect.encryption=ohttp` 固定不可换）。 |
 
-### 步骤二：执行一键部署
+### 步骤三：执行一键部署
 
 在部署机上执行以下命令进入交互式部署：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-agent/one-click/one-click/install-vllm-inference.sh | sh
+curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-agent/secure-llm-inference/one-click/install-vllm-inference.sh | sh
 ```
 
 脚本默认进入交互模式，会自动询问缺失的阿里云凭证、模型密钥文件、OSS 路径等必要参数。常用默认配置如下：
@@ -149,29 +222,32 @@ curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-a
 | Replicas            | `1`                                                    | vLLM 副本数；单节点与多副本均使用 OHTTP 加密的 connect 隧道，`>1` 时额外前置 ALB。 |
 | vLLM Version         | `0.19.1`                                               | vLLM 推理引擎版本。                           |
 | vLLM Port            | `8080`                                                 | vLLM OpenAI 兼容 API 端口。                   |
-| Served Model Name    | `Qwen3-32B`                                            | vLLM 对外暴露的模型名称。                     |
+| Served Model Name    | `Qwen3.8-27B`                                            | vLLM 对外暴露的模型名称。                     |
 | Reference Value      | `rekor`                                                | 构建后将参考值上传 Rekor，部署时使用 Rekor 验证。 |
 | Attestation Mode     | `challenge`                                            | 远程证明通过后才下发模型密钥。                |
 | State Dir            | `$HOME/.confidential-agent`                            | 本地状态、密钥、Terraform 和构建产物目录。    |
 
+以下示例使用步骤一提供的预加密 Qwen3.8-27B 模型（`conf-ai:/qwen3.8-27b-gocryptfs/`）与演示密钥文件 `~/cachefs-password`；如使用自有模型，请将 `--oss-bucket`、`--model-key-file` 与 `--vllm-served-model-name` 替换为实际值。
+
 非交互部署示例：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-agent/one-click/one-click/install-vllm-inference.sh | sh -s -- \
+curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-agent/secure-llm-inference/one-click/install-vllm-inference.sh | sh -s -- \
   --non-interactive \
   --yes \
   --region cn-beijing \
   --zone-id cn-beijing-l \
   --instance-type ecs.gn8v-tee.4xlarge \
   --disk-gb 512 \
-  --oss-bucket <bucket>:/<model-path> \
-  --model-key-file <path-to-model-decryption-key>
+  --oss-bucket conf-ai:/qwen3.8-27b-gocryptfs/ \
+  --vllm-served-model-name Qwen3.8-27B \
+  --model-key-file ~/cachefs-password
 ```
 
 多副本（N 个 vLLM 实例 + ALB + OHTTP 加密 connect 隧道）部署示例：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-agent/one-click/one-click/install-vllm-inference.sh | sh -s -- \
+curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-agent/secure-llm-inference/one-click/install-vllm-inference.sh | sh -s -- \
   --non-interactive \
   --yes \
   --region cn-beijing \
@@ -179,13 +255,14 @@ curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-a
   --instance-type ecs.gn8v-tee.4xlarge \
   --disk-gb 512 \
   --replicas 2 \
-  --oss-bucket <bucket>:/<model-path> \
-  --model-key-file <path-to-model-decryption-key>
+  --oss-bucket conf-ai:/qwen3.8-27b-gocryptfs/ \
+  --vllm-served-model-name Qwen3.8-27B \
+  --model-key-file ~/cachefs-password
 ```
 
 `--replicas > 1` 时，spec 自动带上 `replicas: N`、`slb: {enabled: true, slb_type: alb}`、`connect: [{port: 8080, encryption: ohttp}]`；`confidential-agent connect` 通过 ALB 经 OHTTP 隧道访问推理服务，TDX 远程证明在隧道建立时完成。默认 `--replicas 1`（单节点）同样使用 OHTTP 加密 connect，但无 ALB，直连实例公网 IP。
 
-### 步骤三：等待部署完成并确认
+### 步骤四：等待部署完成并确认
 
 脚本会自动完成以下动作：
 
@@ -215,7 +292,7 @@ curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-a
 Confidential Agent one-click summary
   state_dir: /root/.confidential-agent
   work_dir:  /root/.confidential-agent/one-click
-  spec:      /root/.confidential-agent/one-click/vllm-inference.yaml
+  spec:      /root/.confidential-agent/one-click/vllm-inference/vllm-inference.yaml
   service:   vllm-inference
   region:    cn-beijing
   zone_id:   cn-beijing-l
@@ -225,15 +302,15 @@ Confidential Agent one-click summary
   vllm:      curl http://127.0.0.1:8080/v1/models
   chat:      curl http://127.0.0.1:8080/v1/chat/completions \
                  -H 'Content-Type: application/json' \
-                 -d '{"model":"Qwen3-32B","messages":[{"role":"user","content":"hi"}]}'
-  connect:   running (pid 12345, log /root/.confidential-agent/one-click/connect.log)
+                 -d '{"model":"Qwen3.8-27B","messages":[{"role":"user","content":"hi"}]}'
+  connect:   running (pid 12345, log /root/.confidential-agent/one-click/connect-vllm-inference.log)
 ```
 
 **说明**
 
 connect 隧道监听在部署机本地 `127.0.0.1:8080`。通过 `curl http://127.0.0.1:8080/v1/models` 可确认 vLLM 推理服务已就绪。
 
-### 步骤四：访问推理服务
+### 步骤五：访问推理服务
 
 部署脚本已在部署机上自动启动 TNG connect 隧道（OHTTP 加密），监听本地 `127.0.0.1:8080`，并完成 `/health` 可达性检查。目标 TDX 实例使用发布镜像，**禁用任何 SSH/远程登录**，所有推理流量均通过 connect 隧道进入 TDX 实例，无需也无法 SSH 登录实例。
 
@@ -257,7 +334,7 @@ curl http://127.0.0.1:8080/v1/models
 curl http://127.0.0.1:8080/v1/chat/completions \
     -X POST \
     -H "Content-Type: application/json" \
-    -d '{"model": "Qwen3-32B", "messages": [{"role": "user", "content": "你好"}], "temperature": 0.0, "max_tokens": 132, "stream": false}'
+    -d '{"model": "Qwen3.8-27B", "messages": [{"role": "user", "content": "你好"}], "temperature": 0.0, "max_tokens": 132, "stream": false}'
 ```
 
 发起流式推理请求：
@@ -266,17 +343,17 @@ curl http://127.0.0.1:8080/v1/chat/completions \
 curl http://127.0.0.1:8080/v1/chat/completions \
     -X POST \
     -H "Content-Type: application/json" \
-    -d '{"model": "Qwen3-32B", "messages": [{"role": "user", "content": "你好"}], "temperature": 0.0, "max_tokens": 132, "stream": true}'
+    -d '{"model": "Qwen3.8-27B", "messages": [{"role": "user", "content": "你好"}], "temperature": 0.0, "max_tokens": 132, "stream": true}'
 ```
 
 connect 隧道在建立时完成 TDX 远程证明，确认对端为可信的 TDX 实例后，推理 Prompt 与回复经 OHTTP 端到端加密在隧道内传输。
 
-### 步骤五（可选）：释放资源
+### 步骤六（可选）：释放资源
 
 不再需要服务时，在部署机上执行以下命令释放云资源：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-agent/one-click/one-click/install-vllm-inference.sh | sh -s -- cleanup \
+curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-agent/secure-llm-inference/one-click/install-vllm-inference.sh | sh -s -- cleanup \
   --state-dir "$HOME/.confidential-agent"
 ```
 
@@ -347,8 +424,9 @@ confidential-agent status --live
 
 | 端口 | 协议 | 说明                                          | 建议                  |
 |------|------|-----------------------------------------------|-----------------------|
-| 22   | TCP  | SSH 远程管理（仅 Debug 镜像）                 | 限制源 IP 为管理网络。 |
 | 8080 | TCP  | TNG 隧道端点（OHTTP），用于访问 vLLM 推理服务 | 限制源 IP 或仅通过 TNG 访问。 |
+
+目标 TDX 实例使用发布镜像，禁用 SSH/远程登录，安全组不开放 22 端口；所有推理流量经 8080 端口的 OHTTP 加密 connect 隧道进入实例。
 
 **重要**
 
@@ -371,6 +449,8 @@ challenge 模式下，模型解密密钥不跨 guest 重启持久化。实例重
 常见问题
 ---------
 
+目标 TDX 实例使用发布镜像，禁用 SSH/远程登录。以下排查均在部署机上完成：通过 `confidential-agent status --live`（经安全通道查询 guest 状态，无需 SSH）与部署日志（`$HOME/.confidential-agent/one-click/` 下，含 `connect-vllm-inference.log`）定位问题。
+
 ### OSS 不可达或 s3fs 挂载失败
 
 **原因** ：实例无法访问模型密文所在的 OSS，或 OSS Endpoint 配置不正确。
@@ -383,7 +463,7 @@ challenge 模式下，模型解密密钥不跨 guest 重启持久化。实例重
 
 * 确认 `--oss-endpoint` 使用 internal 域名（默认 `https://oss-cn-beijing-internal.aliyuncs.com`）。
 
-* 通过 debug SSH 登录 guest，查看 `journalctl -u cai-s3fs.service -n 200 --no-pager` 排查。
+* 执行 `confidential-agent status --live` 查看 guest 内 OSS/s3fs 挂载状态（经安全通道查询，无需 SSH），并检查部署日志中 s3fs 相关输出。
 
 ### gocryptfs 解密失败
 
@@ -395,7 +475,7 @@ challenge 模式下，模型解密密钥不跨 guest 重启持久化。实例重
 
 * 确认 OSS 中的模型密文是通过 gocryptfs 加密生成（目录中应包含 `gocryptfs.conf`）。
 
-* 通过 debug SSH 登录 guest，查看 `journalctl -u cai-gocryptfs.service -n 200 --no-pager` 排查。
+* 执行 `confidential-agent status --live` 查看模型解密状态，并检查部署日志中 gocryptfs 相关输出。
 
 ### 远程证明未通过或密钥注入失败
 
@@ -405,9 +485,9 @@ challenge 模式下，模型解密密钥不跨 guest 重启持久化。实例重
 
 * 确认部署时使用 `--reference-values rekor`（默认），且 Rekor 透明日志可访问。
 
-* 查看 `connect.log` 与部署日志中远程证明相关输出。
+* 查看 `$HOME/.confidential-agent/one-click/connect-vllm-inference.log` 与部署日志中远程证明相关输出。
 
-* 通过 debug SSH 登录 guest，执行 `confidential-agent status --live` 查看证明状态。
+* 执行 `confidential-agent status --live` 查看证明状态（经安全通道查询 guest，无需 SSH）。
 
 ### vLLM 未就绪
 
@@ -415,11 +495,11 @@ challenge 模式下，模型解密密钥不跨 guest 重启持久化。实例重
 
 **解决** ：
 
-* 通过 debug SSH 登录 guest，确认 `/dev/nvidia0` 存在，GPU 驱动已加载。
+* 执行 `confidential-agent status --live` 查看 guest 服务状态（经安全通道查询，无需 SSH）。
 
-* 确认模型已解密挂载：`ls /tmp/model/config.json`（默认挂载点）。
+* 部署脚本会在 connect 隧道就绪后执行 `/health` 可达性检查，检查结果记录在部署日志与 `connect-vllm-inference.log` 中。
 
-* 查看 `journalctl -u cai-vllm.service -n 200 --no-pager` 排查 vLLM 启动日志。
+* 发布镜像禁用 SSH，无法直接登录 guest 查看 journalctl；如需 vLLM 启动细节，请检查部署日志中远程证明通过后的服务启动输出。
 
 相关文档
 ---------
