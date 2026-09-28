@@ -1,12 +1,12 @@
 基于机密计算实例一键构建安全大语言模型推理环境
 ================================================
 
-随着大语言模型技术的普及，企业对推理过程中的数据安全问题日益关注。模型权重是核心资产，推理 Prompt 与回复可能包含敏感业务数据，模型解密密钥一旦泄露将导致模型保护失效。本文介绍如何在阿里云 gn8v-tee TDX 机密计算实例上，使用一键部署脚本快速构建基于 vLLM 的安全大语言模型推理环境，通过 gocryptfs 运行时解密、Intel TDX 硬件级内存加密、远程证明和 RATS-TLS 端到端加密，保护模型权重、推理数据和模型密钥的安全。
+随着大语言模型技术的普及，企业对推理过程中的数据安全问题日益关注。模型权重是核心资产，推理 Prompt 与回复可能包含敏感业务数据，模型解密密钥一旦泄露将导致模型保护失效。本文介绍如何在阿里云 gn8v-tee TDX 机密计算实例上，使用一键部署脚本快速构建基于 vLLM 的安全大语言模型推理环境，通过 gocryptfs 运行时解密、Intel TDX 硬件级内存加密、远程证明和 OHTTP 端到端加密，保护模型权重、推理数据和模型密钥的安全。
 
 方案概述
 ---------
 
-本方案将 vLLM 推理服务封装在 Intel TDX（Trust Domain Extensions）可信执行环境中。模型以 gocryptfs 密文形式存储在 OSS 公共读 Bucket 中，仅在远程证明通过后将模型解密密钥注入实例，由 gocryptfs 在 TDX 内存边界内完成解密挂载，vLLM 直接读取明文模型启动推理。用户推理请求经 TNG RATS-TLS 加密通道进入 TDX 实例，推理 Prompt 与回复全程在 TDX 内存加密边界内流转。
+本方案将 vLLM 推理服务封装在 Intel TDX（Trust Domain Extensions）可信执行环境中。模型以 gocryptfs 密文形式存储在 OSS 公共读 Bucket 中，仅在远程证明通过后将模型解密密钥注入实例，由 gocryptfs 在 TDX 内存边界内完成解密挂载，vLLM 直接读取明文模型启动推理。用户推理请求经 TNG OHTTP 加密通道进入 TDX 实例，推理 Prompt 与回复全程在 TDX 内存加密边界内流转。
 
 本方案采用 challenge 远程证明模式：部署时，实例先通过远程证明验证运行环境可信，验证通过后才下发模型解密密钥与运行时配置，确保模型密钥不会注入到未经证明的实例中。
 
@@ -28,7 +28,7 @@ Confidential Agent 部署中的核心数据均在 TEE（Trusted Execution Enviro
 | 启动链    | UKI（Unified Kernel Image，统一内核镜像）和 dm-verity rootfs 防篡改；镜像度量值上传 Rekor 透明日志。 |
 | 运行时    | vLLM 推理服务运行在 TDX 信任域内，模型解密与推理全程在内存加密边界内完成。                    |
 | 密钥管理   | 模型解密密钥与运行时配置仅在远程证明通过后注入，challenge 模式确保密钥不下发到未证明实例。     |
-| 通信链路   | RATS-TLS 端到端加密，远程证明验证实例身份后才建立通道，推理流量全程加密传输。                |
+| 通信链路   | OHTTP 端到端加密，远程证明验证实例身份后才建立通道，推理流量全程加密传输。                |
 
 ### 部署架构
 
@@ -38,9 +38,9 @@ Confidential Agent 部署中的核心数据均在 TEE（Trusted Execution Enviro
 
 2. **一键部署** ：执行一键部署脚本，自动完成依赖安装、可信镜像构建、参考值上链、云资源创建、远程证明和机密资源注入。
 
-3. **建立加密通道** ：脚本自动启动 TNG connect 隧道，建立部署机与 TDX 实例之间的 RATS-TLS 加密通道。
+3. **建立加密通道** ：脚本自动启动 TNG connect 隧道，建立部署机与 TDX 实例之间的 OHTTP 加密通道。
 
-4. **访问推理服务** ：通过 SSH 端口转发部署机的 connect 端口，使用 OpenAI 兼容 API 发起推理请求，所有流量经 RATS-TLS 加密通道进入 TDX 实例。
+4. **访问推理服务** ：通过 SSH 端口转发部署机的 connect 端口，使用 OpenAI 兼容 API 发起推理请求，所有流量经 OHTTP 加密通道进入 TDX 实例。
 
 前提条件
 ---------
@@ -128,7 +128,7 @@ export ALICLOUD_SECRET_KEY="<YOUR_SECRET_KEY>"
 | `--model-key-file`  | 本地 gocryptfs 模型解密密钥文件路径（必须存在，部署时注入）。 |
 | `--oss-bucket`      | OSS Bucket 中模型密文路径，格式为 `<bucket>:<path>`。       |
 | `--oss-endpoint`    | OSS Endpoint，默认 `https://oss-cn-beijing-internal.aliyuncs.com`。 |
-| `--replicas`        | vLLM 副本数，默认 `1`（单节点）；`>1` 时部署 N 个副本，前置 ALB 并使用 OHTTP 加密的 connect 隧道（多节点场景下 `slb_type=alb` 与 `connect.encryption=ohttp` 固定不可换）。 |
+| `--replicas`        | vLLM 副本数，默认 `1`（单节点，OHTTP 加密 connect 隧道，无 ALB）；`>1` 时部署 N 个副本，前置 ALB，connect 隧道同样为 OHTTP 加密（`slb_type=alb` 与 `connect.encryption=ohttp` 固定不可换）。 |
 
 ### 步骤二：执行一键部署
 
@@ -146,7 +146,7 @@ curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-a
 | Zone                 | `cn-beijing-l`                                         | 支持 gn8v-tee 实例规格的可用区。              |
 | Instance Type        | `ecs.gn8v-tee.4xlarge`                                 | 默认 TDX 异构机密计算实例规格。               |
 | System Disk          | `512G`                                                 | 镜像与运行态所需磁盘空间。                    |
-| Replicas            | `1`                                                    | vLLM 副本数；`>1` 时部署多副本 + ALB + OHTTP connect 隧道。 |
+| Replicas            | `1`                                                    | vLLM 副本数；单节点与多副本均使用 OHTTP 加密的 connect 隧道，`>1` 时额外前置 ALB。 |
 | vLLM Version         | `0.19.1`                                               | vLLM 推理引擎版本。                           |
 | vLLM Port            | `8080`                                                 | vLLM OpenAI 兼容 API 端口。                   |
 | Served Model Name    | `Qwen3-32B`                                            | vLLM 对外暴露的模型名称。                     |
@@ -183,7 +183,7 @@ curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-a
   --model-key-file <path-to-model-decryption-key>
 ```
 
-`--replicas > 1` 时，spec 自动带上 `replicas: N`、`slb: {enabled: true, slb_type: alb}`、`connect: [{port: 8080, encryption: ohttp}]`；`confidential-agent connect` 通过 ALB 经 OHTTP 隧道访问推理服务，TDX 远程证明在隧道建立时完成。
+`--replicas > 1` 时，spec 自动带上 `replicas: N`、`slb: {enabled: true, slb_type: alb}`、`connect: [{port: 8080, encryption: ohttp}]`；`confidential-agent connect` 通过 ALB 经 OHTTP 隧道访问推理服务，TDX 远程证明在隧道建立时完成。默认 `--replicas 1`（单节点）同样使用 OHTTP 加密 connect，但无 ALB，直连实例公网 IP。
 
 ### 步骤三：等待部署完成并确认
 
@@ -235,7 +235,7 @@ connect 隧道监听在部署机本地 `127.0.0.1:8080`。通过 `curl http://12
 
 ### 步骤四：访问推理服务
 
-服务就绪后，通过 SSH 端口转发部署机的 connect 端口到本地，即可使用 OpenAI 兼容 API 发起推理请求。所有推理流量经 TNG RATS-TLS 通道加密进入 TDX 实例。
+服务就绪后，通过 SSH 端口转发部署机的 connect 端口到本地，即可使用 OpenAI 兼容 API 发起推理请求。所有推理流量经 TNG OHTTP 通道加密进入 TDX 实例。
 
 在个人电脑上执行以下命令建立 SSH 端口转发：
 
@@ -338,7 +338,7 @@ confidential-agent status --live
 | 端口 | 协议 | 说明                                          | 建议                  |
 |------|------|-----------------------------------------------|-----------------------|
 | 22   | TCP  | SSH 远程管理（仅 Debug 镜像）                 | 限制源 IP 为管理网络。 |
-| 8080 | TCP  | TNG 隧道端点（RATS-TLS），用于访问 vLLM 推理服务 | 限制源 IP 或仅通过 TNG 访问。 |
+| 8080 | TCP  | TNG 隧道端点（OHTTP），用于访问 vLLM 推理服务 | 限制源 IP 或仅通过 TNG 访问。 |
 
 **重要**
 
