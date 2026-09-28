@@ -397,7 +397,7 @@ start_connect() {
   require_cmd setsid
   local log_path="$CA_WORK_DIR/${CA_CONNECT_NAME:-connect}.log"
   local pid_path="$CA_WORK_DIR/${CA_CONNECT_NAME:-connect}.pid"
-  log "starting local RATS-TLS connect tunnel"
+  log "starting local OHTTP connect tunnel"
   if [[ -f "$pid_path" ]]; then
     local old_pid
     old_pid="$(cat "$pid_path" 2>/dev/null || true)"

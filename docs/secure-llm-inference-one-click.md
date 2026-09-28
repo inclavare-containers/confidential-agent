@@ -40,7 +40,7 @@ Confidential Agent 部署中的核心数据均在 TEE（Trusted Execution Enviro
 
 3. **建立加密通道** ：脚本自动启动 TNG connect 隧道，建立部署机与 TDX 实例之间的 OHTTP 加密通道。
 
-4. **访问推理服务** ：通过 SSH 端口转发部署机的 connect 端口，使用 OpenAI 兼容 API 发起推理请求，所有流量经 OHTTP 加密通道进入 TDX 实例。
+4. **访问推理服务** ：在部署机（脚本已自动启动 connect 隧道）或安装了 confidential-agent 的访问机上运行 `confidential-agent connect start --service vllm-inference` 启动本地 connect 监听（默认 `127.0.0.1:8080`），再使用 OpenAI 兼容 API 发起推理请求，所有流量经 OHTTP 加密通道进入 TDX 实例。目标实例禁用 SSH/远程登录，无需也无法登录实例。
 
 前提条件
 ---------
@@ -235,31 +235,41 @@ connect 隧道监听在部署机本地 `127.0.0.1:8080`。通过 `curl http://12
 
 ### 步骤四：访问推理服务
 
-服务就绪后，通过 SSH 端口转发部署机的 connect 端口到本地，即可使用 OpenAI 兼容 API 发起推理请求。所有推理流量经 TNG OHTTP 通道加密进入 TDX 实例。
+部署脚本已在部署机上自动启动 TNG connect 隧道（OHTTP 加密），监听本地 `127.0.0.1:8080`，并完成 `/health` 可达性检查。目标 TDX 实例使用发布镜像，**禁用任何 SSH/远程登录**，所有推理流量均通过 connect 隧道进入 TDX 实例，无需也无法 SSH 登录实例。
 
-在个人电脑上执行以下命令建立 SSH 端口转发：
+* **在部署机上访问**：connect 隧道已就绪，可直接使用下方 `curl` 示例发起请求。
+
+* **从其他机器（如个人电脑）访问**：需先将部署机的服务状态目录（默认 `$HOME/.confidential-agent`）拷贝到该机器，再在该机器上运行以下命令启动本地 connect 监听（默认 `127.0.0.1:8080`，前台运行；如需后台运行可置于 `tmux`/`nohup` 中）：
+
+  ```bash
+  confidential-agent connect start --service vllm-inference
+  ```
+
+查看模型列表：
 
 ```bash
-ssh -L 8080:127.0.0.1:8080 root@<DEPLOY_MACHINE_PUBLIC_IP>
+curl http://127.0.0.1:8080/v1/models
 ```
 
-发起非流式推理请求：
+发起非流式对话推理请求：
 
 ```bash
-curl http://127.0.0.1:8080/v1/completions \
+curl http://127.0.0.1:8080/v1/chat/completions \
     -X POST \
     -H "Content-Type: application/json" \
-    -d '{"model": "Qwen3-32B", "prompt": "Do you know the book Traction by Gino Wickman", "temperature": 0.0, "best_of": 1, "max_tokens": 132, "stream": false}'
+    -d '{"model": "Qwen3-32B", "messages": [{"role": "user", "content": "你好"}], "temperature": 0.0, "max_tokens": 132, "stream": false}'
 ```
 
 发起流式推理请求：
 
 ```bash
-curl http://127.0.0.1:8080/v1/completions \
+curl http://127.0.0.1:8080/v1/chat/completions \
     -X POST \
     -H "Content-Type: application/json" \
-    -d '{"model": "Qwen3-32B", "prompt": "Do you know the book Traction by Gino Wickman", "temperature": 0.0, "best_of": 1, "max_tokens": 132, "stream": true}'
+    -d '{"model": "Qwen3-32B", "messages": [{"role": "user", "content": "你好"}], "temperature": 0.0, "max_tokens": 132, "stream": true}'
 ```
+
+connect 隧道在建立时完成 TDX 远程证明，确认对端为可信的 TDX 实例后，推理 Prompt 与回复经 OHTTP 端到端加密在隧道内传输。
 
 ### 步骤五（可选）：释放资源
 
@@ -414,8 +424,5 @@ challenge 模式下，模型解密密钥不跨 guest 重启持久化。实例重
 相关文档
 ---------
 
-* [Trustee 远程证明服务部署](trustee.md)
-* [系统架构](architecture.md)
-* [设计规格](spec.md)
-* 基于 g9i TDX 机密计算实例一键构建 OpenClaw 机密 AI Agent
-* 基于 gn8v-tee 异构机密计算实例构建 OpenClaw 机密 AI Agent
+* [基于 gn8v-tee 异构机密计算实例一键构建 OpenClaw 机密 AI Agent](https://help.aliyun.com/zh/egs/use-cases/build-openclaw-confidential-ai-agent-on-heterogeneous-confidential-computing-instances)
+* [基于 gn8v-tee 关联实例构建安全大语言模型推理环境](https://help.aliyun.com/zh/egs/use-cases/build-a-secure-llm-inference-environment-on-gn8v-tee-related-instances)
