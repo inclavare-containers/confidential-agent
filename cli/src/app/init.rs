@@ -1049,23 +1049,20 @@ fn openclaw_vllm_variants_yaml(variants: VllmBuildVariants) -> String {
 }
 
 fn vllm_inference_yaml(project: &InitProject) -> Result<String> {
-    // Multi-node (replicas > 1): ALB + OHTTP-encrypted connect are fixed for
-    // this scenario (ALB requires OHTTP per spec validation; classic SLB has a
-    // FULLNAT return-path issue), so a single --replicas knob drives the whole
-    // multi-node config. Single-node stays plain connect.
-    let (connect_line, multinode) = if project.replicas > 1 {
-        (
-            "[{port: 8080, encryption: ohttp}]",
-            format!(
-                "  replicas: {}\n  slb:\n    enabled: true\n    slb_type: alb",
-                project.replicas
-            ),
+    // OHTTP-encrypted connect is used for both single-node and multi-node: the
+    // daemon's TNG egress uses a self_generated HPKE key (bound to TDX
+    // attestation) when there are no serf peers (single-node), or a peer_shared
+    // key (multi-node). --replicas > 1 additionally enables an ALB + replicas;
+    // --replicas 1 (default) is a single instance with no ALB, but still
+    // OHTTP-encrypted.
+    let connect_line = "[{port: 8080, encryption: ohttp}]";
+    let multinode = if project.replicas > 1 {
+        format!(
+            "  replicas: {}\n  slb:\n    enabled: true\n    slb_type: alb",
+            project.replicas
         )
     } else {
-        (
-            "[8080]",
-            "  # Multi-node: pass --replicas N (N>1) to deploy N replicas behind\n  # an ALB with OHTTP-encrypted connect.".to_string(),
-        )
+        "  # Multi-node: pass --replicas N (N>1) to deploy N replicas behind\n  # an ALB.".to_string()
     };
     Ok(format!(
         r#"schema: confidential-agent/v1
@@ -1871,7 +1868,7 @@ mod tests {
     #[test]
     fn vllm_inference_yaml_single_node_when_replicas_is_1() {
         let yaml = vllm_inference_yaml(&vllm_inference_project(1)).unwrap();
-        assert!(yaml.contains("connect: [8080]"));
+        assert!(yaml.contains("connect: [{port: 8080, encryption: ohttp}]"));
         assert!(!yaml.contains("\n  replicas:"));
         assert!(!yaml.contains("\n  slb:"));
     }
