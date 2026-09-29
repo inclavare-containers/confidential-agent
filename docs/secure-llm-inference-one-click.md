@@ -423,91 +423,27 @@ Verification Successful!
 confidential-agent status --live
 ```
 
-注意事项
+注意事项与常见问题
 ---------
 
-### 安全组规则
+- **排查不用 SSH**：目标实例禁用 SSH/远程登录。在部署机上用 `confidential-agent status --live`（经安全通道查 guest 状态）和部署日志（`$HOME/.confidential-agent/one-click/`，含 `connect-vllm-inference.log`）排查。
 
-一键部署过程中将自动创建安全组规则。如需后续修改，请确保保留以下端口：
+- **安全组**：脚本自动创建规则，保留 8080（connect 隧道）。实例不开 22。operator CIDR 默认是部署机出口 IP `/32`，别用 `0.0.0.0/0`，生产环境务必限制到具体出口。
 
-| 端口 | 协议 | 说明                                          | 建议                  |
-|------|------|-----------------------------------------------|-----------------------|
-| 8080 | TCP  | TNG 隧道端点（OHTTP），用于访问 vLLM 推理服务 | 限制源 IP 或仅通过 TNG 访问。 |
+- **OSS 密文可公共读**：Bucket 存的是 gocryptfs 加密后的密文，没有解密密钥无法还原；密钥仅在远程证明通过后注入实例。
 
-目标 TDX 实例使用发布镜像，禁用 SSH/远程登录，安全组不开放 22 端口；所有推理流量经 8080 端口的 OHTTP 加密 connect 隧道进入实例。
+- **OSS 不可达 / s3fs 挂载失败**：确认 Bucket 与实例同地域；`--oss-bucket` 格式 `<bucket>:<path>` 指向密文根目录（含 `gocryptfs.conf`）；`--oss-endpoint` 用 internal 域名（默认 `https://oss-cn-beijing-internal.aliyuncs.com`）。
 
-**重要**
+- **解密失败**：`--model-key-file` 要跟加密时的 passphrase 完全一致；确认 OSS 里的密文是 gocryptfs 加密的（目录含 `gocryptfs.conf`）。
 
-默认 operator CIDR 为部署机公网出口 IP `/32`。如果手工指定 `0.0.0.0/0`，请同时降低暴露风险，并在生产环境改回具体公网出口或企业出口 CIDR。
+- **远程证明未通过 / 密钥未注入**：确认 `--reference-values rekor`（默认）且 Rekor 可访问；查部署日志和 `connect-vllm-inference.log` 里的证明输出。
 
-### OSS 公共读密文安全模型
+- **vLLM 未就绪**：`confidential-agent status --live` 看 guest 服务状态；部署脚本会在隧道就绪后跑 `/health` 检查，结果在日志里。发布镜像没 SSH，看不了 journalctl，vLLM 启动细节看部署日志里证明通过后的输出。
 
-本方案中 OSS Bucket 存放的是 gocryptfs 加密后的模型密文，设置为公共读。密文在没有模型解密密钥的情况下无法解密，而模型解密密钥仅在远程证明通过后注入实例。因此，即使密文可被公开访问，也无法还原明文模型。
+- **重启后推理不可用**：challenge 模式下模型密钥不跨重启持久化，重启后需重新 `confidential-agent inject` 注入密钥。生产环境如需重启自恢复和中心化密钥托管，改用 `attestation.mode: trustee` 并自建 Trustee 服务（参见 [docs/trustee.md](trustee.md)）。
 
-### 模型密钥轮换
+- **轮换模型密钥**：用新密钥重新加密模型并上传 OSS，再用新的 `--model-key-file` 重新跑一键部署。
 
-如需轮换模型解密密钥，请使用新密钥重新加密模型并上传 OSS，然后使用新的 `--model-key-file` 重新运行一键部署脚本。
-
-### 重启与密钥注入
-
-challenge 模式下，模型解密密钥不跨 guest 重启持久化。实例重启后需重新执行 `confidential-agent inject` 完成密钥注入，方可恢复推理服务。
-
-**生产场景如需 guest 重启自恢复与中心化密钥托管，可改用 `attestation.mode: trustee` 并自建长期运行的 Trustee 服务，参见 [docs/trustee.md](trustee.md)。**
-
-常见问题
----------
-
-目标 TDX 实例使用发布镜像，禁用 SSH/远程登录。以下排查均在部署机上完成：通过 `confidential-agent status --live`（经安全通道查询 guest 状态，无需 SSH）与部署日志（`$HOME/.confidential-agent/one-click/` 下，含 `connect-vllm-inference.log`）定位问题。
-
-### OSS 不可达或 s3fs 挂载失败
-
-**原因** ：实例无法访问模型密文所在的 OSS，或 OSS Endpoint 配置不正确。
-
-**解决** ：
-
-* 确认 OSS Bucket 与实例在同一地域。
-
-* 确认 `--oss-bucket` 参数格式为 `<bucket>:<path>`，路径指向 gocryptfs 密文根目录（包含 `gocryptfs.conf`）。
-
-* 确认 `--oss-endpoint` 使用 internal 域名（默认 `https://oss-cn-beijing-internal.aliyuncs.com`）。
-
-* 执行 `confidential-agent status --live` 查看 guest 内 OSS/s3fs 挂载状态（经安全通道查询，无需 SSH），并检查部署日志中 s3fs 相关输出。
-
-### gocryptfs 解密失败
-
-**原因** ：模型解密密钥与加密时使用的密钥不匹配，或密文加密方式不是 gocryptfs。
-
-**解决** ：
-
-* 确认 `--model-key-file` 指向的密钥文件与加密模型时使用的 passphrase 完全一致。
-
-* 确认 OSS 中的模型密文是通过 gocryptfs 加密生成（目录中应包含 `gocryptfs.conf`）。
-
-* 执行 `confidential-agent status --live` 查看模型解密状态，并检查部署日志中 gocryptfs 相关输出。
-
-### 远程证明未通过或密钥注入失败
-
-**原因** ：实例运行环境与 Rekor 参考值不匹配，或证明服务不可达。
-
-**解决** ：
-
-* 确认部署时使用 `--reference-values rekor`（默认），且 Rekor 透明日志可访问。
-
-* 查看 `$HOME/.confidential-agent/one-click/connect-vllm-inference.log` 与部署日志中远程证明相关输出。
-
-* 执行 `confidential-agent status --live` 查看证明状态（经安全通道查询 guest，无需 SSH）。
-
-### vLLM 未就绪
-
-**原因** ：GPU 驱动未加载、模型未解密完成或 vLLM 服务启动失败。
-
-**解决** ：
-
-* 执行 `confidential-agent status --live` 查看 guest 服务状态（经安全通道查询，无需 SSH）。
-
-* 部署脚本会在 connect 隧道就绪后执行 `/health` 可达性检查，检查结果记录在部署日志与 `connect-vllm-inference.log` 中。
-
-* 发布镜像禁用 SSH，无法直接登录 guest 查看 journalctl；如需 vLLM 启动细节，请检查部署日志中远程证明通过后的服务启动输出。
 
 相关文档
 ---------
