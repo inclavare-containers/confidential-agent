@@ -479,7 +479,7 @@ print_summary() {
   [[ -f "$pid_path" ]] && connect_pid="$(cat "$pid_path" 2>/dev/null || true)"
   cat <<EOF
 
-Confidential Agent one-click summary
+Deployment summary
   state_dir: $CA_STATE_DIR
   work_dir:  $CA_WORK_DIR
   spec:      $CA_SPEC_PATH
