@@ -426,23 +426,23 @@ confidential-agent status --live
 注意事项与常见问题
 ---------
 
-- **排查不用 SSH**：目标实例禁用 SSH/远程登录。在部署机上用 `confidential-agent status --live`（经安全通道查 guest 状态）和部署日志（`$HOME/.confidential-agent/one-click/`，含 `connect-vllm-inference.log`）排查。
+- **排查问题不用登录实例**：目标实例不允许 SSH 登录。出了问题在部署机上运行 `confidential-agent status --live` 查看实例内部状态，或查看 `$HOME/.confidential-agent/one-click/` 目录下的部署日志（特别是 `connect-vllm-inference.log`）。
 
-- **安全组**：脚本自动创建规则，保留 8080（connect 隧道）。实例不开 22。operator CIDR 默认是部署机出口 IP `/32`，别用 `0.0.0.0/0`，生产环境务必限制到具体出口。
+- **安全组规则**：部署脚本会自动配置安全组，开放 8080 端口用于加密推理访问。实例不开放 SSH 端口。默认只允许部署机的公网 IP 访问实例；生产环境请保持这一限制，不要改成允许所有 IP。
 
-- **OSS 密文可公共读**：Bucket 存的是 gocryptfs 加密后的密文，没有解密密钥无法还原；密钥仅在远程证明通过后注入实例。
+- **模型密文可以公开访问**：OSS 里存的是加密后的模型，即使 Bucket 设为公共读，没有解密密钥也无法还原。解密密钥只在实例通过远程证明后才会注入。
 
-- **OSS 不可达 / s3fs 挂载失败**：确认 Bucket 与实例同地域；`--oss-bucket` 格式 `<bucket>:<path>` 指向密文根目录（含 `gocryptfs.conf`）；`--oss-endpoint` 用 internal 域名（默认 `https://oss-cn-beijing-internal.aliyuncs.com`）。
+- **实例拉不到模型**：确认 OSS Bucket 和实例在同一个地域；`--oss-bucket` 参数格式为 `<bucket>:<path>`，指向加密模型的根目录；`--oss-endpoint` 使用内网域名（默认值即可）。
 
-- **解密失败**：`--model-key-file` 要跟加密时的 passphrase 完全一致；确认 OSS 里的密文是 gocryptfs 加密的（目录含 `gocryptfs.conf`）。
+- **模型解密失败**：`--model-key-file` 指定的密钥文件必须和加密模型时用的密码完全一致；确认 OSS 里的模型是用 gocryptfs 加密的（目录下应有 `gocryptfs.conf` 文件）。
 
-- **远程证明未通过 / 密钥未注入**：确认 `--reference-values rekor`（默认）且 Rekor 可访问；查部署日志和 `connect-vllm-inference.log` 里的证明输出。
+- **远程证明没通过**：确认使用了 `--reference-values rekor`（默认），并且 Rekor 服务可以访问；查看部署日志中验证相关的输出。
 
-- **vLLM 未就绪**：`confidential-agent status --live` 看 guest 服务状态；部署脚本会在隧道就绪后跑 `/health` 检查，结果在日志里。发布镜像没 SSH，看不了 journalctl，vLLM 启动细节看部署日志里证明通过后的输出。
+- **vLLM 没启动好**：用 `confidential-agent status --live` 查看实例内服务状态；部署脚本在加密通道建立后会做一次健康检查，结果在日志里。实例没有 SSH，看不了系统日志，vLLM 的启动细节请查看部署日志。
 
-- **重启后推理不可用**：challenge 模式下模型密钥不跨重启持久化，重启后需重新 `confidential-agent inject` 注入密钥。生产环境如需重启自恢复和中心化密钥托管，改用 `attestation.mode: trustee` 并自建 Trustee 服务（参见 [docs/trustee.md](trustee.md)）。
+- **实例重启后推理不可用**：默认模式下，模型解密密钥不会在重启后保留，需要重新运行 `confidential-agent inject` 注入。如果需要重启自动恢复，可以改用 Trustee 模式（参见 [docs/trustee.md](trustee.md)）。
 
-- **轮换模型密钥**：用新密钥重新加密模型并上传 OSS，再用新的 `--model-key-file` 重新跑一键部署。
+- **更换模型密钥**：用新密码重新加密模型、上传到 OSS，然后用新的 `--model-key-file` 重新部署。
 
 
 相关文档
