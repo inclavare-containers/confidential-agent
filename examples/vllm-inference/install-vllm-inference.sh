@@ -1,9 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
-VLLM_VERSION="${OPENCLAW_VLLM_VERSION:-0.19.1}"
+VLLM_VERSION="${OPENCLAW_VLLM_VERSION:-0.28.0}"
 PYPI_INDEX_URL="${OPENCLAW_VLLM_PYPI_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple}"
-NVIDIA_DRIVER_VERSION="${NVIDIA_DRIVER_VERSION:-550.144.03}"
+NVIDIA_DRIVER_VERSION="${NVIDIA_DRIVER_VERSION:-580.82.07}"
 NVIDIA_DRIVER_URL="${NVIDIA_DRIVER_URL:-https://cn.download.nvidia.cn/tesla/${NVIDIA_DRIVER_VERSION}/NVIDIA-Linux-x86_64-${NVIDIA_DRIVER_VERSION}.run}"
 NVIDIA_DRIVER_REFERER="${NVIDIA_DRIVER_REFERER:-https://www.nvidia.cn/}"
 NVIDIA_DRIVER_SHA256="${NVIDIA_DRIVER_SHA256:-}"
@@ -217,7 +217,7 @@ cat >/usr/local/bin/cai-vllm-install-deps.sh <<'EOF'
 set -euo pipefail
 export PATH=/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin
 PYPI_INDEX_URL="${OPENCLAW_VLLM_PYPI_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple}"
-VLLM_VERSION="${OPENCLAW_VLLM_VERSION:-0.19.1}"
+VLLM_VERSION="${OPENCLAW_VLLM_VERSION:-0.28.0}"
 export PIP_CACHE_DIR="${PIP_CACHE_DIR:-/tmp/cai-pip-cache}"
 export UV_CACHE_DIR="${UV_CACHE_DIR:-/tmp/cai-uv-cache}"
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/tmp/cai-cache}"
@@ -277,7 +277,7 @@ cat >/usr/local/bin/cai-vllm-setup.sh <<'EOF'
 #!/bin/bash
 set -euo pipefail
 export PATH=/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin
-VLLM_VERSION="${OPENCLAW_VLLM_VERSION:-0.19.1}"
+VLLM_VERSION="${OPENCLAW_VLLM_VERSION:-0.28.0}"
 restore_vllm_build_headers() {
   local src=/opt/confidential-agent/openclaw-vllm/usr-include
   if [[ -f /usr/include/python3.11/Python.h && -f /usr/include/stdio.h ]]; then

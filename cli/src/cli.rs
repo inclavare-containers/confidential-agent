@@ -285,7 +285,7 @@ pub(crate) struct InitArgs {
     pub(crate) vllm_served_model_name: String,
     #[arg(long, default_value_t = 8090)]
     pub(crate) vllm_port: u16,
-    #[arg(long, default_value = "0.19.1")]
+    #[arg(long, default_value = "0.28.0")]
     pub(crate) vllm_version: String,
     #[arg(long, default_value = "release")]
     pub(crate) vllm_build_variants: String,

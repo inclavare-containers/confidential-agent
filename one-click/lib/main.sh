@@ -107,7 +107,7 @@ Deploy options:
   --allowed-cidr CIDR[,CIDR...]  Operator access CIDR list; may be repeated
   --gateway-token TOKEN          Connect tunnel token; generated if omitted
   --vllm-port PORT               vLLM OpenAI-compatible API port; default: 8080
-  --vllm-version VERSION         vLLM package version; default: 0.19.1
+  --vllm-version VERSION         vLLM package version; default: 0.28.0
   --vllm-served-model-name NAME  vLLM served model name; default: Qwen3-32B
   --oss-bucket NAME              OSS bucket holding the encrypted model artifact (required)
   --oss-endpoint URL             OSS endpoint; default: https://oss-cn-beijing-internal.aliyuncs.com
@@ -226,7 +226,7 @@ init_defaults() {
   CA_OPENCLAW_VLLM_VERSION="${CA_OPENCLAW_VLLM_VERSION:-${OPENCLAW_VLLM_VERSION:-0.19.1}}"
   CA_OPENCLAW_VLLM_BUILD_VARIANTS="${CA_OPENCLAW_VLLM_BUILD_VARIANTS:-${OPENCLAW_VLLM_BUILD_VARIANTS:-release}}"
   CA_VLLM_INFERENCE_PORT="${CA_VLLM_INFERENCE_PORT:-${VLLM_INFERENCE_PORT:-8080}}"
-  CA_VLLM_INFERENCE_VERSION="${CA_VLLM_INFERENCE_VERSION:-${VLLM_INFERENCE_VERSION:-0.19.1}}"
+  CA_VLLM_INFERENCE_VERSION="${CA_VLLM_INFERENCE_VERSION:-${VLLM_INFERENCE_VERSION:-0.28.0}}"
   CA_VLLM_INFERENCE_SERVED_MODEL_NAME="${CA_VLLM_INFERENCE_SERVED_MODEL_NAME:-${VLLM_INFERENCE_SERVED_MODEL_NAME:-Qwen3-32B}}"
   CA_OSS_BUCKET="${CA_OSS_BUCKET:-${OSS_BUCKET:-}}"
   CA_OSS_ENDPOINT="${CA_OSS_ENDPOINT:-${OSS_ENDPOINT:-https://oss-cn-beijing-internal.aliyuncs.com}}"
