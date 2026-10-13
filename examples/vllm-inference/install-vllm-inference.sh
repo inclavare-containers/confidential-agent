@@ -7,8 +7,8 @@ NVIDIA_DRIVER_VERSION="${NVIDIA_DRIVER_VERSION:-580.82.07}"
 NVIDIA_DRIVER_URL="${NVIDIA_DRIVER_URL:-https://cn.download.nvidia.cn/tesla/${NVIDIA_DRIVER_VERSION}/NVIDIA-Linux-x86_64-${NVIDIA_DRIVER_VERSION}.run}"
 NVIDIA_DRIVER_REFERER="${NVIDIA_DRIVER_REFERER:-https://www.nvidia.cn/}"
 NVIDIA_DRIVER_SHA256="${NVIDIA_DRIVER_SHA256:-}"
-CUDA_TOOLKIT_VERSION="${OPENCLAW_VLLM_CUDA_TOOLKIT_VERSION:-12.4.1}"
-CUDA_BUNDLED_DRIVER_VERSION="${OPENCLAW_VLLM_CUDA_BUNDLED_DRIVER_VERSION:-550.54.15}"
+CUDA_TOOLKIT_VERSION="${OPENCLAW_VLLM_CUDA_TOOLKIT_VERSION:-13.0.1}"
+CUDA_BUNDLED_DRIVER_VERSION="${OPENCLAW_VLLM_CUDA_BUNDLED_DRIVER_VERSION:-580.82.07}"
 CUDA_TOOLKIT_URL="${OPENCLAW_VLLM_CUDA_TOOLKIT_URL:-https://developer.download.nvidia.com/compute/cuda/${CUDA_TOOLKIT_VERSION}/local_installers/cuda_${CUDA_TOOLKIT_VERSION}_${CUDA_BUNDLED_DRIVER_VERSION}_linux.run}"
 export PATH=/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin
 BUILD_POSTINSTALL_MARKER=/var/lib/cai/vllm-inference/build-postinstall.done
@@ -183,7 +183,7 @@ if ! preinstall_nvidia_driver; then
   fi
   echo "warning: failed to pre-install NVIDIA driver; guest bootstrap will only try loading existing modules" >&2
 fi
-if [[ "${OPENCLAW_VLLM_PREINSTALL_CUDA_TOOLKIT:-0}" == "1" ]] && ! preinstall_cuda_toolkit; then
+if [[ "${OPENCLAW_VLLM_PREINSTALL_CUDA_TOOLKIT:-1}" == "1" ]] && ! preinstall_cuda_toolkit; then
   if [[ "${CAI_CUDA_TOOLKIT_PREINSTALL_REQUIRED:-1}" == "1" ]]; then
     echo "failed to pre-install CUDA toolkit during image build" >&2
     exit 1
@@ -262,7 +262,7 @@ cd /root
 if [[ ! -d .venv ]]; then
   uv venv --python 3.11
 fi
-uv pip install -i "$PYPI_INDEX_URL" --only-binary=:all: "vllm==$VLLM_VERSION"
+uv pip install -i "$PYPI_INDEX_URL" --only-binary=:all: "vllm==$VLLM_VERSION" ninja
 cleanup_package_caches
 EOF
 chmod 0755 /usr/local/bin/cai-vllm-install-deps.sh
@@ -418,7 +418,8 @@ set -euo pipefail
 source /etc/cai/model.env
 exec /root/.venv/bin/vllm serve "$MODEL_MOUNT_POINT" \
   --host 0.0.0.0 --port "$VLLM_PORT" \
-  --served-model-name "$VLLM_SERVED_MODEL_NAME"
+  --served-model-name "$VLLM_SERVED_MODEL_NAME" \
+  --max-num-seqs 512
 UNIT
 chmod 0755 /usr/local/bin/cai-vllm-run.sh
 
@@ -432,6 +433,7 @@ ConditionPathExists=/dev/nvidia0
 [Service]
 Type=simple
 EnvironmentFile=/etc/cai/model.env
+Environment=PATH=/root/.venv/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ExecStartPre=/usr/local/bin/cai-vllm-wait-deps.sh
 ExecStartPre=/usr/local/bin/cai-vllm-setup.sh
 ExecStart=/usr/local/bin/cai-vllm-run.sh

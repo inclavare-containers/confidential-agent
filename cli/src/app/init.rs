@@ -1080,7 +1080,7 @@ build:
   with_network: true
   cleanup:
     remove_static_libs: false
-  packages: [anolis-epao-release, binutils, ca-certificates, curl, dracut, elfutils-libelf-devel, fuse, fuse-libs, fuse3, fuse3-libs, gocryptfs, gcc, glibc-devel, git, jq, kernel, kernel-devel, kernel-headers, kmod, mailcap, make, openssl3, pciutils, pkgconf-pkg-config, python3.11, python3.11-devel, python3.11-pip, rpm, tar, wget, xz, zlib-devel]
+  packages: [anolis-epao-release, binutils, ca-certificates, curl, dracut, elfutils-libelf-devel, fuse, fuse-libs, fuse3, fuse3-libs, gocryptfs, gcc, gcc-c++, glibc-devel, git, jq, kernel, kernel-devel, kernel-headers, kmod, mailcap, make, openssl3, pciutils, pkgconf-pkg-config, python3.11, python3.11-devel, python3.11-pip, rpm, tar, wget, xz, zlib-devel]
   files:
     - source: ./cai-nvidia-cc-stack-install.sh
       target: /usr/local/sbin/cai-nvidia-cc-stack-install.sh
