@@ -556,6 +556,7 @@ run_deploy_openclaw() {
   install_os_dependencies
   ensure_host_openclaw_runtime
   ensure_aliyun_credentials
+  ensure_aliyun_cli_region
   ensure_bailian_credentials
   ensure_dingtalk_credentials
   resolve_allowed_cidr
@@ -579,6 +580,7 @@ run_deploy_openclaw_vllm() {
   install_os_dependencies
   ensure_host_openclaw_runtime
   ensure_aliyun_credentials
+  ensure_aliyun_cli_region
   ensure_dingtalk_credentials
   resolve_allowed_cidr
   ensure_shelter
@@ -600,6 +602,7 @@ run_deploy_openclaw_vllm() {
 run_deploy_vllm_inference() {
   install_os_dependencies
   ensure_aliyun_credentials
+  ensure_aliyun_cli_region
   resolve_allowed_cidr
   ensure_shelter
   build_confidential_agent
@@ -617,6 +620,7 @@ run_deploy_vllm_inference() {
 
 run_cleanup_service() {
   ensure_aliyun_credentials
+  ensure_aliyun_cli_region
   ensure_shelter
   build_confidential_agent
   if [[ ! -d "$CA_STATE_DIR" ]]; then

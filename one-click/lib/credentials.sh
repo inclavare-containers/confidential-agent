@@ -134,6 +134,16 @@ ensure_aliyun_credentials() {
   export ALIBABA_CLOUD_ACCESS_KEY_SECRET="$sk"
 }
 
+ensure_aliyun_cli_region() {
+  # Shelter renders terraform data sources that shell out to the aliyun CLI.
+  # CLI 3.x refuses to run without a region when no profile is configured,
+  # even with --RegionId and credentials in the environment, so a fresh
+  # deployer machine fails terraform plan with an empty external result.
+  if [[ -z "${ALIBABA_CLOUD_REGION_ID:-}" && -n "${CA_REGION:-}" ]]; then
+    export ALIBABA_CLOUD_REGION_ID="$CA_REGION"
+  fi
+}
+
 ensure_bailian_credentials() {
   if [[ -n "${CA_BAILIAN_API_KEY:-}" ]]; then
     export DASHSCOPE_API_KEY="$CA_BAILIAN_API_KEY"
