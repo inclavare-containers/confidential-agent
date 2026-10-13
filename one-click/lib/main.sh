@@ -108,6 +108,7 @@ Deploy options:
   --gateway-token TOKEN          Connect tunnel token; generated if omitted
   --vllm-port PORT               vLLM OpenAI-compatible API port; default: 8080
   --vllm-version VERSION         vLLM package version; default: 0.28.0
+  --vllm-build-variants LIST     vLLM image variants: release or debug; default: release
   --vllm-served-model-name NAME  vLLM served model name; default: Qwen3-32B
   --oss-bucket NAME              OSS bucket holding the encrypted model artifact (required)
   --oss-endpoint URL             OSS endpoint; default: https://oss-cn-beijing-internal.aliyuncs.com
@@ -227,6 +228,7 @@ init_defaults() {
   CA_OPENCLAW_VLLM_BUILD_VARIANTS="${CA_OPENCLAW_VLLM_BUILD_VARIANTS:-${OPENCLAW_VLLM_BUILD_VARIANTS:-release}}"
   CA_VLLM_INFERENCE_PORT="${CA_VLLM_INFERENCE_PORT:-${VLLM_INFERENCE_PORT:-8080}}"
   CA_VLLM_INFERENCE_VERSION="${CA_VLLM_INFERENCE_VERSION:-${VLLM_INFERENCE_VERSION:-0.28.0}}"
+  CA_VLLM_INFERENCE_BUILD_VARIANTS="${CA_VLLM_INFERENCE_BUILD_VARIANTS:-${VLLM_INFERENCE_BUILD_VARIANTS:-release}}"
   CA_VLLM_INFERENCE_SERVED_MODEL_NAME="${CA_VLLM_INFERENCE_SERVED_MODEL_NAME:-${VLLM_INFERENCE_SERVED_MODEL_NAME:-Qwen3-32B}}"
   CA_OSS_BUCKET="${CA_OSS_BUCKET:-${OSS_BUCKET:-}}"
   CA_OSS_ENDPOINT="${CA_OSS_ENDPOINT:-${OSS_ENDPOINT:-https://oss-cn-beijing-internal.aliyuncs.com}}"
@@ -315,7 +317,14 @@ parse_args() {
         fi
         shift 2
         ;;
-      --vllm-build-variants) CA_OPENCLAW_VLLM_BUILD_VARIANTS="${2:?missing value for --vllm-build-variants}"; shift 2 ;;
+      --vllm-build-variants)
+        if [[ "$CA_ONE_CLICK_TARGET" == "vllm-inference" ]]; then
+          CA_VLLM_INFERENCE_BUILD_VARIANTS="${2:?missing value for --vllm-build-variants}"
+        else
+          CA_OPENCLAW_VLLM_BUILD_VARIANTS="${2:?missing value for --vllm-build-variants}"
+        fi
+        shift 2
+        ;;
       --oss-bucket) CA_OSS_BUCKET="${2:?missing value for --oss-bucket}"; shift 2 ;;
       --oss-endpoint) CA_OSS_ENDPOINT="${2:?missing value for --oss-endpoint}"; shift 2 ;;
       --model-key-file) CA_MODEL_KEY_FILE="${2:?missing value for --model-key-file}"; shift 2 ;;

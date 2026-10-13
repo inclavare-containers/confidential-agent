@@ -155,7 +155,7 @@ fn resolve_project(args: &InitArgs, target: InitTarget) -> Result<InitProject> {
         } else {
             (false, None, None)
         };
-    let vllm_build_variants = if target == InitTarget::OpenclawVllm {
+    let vllm_build_variants = if matches!(target, InitTarget::OpenclawVllm | InitTarget::VllmInference) {
         parse_vllm_build_variants(&args.vllm_build_variants)?
     } else {
         VllmBuildVariants::default()
@@ -1089,12 +1089,10 @@ build:
       target: /usr/local/share/cai/nvidia-persistenced.service
   scripts: [./install-vllm-inference.sh]
   variants:
-    release:
-      enabled: true
-
+{variants}
 deploy:
   provider: aliyun
-  image_variant: release
+  image_variant: {deploy_variant}
   instance_type: {instance_type}
   region: {region}
   zone_id: {zone_id}
@@ -1124,6 +1122,8 @@ resources:
         disk_gb = project.disk_gb,
         connect_line = connect_line,
         multinode = multinode,
+        variants = openclaw_vllm_variants_yaml(project.vllm_build_variants),
+        deploy_variant = project.vllm_build_variants.deploy_variant(),
         reference_values = yaml_quote(reference_values_name(project.reference_values))?,
         rekor = rekor_block(project)?,
     ))

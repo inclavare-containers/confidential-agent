@@ -135,6 +135,7 @@ append_vllm_inference_args() {
   args_ref+=(
     --vllm-port "$CA_VLLM_INFERENCE_PORT"
     --vllm-version "$CA_VLLM_INFERENCE_VERSION"
+    --vllm-build-variants "$CA_VLLM_INFERENCE_BUILD_VARIANTS"
     --vllm-served-model-name "$CA_VLLM_INFERENCE_SERVED_MODEL_NAME"
     --oss-bucket "$CA_OSS_BUCKET"
     --oss-endpoint "$CA_OSS_ENDPOINT"
