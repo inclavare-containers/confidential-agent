@@ -220,7 +220,7 @@ curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-a
 | Instance Type        | `ecs.gn8v-tee.4xlarge`                                 | 默认 TDX 异构机密计算实例规格。               |
 | System Disk          | `512G`                                                 | 镜像与运行态所需磁盘空间。                    |
 | Replicas            | `1`                                                    | 运行vLLM的gn8v-tee实例副本数。                                |
-| vLLM Version         | `0.19.1`                                               | vLLM 推理引擎版本。                           |
+| vLLM Version         | `0.28.0`                                               | vLLM 推理引擎版本。                           |
 | vLLM Port            | `8080`                                                 | vLLM OpenAI 兼容 API 端口。                   |
 | Served Model Name    | `Qwen3.8-27B`                                            | vLLM 对外暴露的模型名称。                     |
 | Reference Value      | `rekor`                                                | 构建后将参考值上传 Rekor，部署时使用 Rekor 验证。 |
