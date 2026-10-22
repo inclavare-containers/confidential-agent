@@ -82,7 +82,7 @@ sequenceDiagram
 ```
 
 关键点：
-- **镜像构建**：CA 统一通过 Shelter 原生构建器构建 rootfs，使用 UKI、cryptpilot FDE 和加密持久 delta。原生 initramfs 通过 `initrd.binaries` 从 rootfs 收集 `/usr/local/bin/confidential-agentd`、`/usr/bin/confidential-data-hub` 及其 ELF 依赖；不再生成 dracut module。构建前检查 `shelter plan` 确认这些程序进入 early-boot plan。
+- **镜像构建**：CA 统一通过 Shelter 原生构建器构建 rootfs，使用 UKI、cryptpilot FDE 和加密持久 delta。原生 initramfs 通过 `initrd.binaries` 从 rootfs 收集 `/usr/local/bin/confidential-agentd`、`/usr/bin/confidential-data-hub` 及其 ELF 依赖；不再生成 dracut module。构建前检查 `shelter builder plan -f shelter.yaml` 确认这些程序进入 early-boot plan。
 - **TNG 严格 pin**：cagent RPM 依赖 Alinux3 仓库的 `trusted-network-gateway-2.9.2-1.al8`；Guest 显式安装相同版本的官方 RPM，并设置 `security.tng: false` 避免 Shelter 自动加入其他版本，随后 [`guest_setup_script`](../cli/src/app.rs) 同时校验 RPM NEVRA 与 `tng --version`，版本不符时 build 直接失败。仓库不再携带或覆盖 TNG 二进制；从旧版升级时必须重新 build Guest 镜像，不能用 `E2E_SKIP_BUILD=1` 复用 2.6 产物验证升级。
 - **多 variant 构建**：一次 `build` 会构建所有 enabled variants；当前 state 的 `build_id` 指向 `deploy.image_variant`，完整结果保存在 manifest 的 `variants` map。
 - **build_id 时间戳化**：`<image_name>-<variant>-<run_id>`，run_id 精确到毫秒，防止重复 build 互相覆盖。
@@ -107,16 +107,19 @@ sequenceDiagram
     CLI->>CLI: 检查 phase 必须是 built/deleted
     CLI->>CLI: 二次 render（含 mesh_peer_cidrs）
     CLI->>FS: 保存部署名称，phase=deploying（失败后可 destroy）
-    alt 匹配的 published image 已 available
-        CLI->>SHB: shelter run -d -c runtime.yaml (cloud_image_id)
+    alt AppSpec 指定签名 release
+        CLI->>SHB: shelter run -d --release release.json --trusted-key publisher.pub -c shelter-runtime.yaml --target deploy --name resource_name
+        SHB->>TF: 使用已验证的共享镜像创建 ECS / 配置安全组
+    else 匹配的 published image 已 available
+        CLI->>SHB: shelter run image_tag -d -c shelter-runtime.yaml --target deploy --name resource_name
         SHB->>TF: 创建 ECS / 配置安全组
     else 使用本地 build 产物
-        CLI->>SHB: shelter run -d -c runtime.yaml
+        CLI->>SHB: shelter run image_tag -d -c shelter-runtime.yaml --target deploy --name resource_name
         SHB->>TF: 上传 OSS / ImportImage / 创建 ECS / 配置安全组
     end
     TF-->>SHB: deploy-result.json (instance_id, public_ip, …)
     SHB-->>CLI: 完成
-    CLI->>SHB: status --format json（读取 instance ID / Terraform 目录）
+    CLI->>SHB: inspect resource_name --format json（读取 instance ID / Terraform 目录）
     CLI->>CLI: write state.json (phase=deployed)
 
     rect rgb(245,245,255)
@@ -139,7 +142,7 @@ sequenceDiagram
     CLI->>G: GET :8088/status (轮询直到 reachable)
     CLI->>CLI: render_mesh_bundle (包含本服务) + write mesh-bundle.json
     CLI->>ACC: inject-resource mesh-bundle.json (一并下发到所有 active 服务)
-    CLI->>SHB: 刷新所有 active 服务的 deploy（更新对端公网 CIDR 安全组）
+    CLI->>SHB: network update resource_name -c shelter-runtime.yaml --target deploy（更新对端公网 CIDR 安全组）
     CLI->>CLI: write state.json (phase=active)
     CLI-->>U: deploy completed: public_ip=… private_ip=… mesh_generation=…
 ```

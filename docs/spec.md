@@ -244,23 +244,34 @@ deploy:
 | `connect_<port>_peer_<cidr>` | `service.connect[]` | 含 `connect` scope 的 CIDR | host connect / A2A client 通过 RATS-TLS 接入本服务，单向 RA |
 | `mesh_<port>_peer_<cidr>` | `service.ports[] - service.connect[]` | 同组织 active 服务公网 IP `/32` 或含 `mesh` scope 的 CIDR | 同组织 confidential-only mesh 数据面，双向 RA；gateway 只覆盖这些端口 |
 
-**Shelter 字段映射**（输出 YAML 由 [`render_deploy_config`](../shelter/src/lib.rs) 产生）：
+**Shelter 运行目标映射**（独立的 V2 YAML 由 [`render_runtime_config`](../shelter/src/lib.rs) 产生）：
 
 ```yaml
-deploy:
-  name: openclaw-20260429201011    # = sanitize(service.id) + "-" + run_id
-  backend: terraform
-  cloud: alicloud
-  region, zone_id, ip, instance_type, disk_size, ...
-  cc_mode: tdx
-  security_group:
-    rules: [...]
-  tags:
-    confidential-agent-service: <id>
-    confidential-agent-image-variant: <variant>
+version: 2
+default_target: deploy
+targets:
+  deploy:
+    provider: terraform-alicloud
+    trust: verified
+    attestation: disabled
+    provider_options:
+      name: openclaw-20260429201011 # = sanitize(service.id) + "-" + run_id
+      backend: terraform
+      cloud: alicloud
+      region: cn-beijing
+      zone_id: cn-beijing-i
+      instance_type: ecs.g9i.xlarge
+      disk_size: 32                # 示例 GiB 值，必须容纳已构建镜像
+      cc_mode: tdx
+      attestation_authority: external
+      security_group:
+        rules: []                 # 根据 peerings 和服务端口生成
+      tags:
+        confidential-agent-service: <id>
+        confidential-agent-image-variant: <variant>
 ```
 
-Build 输出也使用 Shelter master schema：`build.resize` 渲染为顶层 `disk.size`，`build.cleanup` 渲染为顶层 `cleanup`，cryptpilot 渲染为 `security.disk.engine: cryptpilot` 和 `security.disk.cryptpilot.*`，不再输出旧 `resize`、`variants`、`security.disk-crypt`、`deploy.cc`、`deploy.tdx`、`security_group_ports` 或 `security_group_allowed_cidr`。
+Build 输出使用显式 `version: 1` 的 Shelter 主线构建配置：`build.resize` 渲染为顶层 `disk.size`，`build.cleanup` 渲染为顶层 `cleanup`，cryptpilot 渲染为 `security.disk.engine: cryptpilot` 和 `security.disk.cryptpilot.*`，保留 `initrd.binaries`、Rekor 与容器挂载字段。部署使用上面的独立 V2 运行目标，构建快照不会随部署或网络更新改写。CA 验证 TDX 证据并释放密钥，因此目标明确声明外部认证方。
 
 ---
 
