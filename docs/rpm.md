@@ -21,8 +21,9 @@ cosign、aliyun、ossutil，GitHub 下载默认先尝试国内代理再回退官
 使用 `--locked --offline`，不会再次下载依赖。
 
 打包输出目录同时包含配套 Shelter RPM、`shelter-rpm.json` 和两包的
-`SHA256SUMS`。Shelter 当前来自提交 `c49a1361b3b8fd01213e13b102c2ecfe995ef039`，
-包含可移植镜像发布、可选 manifest 版本固定和 ext4 稀疏文件提取修复。
+`SHA256SUMS`。Shelter 当前来自提交 `d76b38d5dd7c189631b78dde30230de33acc6665`，
+在主线运行时和 VMM 基础上保留可移植镜像发布、可选 manifest 版本固定、
+ext4 稀疏文件提取与副本生命周期功能。CA 使用显式 v1 构建配置和 v2 运行时配置。
 `hack/shelter-rpm.json` 记录源码提交、RPM SHA-256 和 payload 摘要；
 准备 cagent 源码包时会核对该记录与实际 Shelter RPM。
 
