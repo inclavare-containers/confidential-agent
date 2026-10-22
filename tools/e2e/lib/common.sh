@@ -101,6 +101,11 @@ record_file_as_block() {
 }
 
 require_cmd() {
+  # Installed-RPM runs execute prebuilt binaries; the build helpers validate
+  # those executables separately and never invoke Cargo in this mode.
+  if [[ "$1" == cargo && "${E2E_SKIP_CARGO_BUILD:-0}" == 1 ]]; then
+    return
+  fi
   command -v "$1" >/dev/null 2>&1 || {
     echo "missing required command: $1" >&2
     exit 2

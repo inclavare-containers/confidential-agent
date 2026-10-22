@@ -17,16 +17,17 @@ for role in host guest; do
 done
 probe_dir="$(mktemp -d)"
 trap 'rm -rf "$probe_dir"' EXIT
-"$shelter_bin" run --help > "$probe_dir/run-help.txt"
-grep -Fq -- '--network-only' "$probe_dir/run-help.txt" || {
-  echo "Shelter lacks managed run network updates; install the bundled Shelter RPM" >&2
+"$shelter_bin" network update --help > "$probe_dir/network-help.txt"
+grep -Fq -- '--config' "$probe_dir/network-help.txt" || {
+  echo "Shelter lacks managed instance network updates; install the bundled Shelter RPM" >&2
   exit 1
 }
 cat > "$probe_dir/shelter.yaml" <<'YAML'
+version: 1
 initrd:
   binaries: [/usr/bin/true]
 YAML
-"$shelter_bin" plan --config "$probe_dir/shelter.yaml" > "$probe_dir/plan.json"
+"$shelter_bin" builder plan -f "$probe_dir/shelter.yaml" > "$probe_dir/plan.json"
 python3.11 - "$probe_dir/plan.json" <<'PY'
 import json
 import sys

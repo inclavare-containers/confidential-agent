@@ -42,7 +42,8 @@ use confidential_agent_core::spec::{
 };
 use confidential_agent_core::util::{hex_encode, rekor_payload, sha256_file};
 use confidential_agent_shelter::{
-    render_build_config, shelter_build_id, GuestAssets, GuestFileAsset, ShelterRenderOptions,
+    render_build_config, render_runtime_config, shelter_build_id, GuestAssets, GuestFileAsset,
+    ShelterRenderOptions,
 };
 use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, scalar::Scalar};
 use rand_core::{OsRng, RngCore};
@@ -156,6 +157,20 @@ struct PreparedConfig {
     terraform_dir: Option<PathBuf>,
     debug_ssh: Option<LocalDebugSshKey>,
     cloud_image_id: Option<String>,
+}
+
+impl PreparedConfig {
+    fn runtime_config(&self) -> PathBuf {
+        if self.image.is_some() {
+            self.rendered_config.clone()
+        } else {
+            shelter_runtime_config_path(&self.rendered_config)
+        }
+    }
+}
+
+fn shelter_runtime_config_path(build_config: &Path) -> PathBuf {
+    build_config.with_file_name("shelter-runtime.yaml")
 }
 
 #[derive(Debug, Clone, Default)]
@@ -581,6 +596,7 @@ const DEFAULT_POLICY: &str = include_str!("../../tools/policies/trustee-opa-defa
 const LOCAL_DEV_POLICY: &str = include_str!("../../tools/policies/trustee-opa-local-dev.rego");
 
 mod commands;
+#[cfg(test)]
 use commands::deploy_shelter_args;
 use commands::fetch_daemon_status_from;
 pub(crate) use commands::run;
@@ -697,36 +713,45 @@ fn prepare(
         .build_id
         .clone()
         .unwrap_or_else(|| shelter_build_id(&spec));
-    let rendered = render_build_config(
-        &spec,
-        &assets,
-        &ShelterRenderOptions {
-            build_id: Some(build_id.clone()),
-            images_dir: Some(paths.artifacts_dir.clone()),
-            cache_dir: Some(paths.cache_dir.clone()),
-            terraform_dir: terraform_dir.clone(),
-            include_deploy: options.include_deploy,
-            local_image_source: None,
-            deploy_resource_name: options
-                .deploy_names
-                .as_ref()
-                .map(|names| names.resource_name.clone()),
-            local_image_import_name: options
-                .deploy_names
-                .as_ref()
-                .map(|names| names.image_import_name.clone()),
-            mesh_peer_cidrs: options.mesh_peer_cidrs.clone(),
-            peerings: options.peerings.clone(),
-            cloud_image_id: options.cloud_image_id.clone(),
-            deploy_user_data: options.deploy_user_data.clone(),
-            deployer_cidr: options.deployer_cidr.clone(),
-        },
-    )?;
+    let render_options = ShelterRenderOptions {
+        build_id: Some(build_id.clone()),
+        images_dir: Some(paths.artifacts_dir.clone()),
+        cache_dir: Some(paths.cache_dir.clone()),
+        terraform_dir: terraform_dir.clone(),
+        include_deploy: options.include_deploy,
+        local_image_source: None,
+        deploy_resource_name: options
+            .deploy_names
+            .as_ref()
+            .map(|names| names.resource_name.clone()),
+        local_image_import_name: options
+            .deploy_names
+            .as_ref()
+            .map(|names| names.image_import_name.clone()),
+        mesh_peer_cidrs: options.mesh_peer_cidrs.clone(),
+        peerings: options.peerings.clone(),
+        cloud_image_id: options.cloud_image_id.clone(),
+        deploy_user_data: options.deploy_user_data.clone(),
+        deployer_cidr: options.deployer_cidr.clone(),
+    };
 
     fs::create_dir_all(&paths.service_dir)
         .with_context(|| format!("failed to create '{}'", paths.service_dir.display()))?;
-    fs::write(&paths.rendered_config, rendered)
-        .with_context(|| format!("failed to write '{}'", paths.rendered_config.display()))?;
+    // Preserve the build recipe associated with the immutable image. Runtime
+    // changes belong to a separate document consumed only when creating a VM.
+    let (rendered_path, rendered) = if options.include_deploy {
+        (
+            shelter_runtime_config_path(&paths.rendered_config),
+            render_runtime_config(&spec, &render_options)?,
+        )
+    } else {
+        (
+            paths.rendered_config.clone(),
+            render_build_config(&spec, &assets, &render_options)?,
+        )
+    };
+    fs::write(&rendered_path, rendered)
+        .with_context(|| format!("failed to write '{}'", rendered_path.display()))?;
 
     let build_result = shelter_build_result_path(&paths.shelter_work_dir, &build_id);
     let deploy_result = shelter_deploy_result_path(&paths.shelter_work_dir);
@@ -766,6 +791,7 @@ fn prepare(
         .with_context(|| format!("failed to write '{}'", paths.manifest.display()))?;
     if options.include_deploy {
         link_committed_config(&config_alias, &paths.rendered_config)?;
+        link_committed_config(&shelter_runtime_config_path(&config_alias), &rendered_path)?;
     }
 
     Ok(PreparedConfig {

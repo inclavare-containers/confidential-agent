@@ -340,16 +340,19 @@ fn failed_deploy_records_attempt_before_apply_and_destroy_uses_it() {
         assert_eq!(pending.phase, "deploying");
         assert_eq!(pending.deploy.terraform_dir, None);
         let deploy_args = fs::read_to_string(&argv).unwrap();
-        assert!(deploy_args.contains("--no-build\n"));
-        let rendered: serde_yaml::Value =
-            serde_yaml::from_str(&fs::read_to_string(&paths.rendered_config).unwrap()).unwrap();
+        assert!(deploy_args.contains("-d\n"));
+        assert!(!deploy_args.contains("--no-build\n"));
+        let rendered: serde_yaml::Value = serde_yaml::from_str(
+            &fs::read_to_string(shelter_runtime_config_path(&paths.rendered_config)).unwrap(),
+        )
+        .unwrap();
         assert_eq!(
-            rendered["runtime"]["targets"]["deploy"]["provider_options"]["terraform_dir"],
+            rendered["targets"]["deploy"]["provider_options"]["terraform_dir"],
             serde_yaml::Value::Null
         );
         assert!(validate_deploy_start(Some(&pending)).is_err());
         assert!(validate_build_start(Some(&pending)).is_err());
-        fs::remove_file(&paths.rendered_config).unwrap();
+        fs::remove_file(shelter_runtime_config_path(&paths.rendered_config)).unwrap();
         cmd_destroy(
             &cli,
             &DestroyArgs {
@@ -358,8 +361,8 @@ fn failed_deploy_records_attempt_before_apply_and_destroy_uses_it() {
         )
         .unwrap();
         let destroy_args = fs::read_to_string(argv).unwrap();
-        assert!(destroy_args.contains("destroy\n"));
-        assert!(destroy_args.contains(&format!("destroy\n{}\n", pending.deploy.resource_name)));
+        assert!(destroy_args.contains("rm\n-f\n"));
+        assert!(destroy_args.contains(&format!("rm\n-f\n{}\n", pending.deploy.resource_name)));
         assert!(!destroy_args.contains("--terraform-dir\n"));
         assert!(!destroy_args.contains("--config\n"));
         assert_eq!(
@@ -1084,7 +1087,7 @@ if "build" in args:
         }}, fh)
     sys.exit(0)
 
-if "status" in args:
+if "inspect" in args:
     with open(os.path.join(work_dir, "test-instance-status.json"), encoding="utf-8") as fh:
         print(fh.read())
     sys.exit(0)
@@ -1228,7 +1231,8 @@ fn deploy_args_use_positional_build_id_without_cloud_image_override() {
     assert_eq!(args[3], OsStr::new("cai-e2e-agent-release"));
     assert!(!args.iter().any(|arg| arg == OsStr::new("--image-id")));
     assert!(!args.iter().any(|arg| arg == OsStr::new("--cloud-image-id")));
-    assert!(args.iter().any(|arg| arg == OsStr::new("--no-build")));
+    assert!(args.iter().any(|arg| arg == OsStr::new("-d")));
+    assert!(!args.iter().any(|arg| arg == OsStr::new("--no-build")));
     assert!(args.windows(2).any(|pair| pair == ["--target", "deploy"]));
     assert!(args
         .windows(2)
@@ -1260,8 +1264,58 @@ fn deploy_args_use_the_project_without_overriding_managed_state() {
 
     assert!(args
         .windows(2)
-        .any(|pair| pair == ["--config", "/state/shelter.yaml"]));
+        .any(|pair| pair == ["-c", "/state/shelter-runtime.yaml"]));
     assert!(!args.iter().any(|arg| arg == "--terraform-dir"));
+}
+
+#[test]
+fn managed_shelter_commands_share_cloud_credentials_and_native_tool_path() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let names = [
+        "ALICLOUD_ACCESS_KEY",
+        "ALICLOUD_SECRET_KEY",
+        "ALICLOUD_STS_TOKEN",
+    ];
+    let previous: Vec<_> = names.iter().map(std::env::var_os).collect();
+    for (name, value) in names
+        .iter()
+        .zip(["test-access", "test-secret", "test-token"])
+    {
+        std::env::set_var(name, value);
+    }
+    let cli = test_cli();
+    let results: Vec<_> = ["run", "rm", "network", "inspect"]
+        .into_iter()
+        .map(|subcommand| {
+            let command = shelter_command(&cli, &[subcommand.into()]).unwrap();
+            let envs: BTreeMap<_, _> = command
+                .get_envs()
+                .map(|(key, value)| (key.to_os_string(), value.map(OsStr::to_os_string)))
+                .collect();
+            envs.get(OsStr::new("ALICLOUD_ACCESS_KEY")) == Some(&Some("test-access".into()))
+                && envs.get(OsStr::new("ALIBABA_CLOUD_SECURITY_TOKEN"))
+                    == Some(&Some("test-token".into()))
+                && envs
+                    .get(OsStr::new("PATH"))
+                    .and_then(|value| value.as_ref())
+                    .is_some_and(|value| {
+                        std::env::split_paths(value)
+                            .any(|path| path == Path::new("/usr/libexec/shelter/bin"))
+                    })
+        })
+        .collect();
+    let local = shelter_command(&cli, &["build".into(), "--tag".into(), "inspect".into()]).unwrap();
+    let local_injects_credentials = local
+        .get_envs()
+        .any(|(key, _)| key == "ALICLOUD_ACCESS_KEY");
+    for (name, value) in names.iter().zip(previous) {
+        match value {
+            Some(value) => std::env::set_var(name, value),
+            None => std::env::remove_var(name),
+        }
+    }
+    assert!(results.into_iter().all(|valid| valid));
+    assert!(!local_injects_credentials);
 }
 
 #[test]
@@ -1336,6 +1390,7 @@ resources: {}
         .as_str()
         .unwrap()
         .starts_with("openclaw-agent-debug-"));
+    assert_eq!(manifest["runtime_contract"]["min_disk_gb"], 32);
 
     // Neither preview nor a partially successful multi-variant build may alter
     // the committed manifest, state, assets, config, or deployable image.
@@ -1441,6 +1496,11 @@ resources: {}
         prepared.rendered_config,
         PathBuf::from(manifest["shelter_config"].as_str().unwrap())
     );
+    assert_eq!(fs::read(&prepared.rendered_config).unwrap(), contents[2]);
+    let runtime: serde_yaml::Value =
+        serde_yaml::from_slice(&fs::read(prepared.runtime_config()).unwrap()).unwrap();
+    assert_eq!(runtime["version"].as_u64(), Some(2));
+    assert!(runtime.get("artifact").is_none());
     let deployed = read_build_manifest(&paths.manifest).unwrap();
     let pinned = deployed.ssh.unwrap().command("192.0.2.1", &[]);
     assert_eq!(pinned.private_key, paths.secrets_dir.join("ssh_client"));
@@ -1634,7 +1694,13 @@ resources: {}
     std::env::set_var("PATH", old_path);
 
     let rendered =
-        fs::read_to_string(cli.state_dir.join("services/openclaw/shelter.yaml")).unwrap();
+        fs::read_to_string(cli.state_dir.join("services/openclaw/shelter-runtime.yaml")).unwrap();
+    let runtime: serde_yaml::Value = serde_yaml::from_str(&rendered).unwrap();
+    assert_eq!(runtime["version"].as_u64(), Some(2));
+    assert!(runtime.get("artifact").is_none());
+    let build = fs::read_to_string(cli.state_dir.join("services/openclaw/shelter.yaml")).unwrap();
+    assert!(!build.contains("user_data:"));
+    assert!(!build.contains("targets:"));
     assert!(rendered.contains("deploy:"));
     assert!(rendered.contains("backend: terraform"));
     assert!(rendered.contains("cc_mode: tdx"));
@@ -1711,7 +1777,8 @@ resources: {}
     .write_to_path(&state_dir.join("peerings.yaml"))
     .unwrap();
     render_service_config_from_state(&state_dir, &state, Vec::new()).unwrap();
-    let rendered = fs::read_to_string(state_dir.join("services/openclaw/shelter.yaml")).unwrap();
+    let rendered =
+        fs::read_to_string(state_dir.join("services/openclaw/shelter-runtime.yaml")).unwrap();
     assert!(rendered.contains("deploy:"));
     assert!(rendered.contains("control_8006_peer_203_0_113_10_32"));
     assert!(rendered.contains("connect_18789_peer_203_0_113_10_32"));
@@ -1727,7 +1794,8 @@ resources: {}
         .write_to_path(&state_dir.join("peerings.yaml"))
         .unwrap();
     render_service_config_from_state(&state_dir, &state, Vec::new()).unwrap();
-    let rendered = fs::read_to_string(state_dir.join("services/openclaw/shelter.yaml")).unwrap();
+    let rendered =
+        fs::read_to_string(state_dir.join("services/openclaw/shelter-runtime.yaml")).unwrap();
     assert!(rendered.contains("deploy:"));
     assert!(!rendered.contains("control_8006_peer_203_0_113_10_32"));
     assert!(!rendered.contains("connect_18789_peer_203_0_113_10_32"));
@@ -2742,8 +2810,10 @@ resources: {}
 
     render_service_config_from_state(temp.path(), &state, Vec::new()).unwrap();
 
-    let rendered =
-        fs::read_to_string(context_paths(temp.path(), "openclaw").rendered_config).unwrap();
+    let rendered = fs::read_to_string(shelter_runtime_config_path(
+        &context_paths(temp.path(), "openclaw").rendered_config,
+    ))
+    .unwrap();
     let deploy_section = rendered.split("deploy:").nth(1).unwrap();
     assert!(deploy_section.contains("image_id: m-2ze123abc"));
     assert!(!deploy_section.contains("image:\n"));
@@ -3183,9 +3253,9 @@ fn destroy_records_pending_cleanup_when_shelter_destroy_fails() {
     assert!(err.to_string().contains("shelter exited with status"));
     let recorded = fs::read_to_string(argv).unwrap();
     assert!(recorded.contains("--work-dir\n"));
-    assert!(recorded.contains(&format!("destroy\n{}\n", service.deploy.resource_name)));
-    assert!(recorded.contains("--terraform-dir\n"));
-    assert!(recorded.contains("services/openclaw/terraform/active\n"));
+    assert!(recorded.contains(&format!("rm\n-f\n{}\n", service.deploy.resource_name)));
+    assert!(!recorded.contains("--terraform-dir\n"));
+    assert!(!recorded.contains("services/openclaw/terraform/active\n"));
     let state = read_service_state_file(&service_dir.join("state.json"))
         .unwrap()
         .unwrap();
@@ -3708,8 +3778,10 @@ resources: {}
     std::env::set_var("PATH", old_path);
     deploy_result.unwrap();
 
-    let rendered =
-        fs::read_to_string(context_paths(temp.path(), "openclaw").rendered_config).unwrap();
+    let rendered = fs::read_to_string(shelter_runtime_config_path(
+        &context_paths(temp.path(), "openclaw").rendered_config,
+    ))
+    .unwrap();
     let deploy_section = rendered.split("deploy:").nth(1).unwrap();
     assert!(deploy_section.contains("image_id: m-2ze123abc"));
     assert!(!deploy_section.contains("image:\n"));
@@ -4819,5 +4891,255 @@ fn lifecycle_destroy_published_builder_is_noop() {
             .unwrap()
             .phase,
         "built"
+    );
+}
+
+/// The candidate binary must be built from the integrated Shelter branch. This
+/// check runs actual parsers and planners, without creating cloud resources.
+#[test]
+#[ignore = "requires CA_TEST_SHELTER_BIN pointing to the candidate Shelter binary"]
+fn candidate_shelter_accepts_ca_contracts_without_allocating_resources() {
+    let candidate =
+        PathBuf::from(std::env::var_os("CA_TEST_SHELTER_BIN").expect("set CA_TEST_SHELTER_BIN"));
+    assert!(candidate.is_file());
+    let root = tempfile::tempdir().unwrap();
+    let assets = GuestAssets {
+        agentd_bin: root.path().join("confidential-agentd"),
+        agentd_service: root.path().join("confidential-agentd.service"),
+        gateway_bin: root.path().join("cai-gateway"),
+        gateway_service: root.path().join("cai-gateway.service"),
+        tng_service: root.path().join("tng.service"),
+        fde_config_file: root.path().join("fde.toml"),
+        policy_default: root.path().join("default.rego"),
+        policy_local_dev: root.path().join("local.rego"),
+        guest_setup_script: None,
+        extra_files: vec![],
+    };
+    for path in [
+        &assets.agentd_bin,
+        &assets.agentd_service,
+        &assets.gateway_bin,
+        &assets.gateway_service,
+        &assets.tng_service,
+        &assets.fde_config_file,
+        &assets.policy_default,
+        &assets.policy_local_dev,
+    ] {
+        fs::write(path, "").unwrap();
+    }
+    let base_spec = "schema: confidential-agent/v1\nservice:\n  id: candidate\n  ports: [18789]\n  connect: [18789]\nbuild:\n  image_name: candidate\ndeploy:\n  provider: aliyun\n  image_variant: release\n  instance_type: ecs.g8i.xlarge\n  region: cn-beijing\n  zone_id: cn-beijing-l\nattestation:\n  tee: tdx\n  mode: challenge\n  reference_values: sample\nresources: {}\n";
+    let spec = AgentSpec::from_yaml(base_spec, root.path()).unwrap();
+    let build = root.path().join("shelter.yaml");
+    fs::write(
+        &build,
+        render_build_config(&spec, &assets, &ShelterRenderOptions::default()).unwrap(),
+    )
+    .unwrap();
+    let mut cli = test_cli();
+    cli.shelter_bin = candidate.clone();
+    verify_shelter_initrd_support(&cli, &build).unwrap();
+    let build_before = fs::read(&build).unwrap();
+    let work = root.path().join("work");
+    let invoke = |args: Vec<OsString>| {
+        Command::new(&candidate)
+            .arg("--work-dir")
+            .arg(&work)
+            .args(args)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
+    };
+    for (mode, slb) in [
+        ("challenge", None),
+        ("trustee", None),
+        ("challenge", Some("nlb")),
+        ("trustee", Some("alb")),
+    ] {
+        let mut source = base_spec.replace("mode: challenge", &format!("mode: {mode}"));
+        if let Some(slb) = slb {
+            source = source.replace("  zone_id: cn-beijing-l\n", &format!("  zone_id: cn-beijing-l\n  disk_gb: 80\n  replicas: 3\n  slb: {{enabled: true, slb_type: {slb}}}\n"));
+            if slb == "alb" {
+                source = source.replace(
+                    "  connect: [18789]",
+                    "  connect: [{port: 18789, encryption: ohttp}]",
+                );
+            }
+        }
+        let spec = AgentSpec::from_yaml(&source, root.path()).unwrap();
+        let runtime = root.path().join(format!("{mode}-runtime.yaml"));
+        let options = ShelterRenderOptions {
+            deploy_resource_name: Some(format!("candidate-{mode}")),
+            deploy_user_data: (mode == "trustee")
+                .then(|| "#cloud-config\nwrite_files: []\n".into()),
+            ..Default::default()
+        };
+        fs::write(&runtime, render_runtime_config(&spec, &options).unwrap()).unwrap();
+        let release_runtime = root.path().join(format!("{mode}-release-runtime.yaml"));
+        fs::write(
+            &release_runtime,
+            confidential_agent_shelter::render_image_runtime_target(
+                &spec,
+                &options,
+                Some("m-candidate-shared-image"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let release_validation = invoke(vec![
+            "config".into(),
+            "validate".into(),
+            "-c".into(),
+            release_runtime.clone().into_os_string(),
+        ]);
+        assert!(
+            release_validation.status.success(),
+            "candidate rejected signed-image runtime: {}",
+            String::from_utf8_lossy(&release_validation.stderr)
+        );
+        let output = invoke(vec![
+            "config".into(),
+            "validate".into(),
+            "-c".into(),
+            runtime.clone().into_os_string(),
+        ]);
+        assert!(
+            output.status.success(),
+            "candidate rejected {mode} runtime: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let invalid_runtime = root.path().join("invalid-runtime.yaml");
+        let source = fs::read_to_string(&runtime).unwrap();
+        for invalid in [
+            source.replace(
+                "attestation_authority: external",
+                "attestation_authority: shelter",
+            ),
+            source.replace("trust: verified", "trust: development"),
+        ] {
+            fs::write(&invalid_runtime, invalid).unwrap();
+            let rejected = invoke(vec![
+                "config".into(),
+                "validate".into(),
+                "-c".into(),
+                invalid_runtime.clone().into_os_string(),
+            ]);
+            assert!(
+                !rejected.status.success(),
+                "candidate accepted an invalid external attestation policy"
+            );
+        }
+        let prepared = PreparedConfig {
+            image: None,
+            rendered_config: build.clone(),
+            shelter_build_id: "missing-candidate-image".into(),
+            shelter_work_dir: work.clone(),
+            build_result: root.path().join("build-result.json"),
+            deploy_result: root.path().join("deploy-result.json"),
+            deploy_names: Some(DeployNames::new(&spec)),
+            terraform_dir: None,
+            debug_ssh: None,
+            cloud_image_id: None,
+        };
+        fs::copy(&runtime, prepared.runtime_config()).unwrap();
+        let output = Command::new(&candidate)
+            .args(deploy_shelter_args(&prepared))
+            .output()
+            .unwrap();
+        assert!(
+            !output.status.success(),
+            "a missing image must never launch resources"
+        );
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !error.contains("unexpected argument") && !error.contains("unrecognized subcommand"),
+            "invalid CA run arguments: {error}"
+        );
+        for args in [
+            vec![
+                "network".into(),
+                "update".into(),
+                "missing-instance".into(),
+                "-c".into(),
+                runtime.clone().into_os_string(),
+                "--target".into(),
+                "deploy".into(),
+            ],
+            vec![
+                "inspect".into(),
+                "missing-instance".into(),
+                "--format".into(),
+                "json".into(),
+            ],
+            vec![
+                "image".into(),
+                "inspect-release".into(),
+                root.path().join("missing-release.json").into_os_string(),
+                "--trusted-key".into(),
+                root.path().join("missing-key.pem").into_os_string(),
+                "--region".into(),
+                "cn-beijing".into(),
+            ],
+            vec![
+                "image".into(),
+                "verify".into(),
+                root.path().join("missing-artifact.json").into_os_string(),
+                "--format".into(),
+                "json".into(),
+            ],
+            vec![
+                "image".into(),
+                "release".into(),
+                "missing-image".into(),
+                "--mapping".into(),
+                root.path().join("missing-mapping.json").into_os_string(),
+                "--signing-key".into(),
+                root.path().join("missing-signing-key.pem").into_os_string(),
+                "--runtime-metadata".into(),
+                root.path().join("missing-runtime.json").into_os_string(),
+                "--output".into(),
+                root.path().join("release.json").into_os_string(),
+            ],
+            vec![
+                "run".into(),
+                "-d".into(),
+                "--release".into(),
+                root.path().join("missing-release.json").into_os_string(),
+                "--trusted-key".into(),
+                root.path().join("missing-key.pem").into_os_string(),
+                "-c".into(),
+                release_runtime.into_os_string(),
+                "--target".into(),
+                "deploy".into(),
+                "--name".into(),
+                "candidate-release".into(),
+            ],
+        ] {
+            let output = invoke(args);
+            assert!(!output.status.success());
+            let error = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                !error.contains("unexpected argument")
+                    && !error.contains("unrecognized subcommand"),
+                "invalid CA lifecycle arguments: {error}"
+            );
+        }
+    }
+    let remove = invoke(vec!["rm".into(), "-f".into(), "missing-instance".into()]);
+    let error = String::from_utf8_lossy(&remove.stderr);
+    assert!(
+        !error.contains("unexpected argument") && !error.contains("unrecognized subcommand"),
+        "invalid CA removal arguments: {error}"
+    );
+    let legacy = invoke(vec![
+        "run".into(),
+        "missing-image".into(),
+        "--no-build".into(),
+    ]);
+    assert!(!legacy.status.success());
+    assert!(String::from_utf8_lossy(&legacy.stderr).contains("unexpected argument"));
+    assert_eq!(fs::read(build).unwrap(), build_before);
+    assert!(
+        !work.join("deploy").exists(),
+        "validation allocated deployment state"
     );
 }

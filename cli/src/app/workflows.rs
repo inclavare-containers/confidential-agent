@@ -485,8 +485,17 @@ pub(super) fn refresh_active_shelter_deploys(
         let paths = context_paths(state_dir, &service.service_id);
         let manifest = read_build_manifest(&paths.manifest)?;
         let prepared = prepared_from_state(state_dir, &service, &manifest)?;
-        let mut args = deploy_shelter_args(&prepared);
-        args.push("--network-only".into());
+        let mut args = vec![
+            "--work-dir".into(),
+            prepared.shelter_work_dir.as_os_str().to_os_string(),
+            "network".into(),
+            "update".into(),
+            service.deploy.resource_name.clone().into(),
+            "-c".into(),
+            prepared.runtime_config().into_os_string(),
+            "--target".into(),
+            "deploy".into(),
+        ];
         run_shelter(cli, &mut args)?;
     }
     Ok(())
@@ -548,29 +557,11 @@ pub(super) fn render_service_config_from_state(
     }
     let deploy_user_data = snapshot.user_data;
     spec.deploy.image_variant = Some(state.build.variant.clone());
-    let images_dir = manifest.images_dir.clone();
-    let cache_dir = manifest.cache_dir.clone();
-    let rendered_config = manifest.shelter_config.clone();
-    let assets = GuestAssets {
-        agentd_bin: manifest.agentd_bin,
-        agentd_service: manifest.agentd_service,
-        gateway_bin: manifest.gateway_bin,
-        gateway_service: manifest.gateway_service,
-        tng_service: manifest.tng_service,
-        fde_config_file: manifest.fde_config_file,
-        policy_default: manifest.policy_default,
-        policy_local_dev: manifest.policy_local_dev,
-        guest_setup_script: manifest.guest_setup_script,
-        extra_files: variant.extra_files,
-    };
-    let rendered = render_build_config(
+    let rendered_config = shelter_runtime_config_path(&manifest.shelter_config);
+    let rendered = render_runtime_config(
         &spec,
-        &assets,
         &ShelterRenderOptions {
             build_id: Some(state.build.build_id.clone()),
-            images_dir: Some(images_dir),
-            cache_dir: Some(cache_dir),
-            terraform_dir: state.deploy.terraform_dir.clone(),
             include_deploy: true,
             local_image_source: None,
             deploy_resource_name: Some(state.deploy.resource_name.clone()),
@@ -580,10 +571,15 @@ pub(super) fn render_service_config_from_state(
             mesh_peer_cidrs,
             peerings: read_peerings_or_empty(state_dir)?,
             deployer_cidr: std::env::var("CA_DEPLOYER_CIDR").ok(),
+            ..ShelterRenderOptions::default()
         },
     )?;
     fs::write(&rendered_config, rendered)
         .with_context(|| format!("failed to write '{}'", rendered_config.display()))?;
+    link_committed_config(
+        &shelter_runtime_config_path(&paths.rendered_config),
+        &rendered_config,
+    )?;
     Ok(())
 }
 

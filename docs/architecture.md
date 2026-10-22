@@ -73,7 +73,7 @@ sequenceDiagram
         CLI->>SH: render_build_config(spec with image_variant, assets, options)
         SH-->>CLI: Shelter YAML (string)
         CLI->>FS: write shelter.yaml + manifest.json
-        CLI->>SHB: shelter --work-dir … build --config shelter.yaml --image-id <variant_build_id> --image-type disk
+        CLI->>SHB: shelter --work-dir … build -f shelter.yaml --tag <variant_build_id>
         SHB-->>FS: build-result.json + image.qcow2 + reference values
     end
     CLI->>FS: manifest.json 写入 variants map，并把 shelter.yaml 恢复到 deploy.image_variant 对应配置
@@ -108,10 +108,10 @@ sequenceDiagram
     CLI->>CLI: 二次 render（含 mesh_peer_cidrs）
     CLI->>FS: 保存部署名称，phase=deploying（失败后可 destroy）
     alt 匹配的 published image 已 available
-        CLI->>SHB: shelter run --no-build (cloud_image_id)
+        CLI->>SHB: shelter run -d -c runtime.yaml (cloud_image_id)
         SHB->>TF: 创建 ECS / 配置安全组
     else 使用本地 build 产物
-        CLI->>SHB: shelter run --no-build
+        CLI->>SHB: shelter run -d -c runtime.yaml
         SHB->>TF: 上传 OSS / ImportImage / 创建 ECS / 配置安全组
     end
     TF-->>SHB: deploy-result.json (instance_id, public_ip, …)
@@ -144,7 +144,9 @@ sequenceDiagram
     CLI-->>U: deploy completed: public_ip=… private_ip=… mesh_generation=…
 ```
 
-Shelter 部署使用 V1 `runtime.targets.deploy`，其 profile 为 `trust: verified`、`attestation: disabled`、`forbid_fallback: true`。这只关闭 Shelter 的重复证明流程；provider options 仍请求 TDX，证据验证与密钥释放由下面的 CA challenge/Trustee 流程负责。CLI 通过 `run <image-tag> --no-build --target deploy --name <resource_name> --config …` 复用已构建镜像，再通过 `status` 读取实际 instance ID 和 Terraform 目录；部署身份与 build ID 分开保存。
+Shelter 构建使用主线支持的显式 `version: 1` 配置，保留 V2 尚不能完整表达的 `initrd.binaries`、Rekor 和容器挂载配置。构建命令为 `build -f shelter.yaml --tag <image-tag>`；部署不改写这份构建快照，而是单独生成 `version: 2` 的 `shelter-runtime.yaml`，只包含运行目标。
+
+部署目标使用 `trust: verified`、`attestation: disabled`，并在 provider options 中明确设置 `cc_mode: tdx`、`attestation_authority: external`。Shelter 负责创建 TDX 实例，证据验证与密钥释放由下面的 CA challenge/Trustee 流程负责。CLI 通过 `run <image-tag> -d -c shelter-runtime.yaml --target deploy --name <resource_name>` 复用已构建镜像；共享签名镜像通过同一 `run -d --release … -c …` 接口部署。`inspect <name> --format json` 读取实际 instance ID 和 Terraform 目录，`network update <name> -c … --target deploy` 只更新受管实例网络，`rm -f <name>` 删除实例；部署身份与 build ID 分开保存。
 
 challenge 注入采用 `inject-resource` over `http://<ip>:8006`，对应代码 [`cli/src/app/tools.rs::challenge_inject`](../cli/src/app/tools.rs)。每个资源会先尝试 direct 网络，失败后 fallback 走 host 的代理环境变量。Trustee mode 不依赖 operator 到 Guest `:8006` 的入站连通性。
 

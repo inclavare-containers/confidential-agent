@@ -65,7 +65,7 @@ def verify_resumable_build(case, service, spec, variants):
     # A recorded success alone is insufficient to resume a publication.
     for variant, artifact in artifacts:
         run([os.environ.get("CA_SHELTER_BIN", "shelter"), "--work-dir", manifest["shelter_work_dir"],
-             "artifact", "verify", artifact, "--format", "json"],
+             "image", "verify", artifact, "--format", "json"],
             case.work / ("resume-verify-" + service + "-" + variant), timeout=7200)
     case.checks.setdefault("resumed_builds_verified", []).append(service)
     return True

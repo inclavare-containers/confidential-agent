@@ -83,6 +83,8 @@ fn build_config_omits_deploy_by_default() {
     )
     .unwrap();
 
+    let config: serde_yaml::Value = serde_yaml::from_str(&rendered).unwrap();
+    assert_eq!(config["version"], 1);
     assert!(!rendered.contains("from:"));
     assert!(rendered.contains("disk:"));
     assert!(rendered.contains("size: 30G"));
@@ -90,8 +92,123 @@ fn build_config_omits_deploy_by_default() {
     assert!(!rendered.contains("variants:"));
     assert!(!rendered.contains("deploy:"));
     assert!(!rendered.contains("backend: terraform"));
+    assert!(!rendered.contains("attestation_authority:"));
     assert!(!rendered.contains("security_group_ports:"));
     assert!(!rendered.contains("control_8006_peer_203_0_113_0_24"));
+}
+
+#[test]
+fn runtime_document_preserves_ca_deployment_without_build_inputs() {
+    let spec = AgentSpec::from_yaml(
+        &SPEC.replace(
+            "  disk_gb: 200\n",
+            "  disk_gb: 200\n  replicas: 3\n  slb: {enabled: true, slb_type: nlb}\n",
+        ),
+        Path::new("/project"),
+    )
+    .unwrap();
+    let options = ShelterRenderOptions {
+        local_image_source: Some("/private/build/disk.qcow2".into()),
+        terraform_dir: Some("/private/operator/terraform".into()),
+        deploy_resource_name: Some("openclaw-instance-1".into()),
+        local_image_import_name: Some("openclaw-import-1".into()),
+        deploy_user_data: Some("CA runtime secret-delivery metadata".into()),
+        peerings: operator_peerings(),
+        deployer_cidr: Some("192.0.2.1/32".into()),
+        ..ShelterRenderOptions::default()
+    };
+    let rendered = render_runtime_config(&spec, &options).unwrap();
+    let config: serde_yaml::Value = serde_yaml::from_str(&rendered).unwrap();
+    let keys = config.as_mapping().unwrap();
+    assert_eq!(keys.len(), 3);
+    assert_eq!(config["version"], 2);
+    assert_eq!(config["default_target"], "deploy");
+    let target = &config["targets"]["deploy"];
+    assert_eq!(target["provider"], "terraform-alicloud");
+    assert_eq!(target["trust"], "verified");
+    assert_eq!(target["attestation"], "disabled");
+    let deploy = &target["provider_options"];
+    assert_eq!(deploy["name"], "openclaw-instance-1");
+    assert_eq!(deploy["cc_mode"], "tdx");
+    assert_eq!(deploy["attestation_authority"], "external");
+    assert_eq!(deploy["replicas"], 3);
+    assert_eq!(deploy["slb"]["slb_type"], "nlb");
+    assert_eq!(deploy["deployer_cidr"], "192.0.2.1/32");
+    assert_eq!(deploy["user_data"], "CA runtime secret-delivery metadata");
+    assert_eq!(deploy["image"]["name"], "openclaw-import-1");
+    assert_eq!(deploy["image"]["nvme_support"], "supported");
+    assert!(deploy["image"]["source"].is_null());
+    assert!(deploy["terraform_dir"].is_null());
+    assert!(rendered.contains("control_8006_peer_203_0_113_0_24"));
+    assert!(!rendered.contains("/private/"));
+    assert!(!rendered.contains("/project/"));
+    assert!(config["artifact"].is_null());
+    assert!(config["runtime"].is_null());
+}
+
+#[test]
+fn signed_release_runtime_uses_same_v2_document_and_explicit_cloud_image() {
+    let spec = AgentSpec::from_yaml(SPEC, Path::new("/project")).unwrap();
+    let options = ShelterRenderOptions {
+        cloud_image_id: Some("m-default".into()),
+        ..ShelterRenderOptions::default()
+    };
+    assert_eq!(
+        render_image_runtime_target(&spec, &options, None).unwrap(),
+        render_runtime_config(&spec, &options).unwrap()
+    );
+    let rendered = render_image_runtime_target(&spec, &options, Some("m-override")).unwrap();
+    let config: serde_yaml::Value = serde_yaml::from_str(&rendered).unwrap();
+    assert_eq!(config["version"], 2);
+    let deploy = &config["targets"]["deploy"]["provider_options"];
+    assert_eq!(deploy["image_id"], "m-override");
+    assert_eq!(deploy["attestation_authority"], "external");
+    assert!(deploy["image"].is_null());
+    assert!(!rendered.contains("m-default"));
+    assert!(!rendered.contains("release-runtime-target"));
+}
+
+#[test]
+fn signed_release_runtime_does_not_fabricate_a_local_image_import() {
+    let spec = AgentSpec::from_yaml(SPEC, Path::new("/project")).unwrap();
+    let rendered =
+        render_image_runtime_target(&spec, &ShelterRenderOptions::default(), None).unwrap();
+    let config: serde_yaml::Value = serde_yaml::from_str(&rendered).unwrap();
+    let deploy = &config["targets"]["deploy"]["provider_options"];
+    assert!(deploy["image"].is_null());
+    assert!(deploy["image_id"].is_null());
+}
+
+#[test]
+fn v1_build_preserves_external_fde_initrd_rekor_and_container_features() {
+    let spec = AgentSpec::from_yaml(
+        &SPEC.replace(
+            "  image_name: openclaw-agent\n",
+            "  image_name: openclaw-agent\n  container:\n    image: example/agent:v1\n    env: {LOG_LEVEL: debug}\n    working_dir: /opt/app\n    network: false\n    mounts:\n      - {source: /var/lib/agent, target: /opt/data, read_only: true}\n",
+        ),
+        Path::new("/project"),
+    )
+    .unwrap();
+    let rendered = render_build_config(&spec, &assets(), &ShelterRenderOptions::default()).unwrap();
+    let config: serde_yaml::Value = serde_yaml::from_str(&rendered).unwrap();
+    assert_eq!(config["version"], 1);
+    assert_eq!(config["container"]["network"], false);
+    assert_eq!(config["container"]["env"]["LOG_LEVEL"], "debug");
+    assert_eq!(config["container"]["working_dir"], "/opt/app");
+    assert_eq!(config["container"]["mounts"][0]["read_only"], true);
+    assert_eq!(config["container"]["mounts"][0]["target"], "/opt/data");
+    assert_eq!(config["initrd"]["network"], true);
+    assert!(config["initrd"]["binaries"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .any(|value| value == "/usr/local/bin/confidential-agentd"));
+    assert_eq!(
+        config["security"]["disk"]["cryptpilot"]["fde_config_file"],
+        "/build/fde.toml"
+    );
+    assert_eq!(config["rekor"]["rv_name"], "measurement.uki.SHA-384");
+    assert!(config["artifact"].is_null());
 }
 
 #[test]
@@ -615,7 +732,8 @@ fn render_deploy_config_passes_replicas_and_slb() {
             peerings: operator_peerings(),
             ..ShelterRenderOptions::default()
         },
-    );
+    )
+    .unwrap();
 
     assert_eq!(config.replicas, Some(3));
     assert!(config.slb.is_some());
@@ -632,10 +750,12 @@ fn render_deploy_config_omits_replicas_and_slb_when_single_instance() {
             peerings: operator_peerings(),
             ..ShelterRenderOptions::default()
         },
-    );
+    )
+    .unwrap();
 
     assert_eq!(config.replicas, None);
     assert!(config.slb.is_none());
+    assert!(config.attestation_authority.is_none());
 }
 
 #[test]
@@ -711,7 +831,7 @@ fn managed_peer_connect_routes_are_allowed_at_workload_and_load_balancer() {
         mesh_peer_cidrs: vec!["192.0.2.17/32".into(), "192.0.2.17/32".into()],
         ..ShelterRenderOptions::default()
     };
-    let config = render_deploy_config(&spec, &options);
+    let config = render_deploy_config(&spec, &options).unwrap();
     let allowed = &config.slb.as_ref().unwrap().allowed_cidrs;
     assert_eq!(
         allowed
@@ -726,4 +846,35 @@ fn managed_peer_connect_routes_are_allowed_at_workload_and_load_balancer() {
     assert!(!rendered.contains("connect_18789_peer_198_51_100_99_32"));
     assert!(!rendered.contains("status_8088_peer_192_0_2_17_32"));
     assert!(!rendered.contains("ssh_22_peer_192_0_2_17_32"));
+}
+
+#[test]
+fn runtime_disk_defaults_preserve_explicit_sizes_and_fit_the_build_image() {
+    for (disk, resize, expected) in [
+        (None, None, 32),
+        (None, Some("30G"), 32),
+        (None, Some("80G"), 75),
+        (None, Some("80GiB"), 80),
+        (None, Some("80.5GiB"), 81),
+        (Some(200), Some("30G"), 200),
+    ] {
+        let mut spec = AgentSpec::from_yaml(SPEC, Path::new("/project")).unwrap();
+        spec.deploy.disk_gb = disk;
+        spec.build.resize = resize.map(str::to_string);
+        let rendered = render_runtime_config(&spec, &ShelterRenderOptions::default()).unwrap();
+        let runtime: serde_yaml::Value = serde_yaml::from_str(&rendered).unwrap();
+        assert_eq!(
+            runtime["targets"]["deploy"]["provider_options"]["disk_size"],
+            expected
+        );
+    }
+    let mut undersized = AgentSpec::from_yaml(SPEC, Path::new("/project")).unwrap();
+    undersized.build.resize = Some("80GiB".into());
+    undersized.deploy.disk_gb = Some(32);
+    assert!(
+        render_runtime_config(&undersized, &ShelterRenderOptions::default())
+            .unwrap_err()
+            .to_string()
+            .contains("smaller than build.resize")
+    );
 }

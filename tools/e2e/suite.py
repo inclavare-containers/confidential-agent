@@ -198,6 +198,8 @@ class Suite:
             if not environment.get(key):
                 return {"status": "blocked", "reason": "missing " + key, "cleanup_complete": True}
         for command in case.get("required_commands", []):
+            if command == "cargo" and environment.get("E2E_SKIP_CARGO_BUILD") == "1":
+                continue
             if not shutil.which(command, path=environment.get("PATH")):
                 return {"status": "blocked", "reason": "missing required command: " + command, "cleanup_complete": True}
         started = time.time()

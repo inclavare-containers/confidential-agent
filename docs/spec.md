@@ -184,7 +184,7 @@ deploy:
 | `provider` | enum | ✅ | 当前仅 `aliyun` |
 | `instance_type` | string | ✅ | 非空 |
 | `image_variant` | string | ❌ | `release` (默认) 或 `debug`；若是 `release`，必须 `variants.release.enabled=true`；若是 `debug`，必须 `variants.debug.enabled=true` |
-| `disk_gb` | u32 | ❌ | 默认 `None`，由云厂商默认值决定 |
+| `disk_gb` | u32 | ❌ | 未设置时请求至少 32 GiB，并按 `build.resize` 向上调整；显式值不得小于 20 GiB 或构建镜像容量。已发布镜像必须显式设置并满足镜像最低容量 |
 | `region` | string | ✅ | 非空 |
 | `zone_id` | string | ✅ | 非空。可写成 `availability_zone` 别名 |
 | `vpc_id` / `vswitch_id` / `security_group_id` | string | ❌ | 留空时由 Shelter 自动创建 |

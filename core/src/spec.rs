@@ -5,6 +5,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// CA's system disk size when an AppSpec does not choose one explicitly.
+pub const DEFAULT_DEPLOY_DISK_GB: u32 = 32;
+
 pub const SCHEMA_VERSION: &str = "confidential-agent/v1";
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -493,6 +496,25 @@ impl AgentSpec {
         self.image_variant() == "debug"
     }
 
+    /// Freeze a provider disk size that can contain the configured image.
+    pub fn deployment_disk_gb(&self) -> Result<u32> {
+        let image_minimum = self
+            .build
+            .resize
+            .as_deref()
+            .map(configured_image_disk_gb)
+            .transpose()?
+            .unwrap_or(0);
+        if let Some(size) = self.deploy.disk_gb {
+            anyhow::ensure!(size >= 20, "deploy.disk_gb must be at least 20 GiB");
+            anyhow::ensure!(size >= image_minimum,
+                "deploy.disk_gb ({size} GiB) is smaller than build.resize ({image_minimum} GiB rounded up)");
+            Ok(size)
+        } else {
+            Ok(DEFAULT_DEPLOY_DISK_GB.max(image_minimum))
+        }
+    }
+
     pub fn ensure_mvp_supported(&self) -> Result<()> {
         Ok(())
     }
@@ -548,6 +570,7 @@ impl AgentSpec {
             );
         }
         validate_id("service.id", &self.service.id)?;
+        self.deployment_disk_gb()?;
         if self.attestation.mode == AttestationMode::Trustee {
             crate::trustee::validate_trustee_service_id(&self.service.id)?;
         }
@@ -1031,6 +1054,58 @@ fn validate_https_url(field: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
+// Match Shelter's V1 image sizing: short K/M/G/T units are decimal; complete
+// IEC units are binary. Round upward only when converting bytes to cloud GiB.
+fn configured_image_disk_gb(input: &str) -> Result<u32> {
+    let value = input.trim();
+    let split = value
+        .find(|character: char| !(character.is_ascii_digit() || character == '.'))
+        .unwrap_or(value.len());
+    let (number, unit) = value.split_at(split);
+    let multiplier: u128 = match unit.trim().to_ascii_lowercase().as_str() {
+        "" | "b" => 1,
+        "k" | "kb" => 1_000,
+        "m" | "mb" => 1_000_000,
+        "g" | "gb" => 1_000_000_000,
+        "t" | "tb" => 1_000_000_000_000,
+        "ki" | "kib" => 1_024,
+        "mi" | "mib" => 1_024_u128.pow(2),
+        "gi" | "gib" => 1_024_u128.pow(3),
+        "ti" | "tib" => 1_024_u128.pow(4),
+        _ => bail!("build.resize has an unsupported size unit"),
+    };
+    let (whole, fraction) = number.split_once('.').unwrap_or((number, ""));
+    anyhow::ensure!(
+        !(whole.is_empty() && fraction.is_empty())
+            && whole.bytes().all(|byte| byte.is_ascii_digit())
+            && fraction.bytes().all(|byte| byte.is_ascii_digit()),
+        "build.resize must contain a valid nonnegative decimal size"
+    );
+    let numerator = format!("{whole}{fraction}")
+        .parse::<u128>()
+        .context("build.resize is too large")?;
+    let denominator = 10_u128
+        .checked_pow(
+            fraction
+                .len()
+                .try_into()
+                .context("build.resize precision is too large")?,
+        )
+        .context("build.resize precision is too large")?;
+    let bytes = numerator
+        .checked_mul(multiplier)
+        .context("build.resize is too large")?
+        / denominator;
+    anyhow::ensure!(bytes > 0, "build.resize must be greater than zero");
+    let gib = 1_024_u128.pow(3);
+    let size = bytes
+        .checked_add(gib - 1)
+        .context("build.resize is too large")?
+        / gib;
+    size.try_into()
+        .context("build.resize exceeds supported cloud disk size")
+}
+
 fn absolute_base_dir(path: &Path) -> Result<PathBuf> {
     if path.is_absolute() {
         Ok(path.to_path_buf())
@@ -1346,6 +1421,40 @@ resources:
         let spec = AgentSpec::from_yaml(&yaml, Path::new("/project")).unwrap();
 
         assert!(spec.resources["openclaw_config"].mutable);
+    }
+
+    #[test]
+    fn deployment_disk_size_follows_v1_units_without_overflow_or_shrinking_images() {
+        for (size, gib) in [
+            ("80G", 75),
+            ("80GiB", 80),
+            ("80.5GiB", 81),
+            ("85899345921B", 81),
+            ("81920 MiB", 80),
+        ] {
+            assert_eq!(configured_image_disk_gb(size).unwrap(), gib, "{size}");
+        }
+        for invalid in [
+            "",
+            "0",
+            "1.2.3G",
+            "-1G",
+            "1PB",
+            "NaN",
+            "999999999999999999999999999999999999999999999999TB",
+        ] {
+            assert!(configured_image_disk_gb(invalid).is_err(), "{invalid}");
+        }
+        let omitted = SPEC
+            .replace("  disk_gb: 200\n", "")
+            .replace("resize: 30G", "resize: 80GiB");
+        let spec = AgentSpec::from_yaml(&omitted, Path::new("/project")).unwrap();
+        assert_eq!(spec.deployment_disk_gb().unwrap(), 80);
+        let too_small = SPEC.replace("disk_gb: 200", "disk_gb: 20");
+        assert!(AgentSpec::from_yaml(&too_small, Path::new("/project"))
+            .unwrap_err()
+            .to_string()
+            .contains("smaller than build.resize"));
     }
 
     #[test]

@@ -60,6 +60,9 @@ pub fn render_build_config(
     spec.ensure_mvp_supported()?;
 
     let config = ShelterBuildConfig {
+        // The supported V1 build schema retains CA's initrd, Rekor and
+        // container mount settings, which have no lossless V2 representation.
+        version: 1,
         output: spec.build.resize.as_ref().map(|size| ShelterOutputConfig {
             disk_size: Some(size.clone()),
         }),
@@ -98,24 +101,28 @@ pub fn render_build_config(
                 "/usr/bin/confidential-data-hub".to_string(),
             ],
         },
-        runtime: options.include_deploy.then(|| ShelterRuntime {
-            profiles: BTreeMap::from([(
-                "ca-attestation",
-                ShelterRuntimeProfile {
-                    trust: "verified",
-                    attestation: "disabled",
-                    forbid_fallback: true,
-                },
-            )]),
-            targets: BTreeMap::from([(
-                "deploy",
-                ShelterRuntimeTarget {
-                    provider: "terraform-alicloud",
-                    profiles: vec!["ca-attestation"],
-                    provider_options: render_deploy_config(spec, options),
-                },
-            )]),
-        }),
+        runtime: if options.include_deploy {
+            Some(ShelterRuntime {
+                profiles: BTreeMap::from([(
+                    "ca-attestation",
+                    ShelterRuntimeProfile {
+                        trust: "verified",
+                        attestation: "disabled",
+                        forbid_fallback: true,
+                    },
+                )]),
+                targets: BTreeMap::from([(
+                    "deploy",
+                    ShelterRuntimeTarget {
+                        provider: "terraform-alicloud",
+                        profiles: vec!["ca-attestation"],
+                        provider_options: render_deploy_config(spec, options)?,
+                    },
+                )]),
+            })
+        } else {
+            None
+        },
     };
 
     serde_yaml::to_string(&config).map_err(Into::into)
@@ -220,7 +227,10 @@ fn guest_files(assets: &GuestAssets) -> Vec<ShelterFileMapping> {
     files
 }
 
-fn render_deploy_config(spec: &AgentSpec, options: &ShelterRenderOptions) -> ShelterDeployConfig {
+fn render_deploy_config(
+    spec: &AgentSpec,
+    options: &ShelterRenderOptions,
+) -> Result<ShelterDeployConfig> {
     let deploy = &spec.deploy;
     let mut tags = BTreeMap::new();
     tags.insert(
@@ -232,7 +242,7 @@ fn render_deploy_config(spec: &AgentSpec, options: &ShelterRenderOptions) -> She
         spec.image_variant().to_string(),
     );
 
-    ShelterDeployConfig {
+    Ok(ShelterDeployConfig {
         name: options
             .deploy_resource_name
             .clone()
@@ -245,7 +255,8 @@ fn render_deploy_config(spec: &AgentSpec, options: &ShelterRenderOptions) -> She
         ip: deploy.private_ip.clone(),
         instance_type: deploy.instance_type.clone(),
         cc_mode: Some(shelter_cc(spec.attestation.tee).to_string()),
-        disk_size: deploy.disk_gb,
+        attestation_authority: None,
+        disk_size: Some(spec.deployment_disk_gb()?),
         security_group: ShelterDeploySecurityGroup {
             rules: security_group_rules(spec, options),
         },
@@ -287,30 +298,61 @@ fn render_deploy_config(spec: &AgentSpec, options: &ShelterRenderOptions) -> She
             allowed_cidrs: connect_peer_cidrs(options),
         }),
         deployer_cidr: options.deployer_cidr.clone(),
-    }
+    })
 }
 
-/// Compile the same CA provider options for an already published image.
-/// CA continues to own attestation and resource delivery for this target.
+/// Render the runtime-only V2 document used with an immutable Shelter image.
+///
+/// The image operand determines the local disk; the runtime document contains
+/// only deployment intent and never includes build-host paths or guest assets.
+pub fn render_runtime_config(spec: &AgentSpec, options: &ShelterRenderOptions) -> Result<String> {
+    spec.ensure_mvp_supported()?;
+    render_runtime_document(render_deploy_config(spec, options)?)
+}
+
+fn render_runtime_document(mut deploy: ShelterDeployConfig) -> Result<String> {
+    // CA appraises the TDX evidence and releases keys itself. Make this owner
+    // explicit instead of presenting disabled Shelter attestation as no owner.
+    deploy.attestation_authority = Some("external");
+    if let Some(image) = &mut deploy.image {
+        image.source = None;
+    }
+    deploy.terraform_dir = None;
+    serde_yaml::to_string(&ShelterRuntimeDocument {
+        version: 2,
+        default_target: "deploy",
+        targets: BTreeMap::from([(
+            "deploy",
+            ShelterRuntimeDocumentTarget {
+                provider: "terraform-alicloud",
+                trust: "verified",
+                attestation: "disabled",
+                provider_options: deploy,
+            },
+        )]),
+    })
+    .map_err(Into::into)
+}
+
+/// Compile deployment intent for a signed image release using the same V2
+/// runtime document as locally built images.
 pub fn render_image_runtime_target(
     spec: &AgentSpec,
     options: &ShelterRenderOptions,
     image_id: Option<&str>,
 ) -> Result<String> {
-    let mut deploy = render_deploy_config(spec, options);
+    let options = ShelterRenderOptions {
+        cloud_image_id: image_id
+            .map(str::to_string)
+            .or_else(|| options.cloud_image_id.clone()),
+        ..options.clone()
+    };
+    spec.ensure_mvp_supported()?;
+    let mut deploy = render_deploy_config(spec, &options)?;
+    // The signed release supplies its image identity. A manifest digest must
+    // not be converted into a cloud image import name.
     deploy.image = None;
-    deploy.image_id = None;
-    deploy.terraform_dir = None;
-    Ok(serde_json::to_string_pretty(&serde_json::json!({
-        "schema_version": "io.shelter.release-runtime-target/v1",
-        "name": "deploy",
-        "provider": "terraform-alicloud",
-        "image_id": image_id,
-        "region": spec.deploy.region,
-        "security": {"profile": "verified", "attestation": "disabled", "forbid_fallback": true},
-        "ports": [],
-        "deploy": deploy,
-    }))?)
+    render_runtime_document(deploy)
 }
 
 pub fn shelter_build_id(spec: &AgentSpec) -> String {
@@ -436,6 +478,7 @@ struct ShelterSlbConfig {
 
 #[derive(Debug, Serialize)]
 struct ShelterBuildConfig {
+    version: u8,
     #[serde(skip_serializing_if = "Option::is_none")]
     output: Option<ShelterOutputConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -770,6 +813,21 @@ struct ShelterRuntimeTarget {
 }
 
 #[derive(Debug, Serialize)]
+struct ShelterRuntimeDocument {
+    version: u8,
+    default_target: &'static str,
+    targets: BTreeMap<&'static str, ShelterRuntimeDocumentTarget>,
+}
+
+#[derive(Debug, Serialize)]
+struct ShelterRuntimeDocumentTarget {
+    provider: &'static str,
+    trust: &'static str,
+    attestation: &'static str,
+    provider_options: ShelterDeployConfig,
+}
+
+#[derive(Debug, Serialize)]
 struct ShelterDeployConfig {
     name: String,
     backend: String,
@@ -783,6 +841,8 @@ struct ShelterDeployConfig {
     instance_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     cc_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    attestation_authority: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     disk_size: Option<u32>,
     security_group: ShelterDeploySecurityGroup,

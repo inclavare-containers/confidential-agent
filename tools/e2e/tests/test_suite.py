@@ -18,6 +18,46 @@ spec.loader.exec_module(suite)
 
 
 class SuiteTest(unittest.TestCase):
+    def test_prebuilt_case_skips_cargo_but_still_requires_runtime_tools(self):
+        writer = "import os,json,pathlib; pathlib.Path(os.environ['E2E_WORK_DIR'],'case-result.json').write_text(json.dumps({'passed':True,'cleanup_complete':True}))"
+        for prebuilt, required, expected in [
+            ("1", ["cargo", "curl"], "passed"),
+            ("0", ["cargo", "curl"], "blocked"),
+            ("1", ["cargo", "required-runtime-tool"], "blocked"),
+        ]:
+            with self.subTest(prebuilt=prebuilt, required=required), tempfile.TemporaryDirectory() as directory:
+                runner = suite.Suite(Path(directory), {}, dict(os.environ, E2E_SKIP_CARGO_BUILD=prebuilt), 1, 1)
+                try:
+                    with patch.object(suite.shutil, 'which', side_effect=lambda name, **_: '/test/curl' if name == 'curl' else None):
+                        result = runner.execute('prebuilt', {
+                            'command': [sys.executable, '-c', writer],
+                            'required_commands': required,
+                        })
+                    self.assertEqual(result['status'], expected)
+                    if expected == 'blocked':
+                        missing = 'cargo' if prebuilt == '0' else 'required-runtime-tool'
+                        self.assertIn(missing, result['reason'])
+                finally:
+                    for pool in runner.pools.values():
+                        pool.shutdown()
+
+    def test_standalone_prebuilt_checks_runtime_binary_without_requiring_cargo(self):
+        prefix = '''
+source "$ROOT_DIR/tools/e2e/lib/common.sh"
+command() { if [[ "$1" == -v && ( "$2" == cargo || "$2" == required-runtime-tool ) ]]; then return 1; fi; builtin command "$@"; }
+'''
+        for prebuilt, body, expected in [
+            ('1', 'require_cmd cargo', 0),
+            ('0', 'require_cmd cargo', 2),
+            ('1', 'require_cmd required-runtime-tool', 2),
+            ('1', 'CA_BIN=/missing/candidate-ca; build_host_binaries', 2),
+        ]:
+            with self.subTest(prebuilt=prebuilt, body=body):
+                result = subprocess.run(['bash', '-c', prefix + body],
+                    env=dict(os.environ, ROOT_DIR=str(suite.ROOT), E2E_RUN_ID='prebuilt-test',
+                             E2E_SKIP_CARGO_BUILD=prebuilt), capture_output=True)
+                self.assertEqual(result.returncode, expected, result.stderr.decode())
+
     def test_slow_producer_setup_gets_build_slots_before_unrelated_cases(self):
         worker = r"""
 import json,os,sys,time

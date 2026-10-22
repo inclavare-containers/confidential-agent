@@ -81,7 +81,7 @@ class PublisherResumeTest(unittest.TestCase):
         with patch.object(publish_fixtures, 'run') as run:
             self.assertTrue(self.verify())
             self.assertEqual(run.call_count, 2)
-            self.assertTrue(all(call.args[0][3:5] == ['artifact', 'verify'] for call in run.call_args_list))
+            self.assertTrue(all(call.args[0][3:5] == ['image', 'verify'] for call in run.call_args_list))
         self.assertEqual(self.case.checks['resumed_builds_verified'], ['builder'])
 
     def test_unfinished_service_still_requires_its_normal_build(self):

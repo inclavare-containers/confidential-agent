@@ -495,16 +495,21 @@ def assert_one_deployment(consumer, aliyun):
     assert owned_cloud_instances(consumer, aliyun, "concurrent-instances") == [state["deploy"]["instance_id"]], "same-service deployment created unowned instances"
 
 
+def write_interruption_wrapper(wrapper, real, marker):
+    wrapper.write_text("#!/bin/sh\n" + shlex.quote(real) + ' "$@"\nstatus=$?\n'
+                       + '[ "$status" = 0 ] || exit "$status"\n'
+                       + 'for arg in "$@"; do\ncase "$arg" in --release)\n'
+                       + "touch " + shlex.quote(str(marker)) + "\nexec sleep 3600\n;; esac\ndone\n")
+    wrapper.chmod(0o700)
+
+
 def interrupt_infrastructure(consumer, aliyun):
     """Kill CA after a real provider apply, before CA can confirm its outcome."""
     marker = consumer.work / "provider-completed"
     wrapper = consumer.work / "shelter-interruption"
-    real = subprocess.check_output(["sh", "-c", "command -v shelter"], text=True).strip()
-    wrapper.write_text("#!/bin/sh\n" + shlex.quote(real) + ' "$@"\nstatus=$?\n'
-                       + '[ "$status" = 0 ] || exit "$status"\n'
-                       + 'for arg in "$@"; do\ncase "$arg" in deploy-release)\n'
-                       + "touch " + shlex.quote(str(marker)) + "\nexec sleep 3600\n;; esac\ndone\n")
-    wrapper.chmod(0o700)
+    real = os.environ.get("CA_SHELTER_BIN") or subprocess.check_output(
+        ["sh", "-c", "command -v shelter"], text=True).strip()
+    write_interruption_wrapper(wrapper, real, marker)
     consumer.attempted = True
     process = None
     try:

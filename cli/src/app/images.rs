@@ -67,9 +67,9 @@ pub(super) fn import(cli: &Cli, spec: &AgentSpec) -> Result<BuildManifest> {
         println!("[ca] release signature verification explicitly skipped; runtime attestation remains required");
     }
     source.release = release;
-    let mut command = Command::new(effective_shelter_bin(cli));
+    let mut command = shelter_command(cli, &[])?;
     command
-        .args(["artifact", "inspect-release"])
+        .args(["image", "inspect-release"])
         .arg(&source.release)
         .arg("--region")
         .arg(&spec.deploy.region);
@@ -285,7 +285,7 @@ pub(super) fn export(
         &mut [
             "--work-dir".into(),
             manifest.shelter_work_dir.into_os_string(),
-            "artifact".into(),
+            "image".into(),
             "release".into(),
             built.shelter_build_id.into(),
             "--mapping".into(),
@@ -355,7 +355,7 @@ mod tests {
         fs::write(
             &shelter,
             format!(
-                "#!/bin/sh\nset -eu\n[ \"$1 $2\" = 'artifact inspect-release' ]\ncat '{}'\n",
+                "#!/bin/sh\nset -eu\n[ \"$1 $2\" = 'image inspect-release' ]\ncat '{}'\n",
                 inspected.display()
             ),
         )
@@ -451,10 +451,13 @@ mod tests {
         let args = deploy_shelter_args(&prepared);
         assert!(args.iter().any(|a| a == "--skip-signature-verification"));
         assert!(!args.iter().any(|a| a == "--trusted-key"));
-        let rendered: serde_json::Value =
-            serde_json::from_slice(&fs::read(&prepared.rendered_config).unwrap()).unwrap();
-        assert!(rendered.get("account_id").is_none());
-        assert_eq!(rendered["image_id"], "m-shared-image");
+        let rendered: serde_yaml::Value =
+            serde_yaml::from_slice(&fs::read(prepared.runtime_config()).unwrap()).unwrap();
+        assert!(rendered.get("artifact").is_none());
+        assert_eq!(
+            rendered["targets"]["deploy"]["provider_options"]["image_id"],
+            "m-shared-image"
+        );
         let mut invalid: serde_json::Value =
             serde_json::from_slice(&fs::read(&inspected).unwrap()).unwrap();
         invalid["runtime_metadata"]["bootstrap_schema"] = "unknown".into();
@@ -534,11 +537,12 @@ mod tests {
             assert!(image.source.release.starts_with(&paths.artifacts_dir));
             assert!(!paths.guest_staging_dir.exists());
             assert!(!paths.shelter_work_dir.join("records").exists());
-            let target: serde_json::Value =
-                serde_json::from_slice(&fs::read(&paths.rendered_config).unwrap()).unwrap();
-            assert_eq!(target["security"]["attestation"], "disabled");
-            assert_eq!(target["deploy"]["cc_mode"], "tdx");
-            assert!(target["deploy"].get("image").is_none());
+            let runtime: serde_yaml::Value =
+                serde_yaml::from_slice(&fs::read(&paths.rendered_config).unwrap()).unwrap();
+            let target = &runtime["targets"]["deploy"];
+            assert_eq!(target["attestation"], "disabled");
+            assert_eq!(target["provider_options"]["cc_mode"], "tdx");
+            assert!(target["provider_options"]["image"].get("source").is_none());
             let prepared = prepare(
                 &paths,
                 &spec,
@@ -550,7 +554,10 @@ mod tests {
             )
             .unwrap();
             let args = commands::deploy_shelter_args(&prepared);
-            assert_eq!(args[2], "deploy-release");
+            assert_eq!(args[2], "run");
+            assert!(args.iter().any(|arg| arg == "--release"));
+            assert!(args.iter().any(|arg| arg == "-d"));
+            assert!(args.iter().any(|arg| arg == "-c"));
             assert!(!args.iter().any(|arg| arg == "build" || arg == "--config"));
             let state = build_service_state(
                 &cli.state_dir,

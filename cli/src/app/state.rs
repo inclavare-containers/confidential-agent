@@ -542,17 +542,23 @@ pub(super) fn absolute_path_for_state(path: &Path) -> PathBuf {
 /// Check the compiled plan, since older Shelter accepts unknown initrd keys.
 pub(super) fn verify_shelter_initrd_support(cli: &Cli, config: &Path) -> Result<()> {
     let binary = effective_shelter_bin(cli);
-    let output = Command::new(&binary)
-        .args(["plan", "--config"])
-        .arg(config)
-        .stdin(Stdio::null())
-        .output()
-        .with_context(|| {
-            format!(
-                "failed to run Shelter capability check: {}",
-                binary.display()
-            )
-        })?;
+    let output = shelter_command(
+        cli,
+        &[
+            "builder".into(),
+            "plan".into(),
+            "-f".into(),
+            config.as_os_str().to_os_string(),
+        ],
+    )?
+    .stdin(Stdio::null())
+    .output()
+    .with_context(|| {
+        format!(
+            "failed to run Shelter capability check: {}",
+            binary.display()
+        )
+    })?;
     anyhow::ensure!(output.status.success(),
         "Shelter plan failed for '{}'; install the bundled Shelter with initrd.binaries and split Cryptpilot support: {}",
         binary.display(), String::from_utf8_lossy(&output.stderr));
@@ -585,19 +591,7 @@ pub(super) fn verify_initrd_binaries_in_plan(
 
 pub(super) fn run_shelter(cli: &Cli, args: &mut [OsString]) -> Result<()> {
     let shelter_bin = effective_shelter_bin(cli);
-    let mut command = shelter_command_with_bin(&shelter_bin, args);
-    command.env("PATH", native_tools_path(&cli.tools_dir)?).env(
-        "COSIGN_PASSWORD",
-        std::env::var_os("COSIGN_PASSWORD").unwrap_or_default(),
-    );
-    if args
-        .iter()
-        .any(|arg| arg == "deploy" || arg == "deploy-release" || arg == "destroy")
-    {
-        if let Some(credentials) = cloud_credentials::load_if_configured()? {
-            command.envs(credentials.environment());
-        }
-    }
+    let mut command = shelter_command(cli, args)?;
     let status = command
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
@@ -615,10 +609,26 @@ pub(super) fn run_shelter(cli: &Cli, args: &mut [OsString]) -> Result<()> {
     Ok(())
 }
 
-fn shelter_command_with_bin(bin: &Path, args: &mut [OsString]) -> Command {
-    let mut command = Command::new(bin);
+pub(super) fn shelter_command(cli: &Cli, args: &[OsString]) -> Result<Command> {
+    let mut command = Command::new(effective_shelter_bin(cli));
     command.args(args);
-    command
+    command.env("PATH", native_tools_path(&cli.tools_dir)?).env(
+        "COSIGN_PASSWORD",
+        std::env::var_os("COSIGN_PASSWORD").unwrap_or_default(),
+    );
+    // All callers use either a bare subcommand or the global --work-dir pair.
+    // Inspect only the command, so an image tag cannot select credentials.
+    let subcommand = match args {
+        [option, _, command, ..] if option == "--work-dir" => command.to_str(),
+        [command, ..] => command.to_str(),
+        [] => None,
+    };
+    if matches!(subcommand, Some("run" | "rm" | "network" | "inspect")) {
+        if let Some(credentials) = cloud_credentials::load_if_configured()? {
+            command.envs(credentials.environment());
+        }
+    }
+    Ok(command)
 }
 
 pub(super) fn effective_shelter_bin(cli: &Cli) -> PathBuf {
@@ -649,12 +659,19 @@ pub(super) fn bind_shelter_deployment(cli: &Cli, prepared: &mut PreparedConfig) 
         .as_ref()
         .map(|names| names.resource_name.as_str())
         .unwrap_or(&prepared.shelter_build_id);
-    let output = Command::new(effective_shelter_bin(cli))
-        .arg("--work-dir")
-        .arg(&prepared.shelter_work_dir)
-        .args(["status", expected_name, "--format", "json"])
-        .output()
-        .context("failed to query Shelter deployment identity")?;
+    let output = shelter_command(
+        cli,
+        &[
+            "--work-dir".into(),
+            prepared.shelter_work_dir.as_os_str().to_os_string(),
+            "inspect".into(),
+            expected_name.into(),
+            "--format".into(),
+            "json".into(),
+        ],
+    )?
+    .output()
+    .context("failed to query Shelter deployment identity")?;
     anyhow::ensure!(
         output.status.success(),
         "Shelter deployment status failed: {}",

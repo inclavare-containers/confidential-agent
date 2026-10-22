@@ -86,12 +86,10 @@ pub(super) fn cmd_build(cli: &Cli, args: &BuildArgs) -> Result<()> {
                 OsString::from("--work-dir"),
                 prepared.shelter_work_dir.as_os_str().to_os_string(),
                 OsString::from("build"),
-                OsString::from("--config"),
+                OsString::from("-f"),
                 prepared.rendered_config.as_os_str().to_os_string(),
                 OsString::from("--tag"),
                 OsString::from(prepared.shelter_build_id.clone()),
-                OsString::from("--image-type"),
-                OsString::from("disk"),
             ];
             run_shelter(cli, &mut shelter_args)?;
         }
@@ -447,7 +445,7 @@ pub(super) fn cmd_deploy(cli: &Cli, args: &DeployArgs) -> Result<()> {
     )
     .with_context(|| format!("failed to write '{}'", paths.manifest.display()))?;
     if args.render_only {
-        println!("{}", prepared.rendered_config.display());
+        println!("{}", prepared.runtime_config().display());
         return Ok(());
     }
     // Apply can create resources before it fails. Save the attempt's name first
@@ -2498,7 +2496,8 @@ pub(super) fn cmd_destroy(cli: &Cli, args: &DestroyArgs) -> Result<()> {
     let mut shelter_args = vec![
         OsString::from("--work-dir"),
         manifest.shelter_work_dir.as_os_str().to_os_string(),
-        OsString::from("destroy"),
+        OsString::from("rm"),
+        OsString::from("-f"),
         OsString::from(
             existing_state
                 .as_ref()
@@ -2507,17 +2506,7 @@ pub(super) fn cmd_destroy(cli: &Cli, args: &DestroyArgs) -> Result<()> {
                 .unwrap_or(&manifest.shelter_build_id),
         ),
     ];
-    if let Some(terraform_dir) = existing_state
-        .as_ref()
-        .and_then(|state| state.deploy.terraform_dir.as_ref())
-    {
-        shelter_args.push(OsString::from("--terraform-dir"));
-        shelter_args.push(terraform_dir.as_os_str().to_os_string());
-    }
-    // Destroy uses Shelter's saved deployment plan and Terraform directory.
-    // Re-reading the V2 project without its selected target fails when init
-    // stopped before a plan was saved, although no infrastructure was created.
-    shelter_args.push(OsString::from("--auto-approve"));
+    // Shelter resolves the managed instance and its frozen provider plan.
     if trustee_mode {
         println!("[ca] revoking Trustee resource access before infrastructure deletion...");
         if !trustee::revoke_service(&cli.state_dir, &args.service)? {
@@ -2613,23 +2602,16 @@ fn build_has_no_deployment(state: &LocalServiceState) -> bool {
 }
 
 pub(super) fn deploy_shelter_args(prepared: &PreparedConfig) -> Vec<OsString> {
+    let mut args = vec![
+        "--work-dir".into(),
+        prepared.shelter_work_dir.as_os_str().to_os_string(),
+        "run".into(),
+    ];
     if let Some(image) = &prepared.image {
-        let mut args = vec![
-            "--work-dir".into(),
-            prepared.shelter_work_dir.as_os_str().to_os_string(),
-            "deploy-release".into(),
+        args.extend([
+            "--release".into(),
             image.source.release.as_os_str().to_os_string(),
-            "--runtime-target".into(),
-            prepared.rendered_config.as_os_str().to_os_string(),
-            "--name".into(),
-            prepared
-                .deploy_names
-                .as_ref()
-                .map(|names| names.resource_name.clone())
-                .unwrap_or_else(|| prepared.shelter_build_id.clone())
-                .into(),
-            "--auto-approve".into(),
-        ];
+        ]);
         if let Some(pin) = &image.source.manifest {
             args.extend(["--expect-manifest".into(), pin.into()]);
         }
@@ -2641,18 +2623,13 @@ pub(super) fn deploy_shelter_args(prepared: &PreparedConfig) -> Vec<OsString> {
                 image.source.trusted_key.as_os_str().to_os_string(),
             ]);
         }
-        return args;
+    } else {
+        args.push(prepared.shelter_build_id.clone().into());
     }
-    let mut args = vec![
-        OsString::from("--work-dir"),
-        prepared.shelter_work_dir.as_os_str().to_os_string(),
-        OsString::from("run"),
-        OsString::from(prepared.shelter_build_id.clone()),
-    ];
-    // The explicit project carries deployment-only options such as Trustee
-    // bootstrap and peerings. Reuse requires its build inputs to match the image.
+    // Creating an instance consumes an independent runtime document. Build
+    // inputs and guest capabilities remain fixed in the selected image.
     args.extend([
-        OsString::from("--no-build"),
+        OsString::from("-d"),
         OsString::from("--target"),
         OsString::from("deploy"),
         OsString::from("--name"),
@@ -2664,8 +2641,8 @@ pub(super) fn deploy_shelter_args(prepared: &PreparedConfig) -> Vec<OsString> {
                 .unwrap_or(&prepared.shelter_build_id),
         ),
     ]);
-    args.push(OsString::from("--config"));
-    args.push(prepared.rendered_config.as_os_str().to_os_string());
+    args.push(OsString::from("-c"));
+    args.push(prepared.runtime_config().into_os_string());
     args
 }
 

@@ -95,7 +95,7 @@ impl ImageRuntimeContract {
                 rootfs_integrity: true,
                 writable_layer_encryption: "luks2".into(),
                 key_release: "ca-attested".into(),
-                min_disk_gb: spec.deploy.disk_gb.unwrap_or(32),
+                min_disk_gb: spec.deployment_disk_gb()?,
                 app_services: spec.service.app_service.iter().cloned().collect(),
                 configuration_schema: None,
                 software_versions: BTreeMap::new(),
