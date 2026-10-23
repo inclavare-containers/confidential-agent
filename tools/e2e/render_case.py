@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 from pathlib import Path
+from urllib.parse import urlsplit
 from rekor_fixture import rekor_url
 
 
@@ -62,6 +63,10 @@ def render_matrix_repositories(context):
     mirror = context.get("E2E_MATRIX_REPO_MIRROR", "").rstrip("/")
     if not mirror:
         return ""
+    parsed = urlsplit(mirror)
+    if (parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password
+            or parsed.query or parsed.fragment or any(character.isspace() for character in mirror)):
+        raise ValueError("E2E_MATRIX_REPO_MIRROR must be an HTTPS repository base without credentials or query parameters")
     lines = ["  repos:"]
     for name in ("os", "updates", "plus", "module", "powertools"):
         lines.extend([
@@ -70,6 +75,19 @@ def render_matrix_repositories(context):
             f"      gpgkey: {yaml_quote(mirror + '/3/RPM-GPG-KEY-ALINUX-3')}",
         ])
     return "\n".join(lines)
+
+
+def configure_repositories(path):
+    """Retain native init's other fields and its signed HTTPS repository schema."""
+    repositories = render_matrix_repositories(os.environ)
+    if not repositories:
+        return
+    path = Path(path)
+    contents, count = re.subn(r"(?ms)^  repos:\n.*?(?=^  [A-Za-z_]|^[A-Za-z_]|\Z)",
+                              repositories + "\n", path.read_text())
+    if count != 1:
+        raise ValueError("generated builder must have exactly one block-style build.repos list")
+    path.write_text(contents)
 
 
 def decode_jwt_payload(token: str) -> dict:
@@ -182,7 +200,7 @@ def context_from_env(work_dir):
     default("MATRIX_REAL_INSTANCE_TYPE", context["INSTANCE_TYPE"])
     default("MATRIX_REAL_DISK_GB", context["DISK_GB"])
     default("MATRIX_REAL_INSTALL_SCRIPT", str(work_dir / "rendered" / "matrix" / "install-matrix-cloud.sh"))
-    default("CAI_PEP", str(ROOT / "target" / "debug" / "cai-pep"))
+    default("CAI_PEP", context.get("CA_PEP_BIN") or str(ROOT / "target" / "debug" / "cai-pep"))
     context["MATRIX_REAL_REKOR_BLOCK"] = render_matrix_rekor_block(context)
     context["MATRIX_REAL_REPOS_BLOCK"] = render_matrix_repositories(context)
     context["REKOR_BLOCK"] = render_rekor_block(context)

@@ -8,6 +8,8 @@ import json
 import os
 import fcntl
 import pty
+import re
+import secrets
 import select
 from pathlib import Path
 import signal
@@ -19,6 +21,8 @@ import time
 import urllib.error
 import urllib.request
 from resource_ledger import record_service
+
+CRYPTPILOT_GUEST_SHA256 = "2a0d2793b167d18600af103af810fb2bded78a61add99be786a909679d79fece"
 
 
 def run(command, evidence, timeout=1800, success=True, env=None):
@@ -560,10 +564,91 @@ def interrupt_infrastructure(consumer, aliyun):
             process.wait()
 
 
+def capture_boot_console(consumer, aliyun, label, boot_id):
+    raw_state = (consumer.directory / "state.json").read_bytes()
+    cloud = json.loads(raw_state)["deploy"]
+    region = consumer.spec["deploy"]["region"]
+    result = run([aliyun, "--region", region, "ecs", "GetInstanceConsoleOutput", "--RegionId", region,
+                  "--InstanceId", cloud["instance_id"], "--RemoveSymbols", "false"], consumer.work / label)
+    response = json.loads(result.stdout)
+    assert response["InstanceId"] == cloud["instance_id"], "console response instance differs from deployment"
+    console = base64.b64decode(response["ConsoleOutput"], validate=True)
+    assert console, "original boot console is unavailable"
+    (consumer.work / (label + ".txt")).write_bytes(console)
+    (consumer.work / (label + "-state.private.json")).write_bytes(raw_state)
+    receipt = {"instance_id": cloud["instance_id"], "observed_guest_boot_id": boot_id.decode(),
+               "provider_last_update_time": response.get("LastUpdateTime"), "captured_at": time.time(),
+               "state_sha256": hashlib.sha256(raw_state).hexdigest(),
+               "response_sha256": hashlib.sha256(result.stdout).hexdigest(),
+               "console_sha256": hashlib.sha256(console).hexdigest(), "console_bytes": len(console),
+               "attestation_or_admission_claimed": False}
+    (consumer.work / (label + "-receipt.json")).write_text(json.dumps(receipt, indent=2) + "\n")
+    return console
+
+
+def verify_boot_storage(evidence, console, journal, require_resize):
+    assert not evidence.get("error"), "filesystem evidence collection failed"
+    assert all(command["exit_code"] == 0 for command in evidence["commands"].values()), "filesystem command failed"
+    assert evidence["commands"]["crypt"]["stdout"].strip(), "encrypted mapping is missing"
+    assert evidence["commands"]["verity"]["stdout"].strip(), "verified mapping is missing"
+    def devices(rows):
+        for row in rows:
+            yield row
+            yield from devices(row.get("children", []))
+    for label in ["root", "data"]:
+        filesystem = evidence["mounts"][label]
+        assert filesystem["mount"]["fstype"] == "ext4", label + " filesystem is not ext4"
+        assert any(row["type"] == "crypt" for row in devices(filesystem["device_chain"])), label + " has no encrypted device ancestor"
+        blocks, block_bytes = filesystem["filesystem_blocks"], filesystem["filesystem_block_bytes"]
+        assert blocks > 0 and block_bytes > 0 and filesystem["statvfs_bytes"] > 0
+        assert 0 <= filesystem["device_bytes"] - blocks * block_bytes < block_bytes, label + " filesystem does not fill its device"
+        assert "error" not in filesystem["filesystem_state"].lower(), label + " filesystem records errors"
+    assert evidence["mounts"]["root"]["cryptpilot_root_device"], "mounted root is not Cryptpilot's rootfs device"
+    logs = (console + b"\n" + journal).decode(errors="replace")
+    fatal = re.compile(r"AEAD[^\n]*(?:fail|error)|Buffer I/O error|EXT4-fs[^\n]*(?:\berrors?\b(?!\s*=)|corrupt)|"
+                       r"filesystem[^\n]*(?:uncorrected|corrupt)|UNEXPECTED INCONSISTENCY|"
+                       r"I/O error|Kernel panic|Failed to (?:check|resize) ext4 filesystem|"
+                       r"Filesystem check failed with exit code|(?:fail|error)[^\n]*mount[^\n]*(?:sysroot|rootfs)", re.I)
+    assert not fatal.search(logs), "boot contains a filesystem, integrity or mount failure"
+    if require_resize:
+        # The pinned official guest logs success only after accepted e2fsck
+        # (exit 0 or 1) and resize2fs. This does not claim the repair branch ran.
+        original = console.decode(errors="replace").splitlines()
+        start = next((index for index, line in enumerate(original)
+                      if "Resizing ext4 filesystem to fill device" in line and "/dev/mapper/rootfs" in line), None)
+        assert start is not None, "first boot console lacks the actual rootfs resize operation"
+        assert any("ext4 filesystem resized successfully" in line for line in original[start + 1:]), \
+            "first boot console lacks subsequent successful fsck/resize completion"
+
+
+def cryptpilot_boot_evidence(consumer, label, boot_id, console, require_resize=False):
+    digest = consumer.ssh(label + "-cryptpilot-sha256", "sha256sum /usr/bin/cryptpilot-fde").stdout.split()[0].decode()
+    assert digest == CRYPTPILOT_GUEST_SHA256, "actual guest Cryptpilot differs from the official pinned ELF"
+    version = consumer.ssh(label + "-cryptpilot-version", "/usr/bin/cryptpilot-fde --version").stdout.decode()
+    assert version.splitlines() and version.splitlines()[0] == "cryptpilot-fde 0.9.3", "actual guest Cryptpilot version differs"
+    probe = Path(__file__).parent / "probes/cryptpilot-filesystems.py"
+    filesystem = consumer.ssh(label + "-filesystems", "python3.11 -c " + shlex.quote(probe.read_text()))
+    evidence = json.loads(filesystem.stdout)
+    assert evidence["boot_id"].encode() == boot_id, "filesystem probe ran in a different boot"
+    journal = consumer.ssh(label + "-journal", "journalctl -b --no-pager -o short-monotonic").stdout
+    verify_boot_storage(evidence, console, journal, require_resize)
+    (consumer.work / (label + "-cryptpilot-proof.json")).write_text(json.dumps({
+        "guest_sha256": digest, "guest_version": version, "boot_id": boot_id.decode(),
+        "filesystem_probe_sha256": hashlib.sha256(probe.read_bytes()).hexdigest(),
+        "filesystem_evidence_sha256": hashlib.sha256(filesystem.stdout).hexdigest(),
+        "journal_sha256": hashlib.sha256(journal).hexdigest(),
+        "first_boot_fsck_and_resize_completed": require_resize,
+        "fsck_repair_exit_one_claimed": False}, indent=2) + "\n")
+
+
 def reboot(consumer, aliyun):
     before = consumer.ssh("boot-before", "cat /proc/sys/kernel/random/boot_id").stdout.strip()
+    assert before, "guest boot ID is empty"
+    console = capture_boot_console(consumer, aliyun, "first-boot-console", before)
+    cryptpilot_boot_evidence(consumer, "first-boot", before, console, require_resize=True)
     endpoints = consumer.directory_ports("endpoints-before-reboot")
-    consumer.ssh("persistent-write", "printf REUSE_PERSISTENT > /opt/data/allinone/reboot-marker; sync")
+    marker = secrets.token_hex(32)
+    consumer.ssh("persistent-write", "printf '%s\\n' " + shlex.quote(marker) + " > /opt/data/allinone/reboot-marker; sync")
     state = json.loads((consumer.directory / "state.json").read_text())
     cloud = state["deploy"]
     region = consumer.spec["deploy"]["region"]
@@ -579,12 +664,20 @@ def reboot(consumer, aliyun):
         result = consumer.ssh("boot-after", "cat /proc/sys/kernel/random/boot_id",
                               success=False, timeout=20)
         if result.returncode == 0 and result.stdout.strip() != before:
-            consumer.ssh("persistent-after", "grep -Fx REUSE_PERSISTENT /opt/data/allinone/reboot-marker")
+            after = result.stdout.strip()
+            assert after, "guest boot ID is empty after reboot"
+            consumer.ssh("persistent-after", "grep -Fx " + shlex.quote(marker) + " /opt/data/allinone/reboot-marker")
             consumer.ssh("runtime-after", "systemctl is-active cai-allinone.service cai-ssh.service")
+            console = capture_boot_console(consumer, aliyun, "reboot-console", after)
+            cryptpilot_boot_evidence(consumer, "reboot", after, console)
             deadline = time.monotonic() + 90
             while consumer.directory_ports("endpoints-after-reboot") != endpoints:
                 assert time.monotonic() < deadline, "reboot changed peer endpoint assignments"
                 time.sleep(3)
+            (consumer.work / "encrypted-reboot-proof.json").write_text(json.dumps({
+                "boot_before": before.decode(), "boot_after": after.decode(), "force_stop": True,
+                "persistent_marker_sha256": hashlib.sha256((marker + "\n").encode()).hexdigest(),
+                "endpoints_unchanged": True, "official_guest_checked_before_and_after": True}, indent=2) + "\n")
             return
         time.sleep(10)
     raise RuntimeError(f"{consumer.service}: reboot recovery failed")

@@ -205,9 +205,12 @@ For the real cloud matrix, use the newly installed CA executables under
 `/usr/bin` (RPM) or `/usr/local/bin` (source install), set `E2E_SKIP_CARGO_BUILD=1`, `E2E_SKIP_SHELTER_INSTALL=1`,
 `E2E_MATRIX_REAL_CLOUD=1`, and `E2E_MATRIX_REFERENCE_VALUES=rekor`. The harness
 also needs `aliyun` on `PATH`; add `/usr/libexec/cagent/bin` to PATH. Supply cloud credentials separately in a root-only file.
-On ECS, `E2E_MATRIX_REPO_MIRROR=https://mirrors-ssl.aliyuncs.com/alinux` selects
-the TLS-validated internal mirror through the existing signed repository
-configuration. Record the base image ID, RPM and executable digests, installed
+Builds and E2E use the public HTTPS repositories by default; running cloud tests
+does not imply that the build host is an ECS instance. Only when the build host
+can reach the ECS internal mirror, explicitly set
+`E2E_MATRIX_REPO_MIRROR=https://mirrors-ssl.aliyuncs.com/alinux` to select it
+through the existing signed HTTPS repository configuration. Leave this variable
+unset on other build hosts. Record the base image ID, RPM and executable digests, installed
 package inventory, native tool package versions, and cleanup results before deleting the host.
 
 ### Unified acceptance matrix

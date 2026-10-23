@@ -149,6 +149,11 @@ def service_state(root: Path, service_id: str, phase: str, public_ip="", image_p
     image_path = image_dir / "image.qcow2"
     if image_present:
         image_path.write_text("image", encoding="utf-8")
+        if service_id == "matrix":
+            linked_image = service_dir / "artifacts/current.qcow2"
+            linked_image.parent.mkdir(parents=True, exist_ok=True)
+            linked_image.unlink(missing_ok=True)
+            linked_image.hardlink_to(image_path)
     source_sha = hashlib.sha256(image_path.read_bytes()).hexdigest() if image_path.exists() else "0" * 64
     build_id = f"{service_id}-agent-release"
     build_result = image_dir / "build-result.json"
@@ -255,6 +260,7 @@ def service_state(root: Path, service_id: str, phase: str, public_ip="", image_p
 
 service_state(state_dir, "matrix", "built")
 service_state(state_dir, "active-rm", "deployed")
+service_state(state_dir, "matrix-deleted", "deleted")
 service_state(connect_state_dir, "matrix-active", "active", public_ip="203.0.113.10")
 (connect_state_dir / "mesh-bundle.json").write_text(json.dumps({
     "schema": "confidential-agent/mesh-bundle/v1",
@@ -315,11 +321,15 @@ matrix_run_local_commands() {
 
   matrix_expect_success status-json status --json
   matrix_assert_json "$WORK_DIR/status-json.out"
-  matrix_expect_success status-service-json status --service matrix --json
+  jq -e 'map(.service_id) | sort == ["active-rm", "matrix-deleted"]' "$WORK_DIR/status-json.out" >/dev/null
+  matrix_expect_success status-service-json status --service active-rm --json
   matrix_assert_json "$WORK_DIR/status-service-json.out"
+  jq -e 'length == 1 and .[0].service_id == "active-rm" and .[0].phase == "deployed"' "$WORK_DIR/status-service-json.out" >/dev/null
+  matrix_expect_failure status-built "no local state for service 'matrix'" status --service matrix --json
   matrix_expect_success status-live-json status --live --json
   matrix_assert_json "$WORK_DIR/status-live-json.out"
-  matrix_assert_contains "$WORK_DIR/status-live-json.out" "service is not active or deployed"
+  jq -e 'map(select(.local.service_id == "matrix-deleted")) | length == 1 and .[0].live_error == "service is not active or deployed"' "$WORK_DIR/status-live-json.out" >/dev/null
+  jq -e 'map(select(.local.service_id == "active-rm")) | length == 1 and .[0].live_error == "service has no recorded instance address"' "$WORK_DIR/status-live-json.out" >/dev/null
 
   matrix_expect_success report-json report --json
   matrix_assert_json "$WORK_DIR/report-json.out"
@@ -332,11 +342,23 @@ matrix_run_local_commands() {
   matrix_assert_contains "$WORK_DIR/image-list-json.out" "m-matrixpublished"
   matrix_expect_success image-prune-dry image prune --dry-run
   matrix_expect_failure image-rm-active "destroy it before removing" image rm active-rm --force
+  cp "$STATE_DIR/services/matrix/state.json" "$WORK_DIR/image-rm-state-before.json"
+  cp "$STATE_DIR/services/matrix/manifest.json" "$WORK_DIR/image-rm-manifest-before.json"
   matrix_expect_success image-rm-built image rm matrix
-  test ! -d "$STATE_DIR/services/matrix" || {
-    echo "image rm did not remove built service state" >&2
-    return 1
-  }
+  python3.11 - "$STATE_DIR/services/matrix" "$WORK_DIR" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+service, work = map(Path, sys.argv[1:])
+state = json.loads((service / "state.json").read_text())
+assert not Path(state["build"]["image_path"]).exists(), "image rm retained its local payload"
+assert not (service / "artifacts/current.qcow2").exists(), "image rm retained a payload hardlink"
+assert (service / "state.json").read_bytes() == (work / "image-rm-state-before.json").read_bytes(), "image rm changed publication or management records"
+assert (service / "manifest.json").read_bytes() == (work / "image-rm-manifest-before.json").read_bytes(), "image rm changed build metadata"
+PY
+  matrix_expect_success image-list-after-rm image list --json
+  jq -e 'map(select(.service_id == "matrix")) | length > 0 and all(.image_present == false) and any(.[] | .publications[]; .image_id == "m-matrixpublished")' "$WORK_DIR/image-list-after-rm.out" >/dev/null
 
   matrix_generate_fixtures
   matrix_expect_failure image-publish-mismatch "does not match requested service" image publish wrong --spec "$WORK_DIR/matrix.yaml" --no-wait

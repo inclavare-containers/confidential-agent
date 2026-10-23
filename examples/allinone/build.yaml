@@ -10,20 +10,20 @@ build:
   resize: 80G
   repos:
     - name: alinux-os
-      baseurl: https://mirrors-ssl.aliyuncs.com/alinux/3/os/$basearch/
-      gpgkey: https://mirrors-ssl.aliyuncs.com/alinux/3/RPM-GPG-KEY-ALINUX-3
+      baseurl: https://mirrors.aliyun.com/alinux/3/os/$basearch/
+      gpgkey: https://mirrors.aliyun.com/alinux/3/RPM-GPG-KEY-ALINUX-3
     - name: alinux-updates
-      baseurl: https://mirrors-ssl.aliyuncs.com/alinux/3/updates/$basearch/
-      gpgkey: https://mirrors-ssl.aliyuncs.com/alinux/3/RPM-GPG-KEY-ALINUX-3
+      baseurl: https://mirrors.aliyun.com/alinux/3/updates/$basearch/
+      gpgkey: https://mirrors.aliyun.com/alinux/3/RPM-GPG-KEY-ALINUX-3
     - name: alinux-plus
-      baseurl: https://mirrors-ssl.aliyuncs.com/alinux/3/plus/$basearch/
-      gpgkey: https://mirrors-ssl.aliyuncs.com/alinux/3/RPM-GPG-KEY-ALINUX-3
+      baseurl: https://mirrors.aliyun.com/alinux/3/plus/$basearch/
+      gpgkey: https://mirrors.aliyun.com/alinux/3/RPM-GPG-KEY-ALINUX-3
     - name: alinux-module
-      baseurl: https://mirrors-ssl.aliyuncs.com/alinux/3/module/$basearch/
-      gpgkey: https://mirrors-ssl.aliyuncs.com/alinux/3/RPM-GPG-KEY-ALINUX-3
+      baseurl: https://mirrors.aliyun.com/alinux/3/module/$basearch/
+      gpgkey: https://mirrors.aliyun.com/alinux/3/RPM-GPG-KEY-ALINUX-3
     - name: alinux-powertools
-      baseurl: https://mirrors-ssl.aliyuncs.com/alinux/3/powertools/$basearch/
-      gpgkey: https://mirrors-ssl.aliyuncs.com/alinux/3/RPM-GPG-KEY-ALINUX-3
+      baseurl: https://mirrors.aliyun.com/alinux/3/powertools/$basearch/
+      gpgkey: https://mirrors.aliyun.com/alinux/3/RPM-GPG-KEY-ALINUX-3
   packages: [ca-certificates, curl, findutils, git, jq, libatomic, nodejs, npm, openssh-server, podman, procps-ng, python3.11, shadow-utils, tar, util-linux, xz]
   files:
     - source: ../../target/debug/cai-pep

@@ -5,13 +5,28 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import publish_fixtures
 
 
 class PublisherResumeTest(unittest.TestCase):
+    def test_resume_keeps_original_generated_or_legacy_specification(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = SimpleNamespace(work=Path(directory), command=Mock())
+            legacy = case.work / 'examples/allinone/build.yaml'
+            legacy.parent.mkdir(parents=True)
+            legacy.write_text('original legacy specification')
+            self.assertEqual(publish_fixtures.allinone_spec(case, case.work / 'cosign.key', True), legacy)
+            generated = case.work / 'init/allinone-builder/build.yaml'
+            generated.parent.mkdir(parents=True)
+            generated.write_text('original generated specification')
+            self.assertEqual(publish_fixtures.allinone_spec(case, case.work / 'cosign.key', True), generated)
+            case.command.assert_not_called()
+            self.assertEqual(legacy.read_text(), 'original legacy specification')
+            self.assertEqual(generated.read_text(), 'original generated specification')
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)

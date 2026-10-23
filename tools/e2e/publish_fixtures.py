@@ -8,10 +8,25 @@ from pathlib import Path
 import shutil
 import time
 from cloud_case import Case, ROOT, release_selection, run, write_json
+from render_case import configure_repositories
 
 # Inference has its own producer; all-in-one consumers need only this image.
 REQUIRED_PUBLICATIONS = {("allinone-builder", "release")}
 SIGNED_FIXTURE_DIRECTORIES = ("allinone",)
+
+
+def allinone_spec(case, cosign, resume=False):
+    spec = case.work / "init/allinone-builder/build.yaml"
+    if resume:
+        # Existing attempts must keep the specification whose digest was built.
+        legacy = case.work / "examples/allinone/build.yaml"
+        return legacy if not spec.exists() and legacy.is_file() else spec
+    # Native init binds CA_PEP_BIN and stages every relative application asset.
+    case.command("init", "init", "allinone", "--stage", "build", "--non-interactive",
+                 "--output-dir", case.work / "init", "--region", case.region,
+                 "--reference-values", "rekor", "--cosign-key", cosign)
+    configure_repositories(spec)
+    return spec
 
 
 def publish_variant(case, service, spec, variant, directory, records):
@@ -184,21 +199,14 @@ def main():
     records = json.loads(ledger.read_text()) if args.resume and ledger.exists() else []
     try:
         with case:
-            examples = case.work / "examples"
             if not args.resume:
-                shutil.copytree(ROOT / "examples", examples)
                 run(["openssl", "genpkey", "-algorithm", "ED25519", "-out", case.work / "publisher.key"], case.work / "publisher-key")
                 run(["openssl", "pkey", "-in", case.work / "publisher.key", "-pubout", "-out", case.work / "publisher.pem"], case.work / "publisher-public")
             run(["aliyun", "--region", case.region, "sts", "GetCallerIdentity"], case.work / "caller-identity")
             cosign = case.work / "cosign.key"
             if not args.resume:
                 case.command("cosign-key", "key", "generate-cosign", "--output-key-prefix", cosign.with_suffix(""))
-            # JSON specs can be supplied as AppSpec fixtures; normal examples stay YAML.
-            allinone = examples / "allinone" / "build.yaml"
-            if not args.resume:
-                yaml = allinone.read_text().replace("region: cn-beijing", "region: "+case.region)
-                yaml = yaml.replace("reference_values: sample", "reference_values: rekor\n  rekor:\n    cosign_key: "+str(cosign)+"\n    slsa_generator: /usr/libexec/shelter/slsa/slsa-generator")
-                allinone.write_text(yaml)
+            allinone = allinone_spec(case, cosign, args.resume)
             builds = [("allinone-builder", allinone, ["release"])]
             for service, spec, variants in builds:
                 if not (args.resume and verify_resumable_build(case, service, spec, variants)):

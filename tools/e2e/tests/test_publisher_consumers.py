@@ -58,9 +58,6 @@ class PublisherConsumersTest(unittest.TestCase):
     def test_new_producer_builds_and_publishes_release_only(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            examples = root / 'repo/examples/allinone'
-            examples.mkdir(parents=True)
-            (examples / 'build.yaml').write_text('region: cn-beijing\nreference_values: sample\n')
             work = root / 'producer'
             work.mkdir()
             state = work / 'state'
@@ -80,10 +77,10 @@ class PublisherConsumersTest(unittest.TestCase):
 
                 def command(self, label, *arguments, **_):
                     commands.append((label, arguments))
-                    if label == 'inference-init':
-                        output = Path(arguments[arguments.index('--output-dir') + 1]) / 'vllm-inference'
+                    if arguments[:2] == ('init', 'allinone'):
+                        output = Path(arguments[arguments.index('--output-dir') + 1]) / 'allinone-builder'
                         output.mkdir(parents=True)
-                        (output / 'vllm-inference.yaml').write_text('test specification')
+                        (output / 'build.yaml').write_text('test specification')
                     elif arguments[:2] == ('image', 'publish'):
                         service = arguments[2]
                         variant = arguments[arguments.index('--variant') + 1]
@@ -112,8 +109,14 @@ class PublisherConsumersTest(unittest.TestCase):
                     patch.object(publish_fixtures, 'Case', return_value=case), \
                     patch.object(publish_fixtures, 'run', side_effect=fake_run):
                 publish_fixtures.main()
-            self.assertFalse(any(args[0] == 'init' for _, args in commands))
+            init = next(args for _, args in commands if args[0] == 'init')
+            self.assertEqual(init[:2], ('init', 'allinone'))
+            self.assertEqual(init[init.index('--stage') + 1], 'build')
+            self.assertEqual(init[init.index('--reference-values') + 1], 'rekor')
+            self.assertEqual(init[init.index('--cosign-key') + 1], work / 'cosign.key')
             self.assertEqual(len([args for _, args in commands if args[0] == 'build']), 1)
+            build = next(args for _, args in commands if args[0] == 'build')
+            self.assertEqual(build[build.index('--spec') + 1], work / 'init/allinone-builder/build.yaml')
             publications = [args for _, args in commands if args[:2] == ('image', 'publish')]
             self.assertEqual(len(publications), 1)
             self.assertEqual(publications[0][2], 'allinone-builder')
