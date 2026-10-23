@@ -97,12 +97,12 @@ def main():
                 case.command("build", "build", "--spec", spec, timeout=28800)
                 if not verify_resumable_build(case, "vllm-inference", spec, ["release", "debug"]):
                     raise RuntimeError("inference build did not produce both variants")
-            identity = json.loads(run(["aliyun", "--region", case.region, "sts", "GetCallerIdentity"],
-                                      case.work / "caller-identity").stdout)
+            run(["aliyun", "--region", case.region, "sts", "GetCallerIdentity"],
+                case.work / "caller-identity")
             ledger = case.work / "published-images.json"
             records = json.loads(ledger.read_text()) if args.resume and ledger.exists() else []
             publish_variant(case, "vllm-inference", spec, "release", case.work / "inference-release",
-                            identity["AccountId"], records)
+                            records)
             case.checks.update(both_variants_verified=True, signed_release_published=True,
                                debug_credentials_distributed=False)
     except BaseException:

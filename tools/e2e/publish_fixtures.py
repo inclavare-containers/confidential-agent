@@ -14,7 +14,7 @@ REQUIRED_PUBLICATIONS = {("allinone-builder", "release")}
 SIGNED_FIXTURE_DIRECTORIES = ("allinone",)
 
 
-def publish_variant(case, service, spec, variant, directory, account, records):
+def publish_variant(case, service, spec, variant, directory, records):
     """Publish once and durably record ownership before exporting the envelope."""
     case.command("publish-"+service+"-"+variant, "image", "publish", service,
                  "--spec", spec, "--region", case.region, "--variant", variant, timeout=14400)
@@ -30,7 +30,7 @@ def publish_variant(case, service, spec, variant, directory, account, records):
     record_publication_snapshots(case)
     directory.mkdir(mode=0o700, exist_ok=True)
     case.command("export-"+service+"-"+variant, "image", "export", service,
-                 "--account-id", account, "--signing-key", case.work / "publisher.key",
+                 "--signing-key", case.work / "publisher.key",
                  "--output", directory / "image-release.json", "--region", case.region,
                  "--variant", variant)
     shutil.copyfile(case.work / "publisher.pem", directory / "publisher.pem")
@@ -189,8 +189,7 @@ def main():
                 shutil.copytree(ROOT / "examples", examples)
                 run(["openssl", "genpkey", "-algorithm", "ED25519", "-out", case.work / "publisher.key"], case.work / "publisher-key")
                 run(["openssl", "pkey", "-in", case.work / "publisher.key", "-pubout", "-out", case.work / "publisher.pem"], case.work / "publisher-public")
-            identity = json.loads(run(["aliyun", "--region", case.region, "sts", "GetCallerIdentity"], case.work / "caller-identity").stdout)
-            account = identity["AccountId"]
+            run(["aliyun", "--region", case.region, "sts", "GetCallerIdentity"], case.work / "caller-identity")
             cosign = case.work / "cosign.key"
             if not args.resume:
                 case.command("cosign-key", "key", "generate-cosign", "--output-key-prefix", cosign.with_suffix(""))
@@ -205,7 +204,7 @@ def main():
                 if not (args.resume and verify_resumable_build(case, service, spec, variants)):
                     case.command("build-"+service, "build", "--spec", spec, timeout=28800)
                 for variant in variants:
-                    publish_variant(case, service, spec, variant, case.work / "allinone", account, records)
+                    publish_variant(case, service, spec, variant, case.work / "allinone", records)
             # Older producers may own inference publications too. Retain every
             # owned entry for cleanup when resuming, without rebuilding them.
             case.checks["signed_images_published"] = REQUIRED_PUBLICATIONS <= {

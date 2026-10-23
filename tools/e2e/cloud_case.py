@@ -86,10 +86,11 @@ def release_selection(directory, region):
     directory = Path(directory).resolve()
     envelope = json.loads((directory / "image-release.json").read_text())
     release = json.loads(base64.b64decode(envelope["payload"]))
-    mapping = next(value for value in release["images"] if value["region"] == region)
+    if not any(value["region"] == region for value in release["images"]):
+        raise ValueError("signed release has no image mapping for region " + region)
     return {"release": str(directory / "image-release.json"),
             "trusted_key": str(directory / "publisher.pem"),
-            "manifest": release["manifest"]["manifest_digest"], "account_id": mapping["account_id"]}
+            "manifest": release["manifest"]["manifest_digest"]}
 
 
 class Case:

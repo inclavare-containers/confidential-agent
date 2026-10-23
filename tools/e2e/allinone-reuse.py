@@ -400,6 +400,26 @@ def reject_invalid_release(consumer):
     spec = consumer.spec
     altered_release = consumer.work / "altered-release.json"
     envelope = json.loads(Path(spec["deploy"]["image"]["release"]).read_text())
+    release = json.loads(base64.b64decode(envelope["payload"]))
+    mapping = next(value for value in release["images"] if value["region"] == spec["deploy"]["region"])
+    # Old specs can retain an account field, but image authorization comes from
+    # the authenticated release mapping. Rendering does not allocate resources.
+    legacy = json.loads(json.dumps(spec))
+    legacy["service"]["id"] += "-legacy-account"
+    legacy["deploy"]["image"]["account_id"] = "0"
+    legacy_path = consumer.spec_path.parent / "legacy-account.json"
+    legacy_path.write_text(json.dumps(legacy))
+    consumer.command("accept-legacy-account", "deploy", "--spec", str(legacy_path), "--render-only")
+    legacy_directory = consumer.state / "services" / legacy["service"]["id"]
+    rendered = json.loads((legacy_directory / "manifest.json").read_text())
+    selected_image = spec["deploy"]["image"].get("image_id", mapping["image_id"])
+    assert rendered["image"]["image_id"] == selected_image, "legacy account changed the authenticated image selection"
+    assert not (legacy_directory / "state.json").exists(), "render-only recorded an infrastructure deployment"
+    altered_mapping = consumer.work / "altered-mapping-release.json"
+    mapping_envelope = json.loads(json.dumps(envelope))
+    mapping["image_id"] += "-mismatch"
+    mapping_envelope["payload"] = base64.b64encode(json.dumps(release).encode()).decode()
+    altered_mapping.write_text(json.dumps(mapping_envelope))
     signature = envelope["signatures"][0]["sig"]
     envelope["signatures"][0]["sig"] = ("A" if signature[0] != "A" else "B") + signature[1:]
     altered_release.write_text(json.dumps(envelope))
@@ -409,16 +429,20 @@ def reject_invalid_release(consumer):
         consumer.work / "wrong-publisher-key")
     run(["openssl", "pkey", "-in", str(wrong_key), "-pubout", "-out", str(wrong_public)],
         consumer.work / "wrong-publisher-public")
-    for field, wrong in [("manifest", "sha256:" + "0" * 64), ("account_id", "0"),
-                         ("release", str(altered_release)), ("trusted_key", str(wrong_public))]:
+    # image_id in an AppSpec is an explicit image override. The mapping negative
+    # instead alters publisher-authenticated payload bytes without resigning.
+    for label, field, wrong in [("manifest", "manifest", "sha256:" + "0" * 64),
+                                ("image_id", "release", str(altered_mapping)),
+                                ("release", "release", str(altered_release)),
+                                ("trusted_key", "trusted_key", str(wrong_public))]:
         invalid = json.loads(json.dumps(spec))
-        invalid["service"]["id"] += "-invalid-" + field.replace("_", "-")
+        invalid["service"]["id"] += "-invalid-" + label.replace("_", "-")
         invalid["deploy"]["image"][field] = wrong
-        path = consumer.spec_path.parent / f"invalid-{field}.json"
+        path = consumer.spec_path.parent / f"invalid-{label}.json"
         path.write_text(json.dumps(invalid))
-        result = consumer.command(f"reject-{field}", "deploy", "--spec", str(path),
+        result = consumer.command(f"reject-{label}", "deploy", "--spec", str(path),
                                   "--render-only", success=False)
-        assert result.returncode != 0, f"accepted invalid {field}"
+        assert result.returncode != 0, f"accepted invalid {label}"
         assert b"authentication failed" in result.stderr, "failed outside release verification"
         rejected = consumer.state / "services" / invalid["service"]["id"]
         assert not (rejected / "state.json").exists()

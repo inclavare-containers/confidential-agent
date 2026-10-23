@@ -41,7 +41,7 @@ class PublisherConsumersTest(unittest.TestCase):
             for name in ['allinone']:
                 fixture = source / name
                 fixture.mkdir(parents=True)
-                payload = {'images': [{'region': 'cn-beijing', 'account_id': 'test-account'}],
+                payload = {'images': [{'region': 'cn-beijing', 'image_id': 'm-published'}],
                            'manifest': {'manifest_digest': 'sha256:' + 'a' * 64}}
                 (fixture / 'image-release.json').write_text(json.dumps({
                     'payload': base64.b64encode(json.dumps(payload).encode()).decode()}))
@@ -91,6 +91,8 @@ class PublisherConsumersTest(unittest.TestCase):
                             'region': 'cn-beijing', 'variant': variant, 'image_id': 'm-test-' + service,
                         }}}}
                     elif arguments[:2] == ('image', 'export'):
+                        if '--account-id' in arguments:
+                            raise AssertionError('image export no longer accepts --account-id')
                         Path(arguments[arguments.index('--output') + 1]).write_text('{}')
 
                 def local_state(self, service):

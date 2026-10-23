@@ -143,7 +143,7 @@ class InferenceFixturesTest(unittest.TestCase):
             case.command.side_effect = command
             with patch.object(publish_fixtures, 'record_publication_snapshots') as inventory:
                 with self.assertRaisesRegex(RuntimeError, 'export failed'):
-                    publish_fixtures.publish_variant(case, 'inference', root / 'spec', 'release', root / 'release', 'account', [])
+                    publish_fixtures.publish_variant(case, 'inference', root / 'spec', 'release', root / 'release', [])
             inventory.assert_called_once_with(case)
 
     def test_debug_deployment_must_finish_before_removing_build_artifacts(self):
