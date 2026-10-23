@@ -1,7 +1,7 @@
 {
   "file": "shelter-0.3.2-1.al8.x86_64.rpm",
-  "source_commit": "02cce8be27ec17dbf99ea62a41800fcb813d6621",
-  "source_archive_sha256": "e87505e972fed0ed7ec20bb9e61f0d26e6c5fbcbf39607ef1c1704509bf33527",
-  "sha256": "f09c6a4e8c517f3456f256f903ad4475dab8b4fb938d2dda6bcb54160dec4e2d",
-  "payload_sha256": "cb73123d1f0cd90de45f512b73a8f2140b309cce7bdc0bb6fe54c0e40ffe77f8"
+  "source_commit": "36a792a913ba3bf86612e3999ee262de7ec4448c",
+  "source_archive_sha256": "2c6b3253b333cf07a675e0f3ad243295cace4339f1739333c95fefbd7db4b0c6",
+  "sha256": "30f239e558cf575fbacb0d6bab1d863f5cbe6b04c1dfa430eaf18fa29819f549",
+  "payload_sha256": "5d106672b1e60b49fbb4cdb485bab73a2184888aca930135af533883a87707f4"
 }
