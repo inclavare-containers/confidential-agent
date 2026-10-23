@@ -21,10 +21,11 @@ cosign、aliyun、ossutil，GitHub 下载默认先尝试国内代理再回退官
 使用 `--locked --offline`，不会再次下载依赖。
 
 打包输出目录同时包含配套 Shelter RPM、`shelter-rpm.json` 和两包的
-`SHA256SUMS`。Shelter 当前来自提交 `429ed8a15cadc88f753b4055d659828d669069d7`，
+`SHA256SUMS`。Shelter 当前来自提交 `a9708cf9e8c26c139e38fe5227071976b058680f`，
 在主线运行时和 VMM 基础上保留可移植镜像发布、可选 manifest 版本固定、
 ext4 稀疏文件提取与副本生命周期功能。CA 使用显式 v1 构建配置和 v2 运行时配置。
 内置 Cryptpilot guest 使用官方 0.9.3，CA 安装预检要求 host 和 guest 均为 0.9.3。
+Cryptpilot 启动配置直接使用最终根设备 `/dev/mapper/rootfs`，避免标签扫描探测内部增量设备。
 `hack/shelter-rpm.json` 记录源码提交、RPM SHA-256 和 payload 摘要；
 准备 cagent 源码包时会核对该记录与实际 Shelter RPM。
 
