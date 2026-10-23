@@ -398,7 +398,7 @@ def main():
                 "fixture_cases": [name for name, case in cases.items() if case.get("kind") == "fixture"],
                 "rekor_url": rekor_url(),
                 "build_jobs": args.build_jobs, "build_slot_dir": environment["E2E_BUILD_SLOT_DIR"]}
-    for name in ["CA_BIN", "CA_AGENTD_BIN", "CA_GATEWAY_BIN", "CA_SHELTER_BIN"]:
+    for name in ["CA_BIN", "CA_AGENTD_BIN", "CA_GATEWAY_BIN", "CA_PEP_BIN", "CA_SHELTER_BIN"]:
         path = Path(environment.get(name, "/missing"))
         if path.is_file():
             metadata["binary_digests"][name] = file_digest(path)
