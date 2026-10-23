@@ -147,7 +147,11 @@ def remove_local_images(work, environment, logfile):
         if manifest.exists():
             record["image"] = json.loads(manifest.read_text()).get("image")
         evidence.append(record)
-        result = subprocess.run([ca, "--state-dir", target["state_dir"], "image", "rm", target["service"], "--force"],
+        if state.get("build", {}).get("remote") is True:
+            command = ["forget", target["service"]]
+        else:
+            command = ["image", "rm", target["service"], "--force"]
+        result = subprocess.run([ca, "--state-dir", target["state_dir"], *command],
                                 env=environment, stdout=logfile, stderr=logfile, timeout=300)
         if result.returncode:
             raise RuntimeError("deleted deployment's local image cleanup failed")
@@ -237,7 +241,11 @@ class Suite:
             if not cleaned and not deferred:
                 cleaned = recover_cleanup(work, environment, log)
             if cleaned and not deferred and not case.get("retains_local_images"):
-                remove_local_images(work, environment, log)
+                try:
+                    remove_local_images(work, environment, log)
+                except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as error:
+                    result["local_cleanup_error"] = str(error)
+                    cleaned = False
             passed = code == 0 and result.get("passed") is True and (cleaned or deferred) and not timed_out
             result.update(status="passed" if passed else "failed", exit_code=code,
                           elapsed_seconds=round(time.time() - started, 2),

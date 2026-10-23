@@ -18,6 +18,46 @@ spec.loader.exec_module(suite)
 
 
 class SuiteTest(unittest.TestCase):
+    def test_deleted_image_cleanup_uses_typed_build_origin(self):
+        for remote in (True, False, None, "true"):
+            for phase in ("active", "deleted"):
+                with self.subTest(remote=remote, phase=phase), tempfile.TemporaryDirectory() as directory:
+                    work = Path(directory)
+                    service = work / "state/services/example"
+                    service.mkdir(parents=True)
+                    suite.write_json(service / "state.json", {
+                        "phase": phase, "build": {"remote": remote}, "deploy": {"run_id": "owned"}})
+                    suite.write_json(work / "destroy-targets.json", [
+                        {"state_dir": str(work / "state"), "service": "example"}])
+                    with (work / "cleanup.log").open("wb") as log, patch.object(suite.subprocess, "run") as run:
+                        run.return_value.returncode = 0
+                        suite.remove_local_images(work, {"CA_BIN": "/installed/ca"}, log)
+                        if phase == "active":
+                            run.assert_not_called()
+                        else:
+                            expected = ["forget", "example"] if remote is True else ["image", "rm", "example", "--force"]
+                            self.assertEqual(run.call_args.args[0], ["/installed/ca", "--state-dir", str(work / "state"), *expected])
+                    records = json.loads((work / "deleted-deployments.json").read_text())
+                    self.assertEqual(len(records), int(phase == "deleted"))
+
+    def test_local_cleanup_failure_preserves_primary_case_result(self):
+        writer = "import os,json,pathlib; pathlib.Path(os.environ['E2E_WORK_DIR'],'case-result.json').write_text(json.dumps({'passed':False,'error':'original drift failure','checks':{'model':True},'cleanup_complete':True})); raise SystemExit(7)"
+        with tempfile.TemporaryDirectory() as directory:
+            runner = suite.Suite(Path(directory), {}, dict(os.environ), 1, 1)
+            try:
+                with patch.object(suite, "remove_local_images", side_effect=RuntimeError("local cleanup failed")):
+                    result = runner.execute("original-failure", {"command": [sys.executable, "-c", writer]})
+                self.assertEqual(result["status"], "failed")
+                self.assertEqual(result["exit_code"], 7)
+                self.assertEqual(result["error"], "original drift failure")
+                self.assertEqual(result["checks"], {"model": True})
+                self.assertEqual(result["local_cleanup_error"], "local cleanup failed")
+                self.assertFalse(result["cleanup_complete"])
+                self.assertEqual(json.loads((Path(directory) / "original-failure/case-result.json").read_text()), result)
+            finally:
+                for pool in runner.pools.values():
+                    pool.shutdown()
+
     def test_prebuilt_case_skips_cargo_but_still_requires_runtime_tools(self):
         writer = "import os,json,pathlib; pathlib.Path(os.environ['E2E_WORK_DIR'],'case-result.json').write_text(json.dumps({'passed':True,'cleanup_complete':True}))"
         for prebuilt, required, expected in [
