@@ -17,7 +17,7 @@ spec.loader.exec_module(reuse)
 
 
 class PublicationRetirementProbeTest(unittest.TestCase):
-    def probe(self, mutation=None):
+    def probe(self, mutation=None, public_export=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             service = root / "state/services/consumer"
@@ -28,6 +28,9 @@ class PublicationRetirementProbeTest(unittest.TestCase):
                         "build": {"published": {"release": {"status": "available", "retiring": False,
                             "image_id": "m-shared", "owned": True, "exported": True, "oss_cleaned": False,
                             "import_task_id": "task-owned", "import_snapshot_ids": ["snapshot-owned"]}}}}
+            if public_export:
+                original["build"]["published"]["release"].pop("import_task_id")
+                original["build"]["published"]["release"].pop("import_snapshot_ids")
             publication.write_text(json.dumps(original))
             calls = []
 
@@ -46,6 +49,7 @@ class PublicationRetirementProbeTest(unittest.TestCase):
                 # Native retirement saves intent before the first cloud call;
                 # credential rejection leaves availability and resource IDs intact.
                 state["build"]["published"]["release"]["retiring"] = True
+                state["build"]["published"]["release"].setdefault("import_snapshot_ids", [])
                 if mutation:
                     mutation(state["build"]["published"]["release"])
                 state_file.write_text(json.dumps(state))
@@ -67,6 +71,9 @@ class PublicationRetirementProbeTest(unittest.TestCase):
 
     def test_failed_retirement_keeps_available_image_and_retry_custody(self):
         self.probe()
+
+    def test_public_export_keeps_schema_default_empty_snapshot_custody(self):
+        self.probe(public_export=True)
 
     def test_failed_retirement_must_not_lose_intent_or_resource_identity(self):
         changes = {"retiring": False, "status": "failed", "image_id": None, "owned": False,

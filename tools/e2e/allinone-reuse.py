@@ -881,6 +881,8 @@ def verify_publication_cleanup(consumers, publication_state, aliyun):
     # Use a local publication fixture to isolate reference protection from the
     # export-retention flag. Dummy credentials keep every delete unauthorized.
     entry.update(exported=False, oss_cleaned=True)
+    # Public exports omit private snapshot custody; serde defaults it to [].
+    entry.setdefault("import_snapshot_ids", [])
     publisher.update(service_id="reuse-test-publisher", phase="built")
     publisher["build"]["published"] = entries
     publisher["deploy"]["published_image_id"] = None
