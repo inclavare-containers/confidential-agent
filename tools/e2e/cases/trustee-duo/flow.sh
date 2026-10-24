@@ -287,7 +287,7 @@ assert_local_lifecycle_status() {
   local deleted_csv="$2"
   local label="$3"
   local out="$WORK_DIR/status-$label.json"
-  ca_capture "$STATE_DIR" "$out" "$WORK_DIR/status-$label.err" status --json --live
+  ca_capture "$STATE_DIR" "$out" "$WORK_DIR/status-$label.err" status --json --live || return
   record_file_as_block "Local/live status ($label):" "$out" json
   python3.11 - "$out" "$active_csv" "$deleted_csv" <<'PY'
 import json
@@ -301,6 +301,8 @@ seen = set()
 for item in items:
     local = item.get("local") or item
     service_id = local.get("service_id")
+    if service_id in seen:
+        raise SystemExit(f"duplicate service in status: {service_id}")
     seen.add(service_id)
     phase = local.get("phase")
     if service_id in active:
@@ -309,6 +311,11 @@ for item in items:
         daemon = item.get("daemon") or {}
         if daemon.get("phase") != "running" or daemon.get("app_ready") is not True or daemon.get("mesh_ready") is not True:
             raise SystemExit(f"{service_id} daemon is not ready: {daemon}")
+        generation = local.get("mesh_generation")
+        if generation is None or daemon.get("mesh_generation") != generation:
+            raise SystemExit(f"{service_id} daemon has not applied local mesh generation {generation}")
+        if item.get("live_error"):
+            raise SystemExit(f"{service_id} live status failed: {item['live_error']}")
     elif service_id in deleted:
         if phase != "deleted":
             raise SystemExit(f"{service_id} phase is {phase}, expected deleted")
@@ -317,6 +324,20 @@ for item in items:
 if seen != active | deleted:
     raise SystemExit(f"status services mismatch: {seen} != {active | deleted}")
 PY
+}
+
+wait_for_local_lifecycle_status() {
+  local active_csv="$1" deleted_csv="$2" label="$3" timeout="$4"
+  local deadline=$((SECONDS + timeout)) attempt=0
+  while (( SECONDS < deadline )); do
+    attempt=$((attempt + 1))
+    if assert_local_lifecycle_status "$active_csv" "$deleted_csv" "$label-attempt-$attempt"; then
+      return 0
+    fi
+    sleep 5
+  done
+  echo "timed out waiting for joint local/live lifecycle status: $label" >&2
+  return 1
 }
 
 run_openclaw_conversation() {
@@ -564,13 +585,11 @@ run_case() {
   openclaw_generation_one="$(state_value "$STATE_DIR" openclaw mesh_generation)"
 
   deploy_with_trustee_access "$STATE_DIR" codex "$CODEX_DIR/codex.yaml" "$deploy_timeout"
-  wait_for_status_service_ready "$STATE_DIR" openclaw 1200
-  wait_for_status_service_ready "$STATE_DIR" codex 1200
   capture_service_cloud codex
   assert_independent_service_infra openclaw codex
   assert_trustee_security_group
   assert_trustee_status "$STATE_DIR" "codex,openclaw" "after-duo-deploy"
-  assert_local_lifecycle_status "codex,openclaw" "" "duo-active"
+  wait_for_local_lifecycle_status "codex,openclaw" "" "duo-active" 1200
   local openclaw_generation_two codex_generation_two
   openclaw_generation_two="$(state_value "$STATE_DIR" openclaw mesh_generation)"
   codex_generation_two="$(state_value "$STATE_DIR" codex mesh_generation)"
@@ -602,8 +621,7 @@ run_case() {
   trustee_remove_service_access codex
   assert_service_cloud_gone codex 600
   assert_trustee_status "$STATE_DIR" "openclaw" "after-codex-destroy"
-  wait_for_status_service_ready "$STATE_DIR" openclaw 600
-  assert_local_lifecycle_status "openclaw" "codex" "codex-deleted"
+  wait_for_local_lifecycle_status "openclaw" "codex" "codex-deleted" 600
   local policy_after_codex_destroy openclaw_generation_after_codex
   policy_after_codex_destroy="$(jq -er '.resource_policy_sha256' "$WORK_DIR/trustee-status-after-codex-destroy.json")"
   [[ "$policy_after_codex_destroy" != "$policy_before_codex_destroy" ]]
