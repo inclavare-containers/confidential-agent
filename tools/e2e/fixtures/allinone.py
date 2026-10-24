@@ -90,6 +90,15 @@ def generate(directory, image, mode, region, prefix, *, harnesses=None):
             if not isinstance(selected, str) or not selected.strip() or selected.lower() in {
                 "auto", "default", "ultimate", "performance", "fast", "efficient", "lite"}:
                 raise RuntimeError("Qoder requires a fixed model selected through /model or E2E_QODER_MODEL; automatic routing is not a model acceptance test")
+            # Qoder 1.1.70 migrates this legacy field even for --version. Emit
+            # its current schema before CA hashes the immutable resource.
+            # An existing per-model preference takes precedence, as in Qoder.
+            native_model = settings.get("model") or {}
+            native_name = native_model.get("name")
+            if isinstance(native_name, str) and native_name and "contextWindow" in native_model:
+                context_window = native_model.pop("contextWindow")
+                native_model.setdefault("preferences", {}).setdefault(native_name, {}).setdefault(
+                    "contextWindow", context_window)
             settings.setdefault("general", {})["enableAutoUpdate"] = False
             resource("qoder-settings.json", settings, "/opt/data/allinone/home/.qoder/settings.json")
             command = "cai-agent --model " + shlex.quote(selected) + " -p " + shlex.quote(PROMPT)

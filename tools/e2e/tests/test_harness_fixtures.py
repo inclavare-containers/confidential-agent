@@ -72,6 +72,33 @@ class HarnessFixturesTest(unittest.TestCase):
                                     harnesses=["codex", "opencode", "hermes"])
             self.assertEqual([fixture.name for fixture in fixtures], ["codex", "opencode", "hermes"])
 
+    def test_qoder_migrates_legacy_context_before_binding_resource_digest(self):
+        for preferences in [{}, {"native-model": {"contextWindow": 262144, "other": "kept"}}]:
+            with self.subTest(preferences=preferences), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                auth = root / "native"
+                auth.mkdir()
+                settings = {"model": {"name": "native-model", "contextWindow": 131072,
+                                      "preferences": preferences},
+                            "credential": "opaque-test-credential"}
+                original = json.dumps(settings)
+                (auth / "settings.json").write_text(original)
+                with patch.dict(os.environ, {"DASHSCOPE_API_KEY": "fixture-key",
+                        "QODER_PERSONAL_ACCESS_TOKEN": "fixture-account",
+                        "E2E_QODER_NATIVE_CONFIG": str(auth),
+                        "E2E_QODER_MODEL": "explicit-model"}, clear=True):
+                    [fixture] = generate(root / "fixtures", {}, "challenge", "cn-beijing", "test",
+                                         harnesses=["qodercli"])
+                generated = json.loads((fixture / "qoder-settings.json").read_text())
+                self.assertNotIn("contextWindow", generated["model"])
+                self.assertEqual(generated["model"]["preferences"]["native-model"],
+                                 preferences.get("native-model", {"contextWindow": 131072}))
+                self.assertEqual(generated["credential"], settings["credential"])
+                self.assertEqual((auth / "settings.json").read_text(), original)
+                self.assertIn("--model explicit-model", json.loads((fixture / "probe.json").read_text())["command"])
+                spec = json.loads((fixture / "appspec.json").read_text())
+                self.assertFalse(spec["resources"]["qoder-settings_json"]["mutable"])
+
 
 if __name__ == "__main__":
     unittest.main()
