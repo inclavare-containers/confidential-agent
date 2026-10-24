@@ -208,11 +208,18 @@ class Consumer:
 
     def inject_application_error(self, label, cloud):
         """A deliberately broken app may fail readiness after successful delivery."""
+        readiness = self.directory / "replica-readiness.json"
+        identity = lambda value: (value.st_dev, value.st_ino, value.st_mtime_ns, value.st_ctime_ns, value.st_size)
+        before = identity(readiness.stat()) if readiness.exists() else None
+        started_ns = time.time_ns()
         result = self.command(label, "inject", "--spec", str(self.spec_path),
                               "--target-ip", cloud["public_ip"], timeout=600, success=False)
         readiness = self.directory / "replica-readiness.json"
-        raw = readiness.read_bytes() if readiness.exists() else None
+        metadata = readiness.stat() if readiness.exists() else None
+        raw = readiness.read_bytes() if metadata is not None else None
         if raw is not None:
+            after = readiness.stat()
+            assert (after.st_ino, after.st_mtime_ns, after.st_size) == (metadata.st_ino, metadata.st_mtime_ns, metadata.st_size), "readiness changed during capture"
             with (self.work / (label + "-replica-readiness.json")).open("xb") as evidence:
                 evidence.write(raw)
         if result.returncode:
@@ -220,6 +227,18 @@ class Consumer:
                         "inspect replica-readiness.json and resume delivery with the committed inputs").encode()
             errors = [line for line in result.stderr.splitlines() if line.startswith(b"Error:")]
             assert result.returncode == 1 and errors == [expected], "unexpected negative-injection failure"
+            state = json.loads((self.directory / "state.json").read_text())
+            generation = state.get("mesh_generation")
+            with (self.work / (label + "-readiness-generation.json")).open("x") as evidence:
+                evidence.write(json.dumps({"inject_started_ns": started_ns,
+                    "readiness_mtime_ns": metadata.st_mtime_ns if metadata else None,
+                    "readiness_before": before, "readiness_after": identity(metadata) if metadata else None,
+                    "state_service_id": state.get("service_id"), "mesh_generation": generation}) + "\n")
+            # Filesystem timestamps may lag wall clock by a clock tick; identity
+            # must also change, so a recent pre-existing snapshot cannot pass.
+            assert (metadata is not None and identity(metadata) != before
+                    and metadata.st_mtime_ns >= started_ns - 1_000_000_000), "stale pre-injection readiness"
+            assert state.get("service_id") == self.service and type(generation) is int, "missing current service generation"
             replicas = json.loads(raw) if raw is not None else []
             assert len(replicas) == 1, "negative injection lacks exact replica readiness"
             node = replicas[0]
@@ -229,6 +248,7 @@ class Consumer:
                     and not node.get("live_error")
                     and daemon.get("service_id") == self.service
                     and daemon.get("mesh_ready") is True
+                    and daemon.get("mesh_generation") == generation
                     and daemon.get("app_ready") is False), "failure is not isolated to the deliberately broken app"
         return result
 

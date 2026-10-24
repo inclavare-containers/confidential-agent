@@ -16,7 +16,7 @@ spec.loader.exec_module(reuse)
 
 
 class NegativeApplicationInjectionTest(unittest.TestCase):
-    def make(self, directory, code=1, change=None, missing=False, error=None):
+    def make(self, directory, code=1, change=None, missing=False, error=None, refresh=True):
         root = Path(directory)
         consumer = object.__new__(reuse.Consumer)
         consumer.work = root
@@ -27,14 +27,22 @@ class NegativeApplicationInjectionTest(unittest.TestCase):
         cloud = {'public_ip': '192.0.2.1', 'instance_id': 'i-owned'}
         node = {'address': cloud['public_ip'], 'instance_id': cloud['instance_id'],
                 'live_error': None, 'daemon': {'service_id': consumer.service,
-                'mesh_ready': True, 'app_ready': False}}
+                'mesh_ready': True, 'app_ready': False, 'mesh_generation': 5}}
         if change:
             change(node)
         if not missing:
             (consumer.directory / 'replica-readiness.json').write_text(json.dumps([node]))
         err = ("Error: not all replicas of 'test-service' became ready within 300s; "
                "inspect replica-readiness.json and resume delivery with the committed inputs\n").encode()
-        consumer.command = Mock(return_value=subprocess.CompletedProcess([], code, b'', err if error is None else error))
+        (consumer.directory / 'state.json').write_text(json.dumps({'service_id': consumer.service, 'mesh_generation': 5}))
+        def invoke(*args, **kwargs):
+            path = consumer.directory / 'replica-readiness.json'
+            if refresh and path.exists():
+                pending = path.with_suffix('.pending')
+                pending.write_bytes(path.read_bytes())
+                pending.replace(path)
+            return subprocess.CompletedProcess([], code, b'', err if error is None else error)
+        consumer.command = Mock(side_effect=invoke)
         return consumer, cloud
 
     def test_only_app_unready_is_accepted_and_original_readiness_preserved(self):
@@ -51,6 +59,7 @@ class NegativeApplicationInjectionTest(unittest.TestCase):
 
     def test_other_failure_causes_and_targets_are_rejected(self):
         changes = [lambda n: n['daemon'].update(mesh_ready=False),
+                   lambda n: n['daemon'].update(mesh_generation=4),
                    lambda n: n['daemon'].update(app_ready=True),
                    lambda n: n['daemon'].update(service_id='other'),
                    lambda n: n.update(live_error='connection reset'),
@@ -79,6 +88,12 @@ class NegativeApplicationInjectionTest(unittest.TestCase):
                     (c.directory / 'replica-readiness.json').write_bytes(value)
                 with self.assertRaises((AssertionError, ValueError)):
                     c.inject_application_error('invalid', cloud)
+
+    def test_same_shape_pre_injection_readiness_cannot_hide_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            c, cloud = self.make(directory, refresh=False)
+            with self.assertRaisesRegex(AssertionError, 'stale'):
+                c.inject_application_error('invalid', cloud)
 
     def test_success_can_proceed_to_separate_delivery_and_negative_checks(self):
         with tempfile.TemporaryDirectory() as directory:
