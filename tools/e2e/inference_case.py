@@ -253,10 +253,11 @@ def wrong_model_key(case, service, spec, instance, front):
     finally:
         source.write_bytes(original)
         case.command("restore-key-delivery", "inject", "--spec", spec, "--target-ip", address)
-    if instance_status(case, instance) == "Stopped":
-        case.api("ecs", "StartInstance", InstanceId=instance)
-    else:
-        case.api("ecs", "RebootInstance", InstanceId=instance, ForceStop="true")
+    # Reboot acknowledgement can precede shutdown and still expose the old
+    # daemon's ready state. Complete the stop before checking cold-boot recovery.
+    if instance_status(case, instance) == "Running":
+        case.api("ecs", "StopInstance", InstanceId=instance, ForceStop="true")
+    start_stopped_instance(case, instance)
     eventually(lambda: bool(validate_live(case, service, 1)), 7200)
     infer(front)
     case.checks["wrong_model_key_rejected"] = True
