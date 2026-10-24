@@ -876,6 +876,8 @@ def verify_publication_cleanup(consumers, publication_state, aliyun):
                if value.get("image_id") == image}
     assert len(entries) == 1, "publication evidence does not identify the selected image"
     entry, = entries.values()
+    publication_key, = entries
+    assert entry["status"] == "available" and not entry.get("retiring", False)
     # Use a local publication fixture to isolate reference protection from the
     # export-retention flag. Dummy credentials keep every delete unauthorized.
     entry.update(exported=False, oss_cleaned=True)
@@ -902,7 +904,13 @@ def verify_publication_cleanup(consumers, publication_state, aliyun):
     failed = consumer.command("cleanup-denied-cloud-delete", *base, "--force", success=False, env=denied_env)
     assert failed.returncode and b"partially failed" in failed.stderr
     written = json.loads(state_file.read_text())["build"]["published"]
-    assert any(entry["status"] == "failed" and entry["image_id"] == image for entry in written.values())
+    # Retirement intent is persisted independently from publication availability.
+    # Denied credentials must retain the same image and cleanup custody for retry.
+    retained = written.get(publication_key)
+    assert set(written) == set(entries) and retained is not None
+    assert retained.get("retiring") is True
+    for field in ["status", "image_id", "owned", "oss_cleaned", "import_task_id", "import_snapshot_ids"]:
+        assert retained.get(field) == entry.get(field), "denied retirement changed " + field
     region = consumer.spec["deploy"]["region"]
     result = run([aliyun, "--region", region, "ecs", "DescribeImages", "--RegionId", region, "--ImageId", image], consumer.work / "cleanup-shared-image-preserved")
     assert len(json.loads(result.stdout)["Images"]["Image"]) == 1
