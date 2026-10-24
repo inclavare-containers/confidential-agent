@@ -206,6 +206,32 @@ class Consumer:
         evidence["cloud_console_is_cached"] = True
         (self.work / "console-isolation.json").write_text(json.dumps(evidence) + "\n")
 
+    def inject_application_error(self, label, cloud):
+        """A deliberately broken app may fail readiness after successful delivery."""
+        result = self.command(label, "inject", "--spec", str(self.spec_path),
+                              "--target-ip", cloud["public_ip"], timeout=600, success=False)
+        readiness = self.directory / "replica-readiness.json"
+        raw = readiness.read_bytes() if readiness.exists() else None
+        if raw is not None:
+            with (self.work / (label + "-replica-readiness.json")).open("xb") as evidence:
+                evidence.write(raw)
+        if result.returncode:
+            expected = (f"Error: not all replicas of '{self.service}' became ready within 300s; "
+                        "inspect replica-readiness.json and resume delivery with the committed inputs").encode()
+            errors = [line for line in result.stderr.splitlines() if line.startswith(b"Error:")]
+            assert result.returncode == 1 and errors == [expected], "unexpected negative-injection failure"
+            replicas = json.loads(raw) if raw is not None else []
+            assert len(replicas) == 1, "negative injection lacks exact replica readiness"
+            node = replicas[0]
+            daemon = node.get("daemon") or {}
+            assert (node.get("instance_id") == cloud["instance_id"]
+                    and node.get("address") == cloud["public_ip"]
+                    and not node.get("live_error")
+                    and daemon.get("service_id") == self.service
+                    and daemon.get("mesh_ready") is True
+                    and daemon.get("app_ready") is False), "failure is not isolated to the deliberately broken app"
+        return result
+
     def verify_management_during_application_errors(self):
         resource = next(value for value in self.spec["resources"].values()
                         if value["target"] == "/opt/data/allinone/runtime.json")
@@ -218,15 +244,17 @@ class Consumer:
         try:
             for label, content in [("invalid-json", b"not-json"), ("invalid-port", json.dumps({"harness": "codex", "mode": "app-server", "port": 4501}).encode())]:
                 source.write_bytes(content)
-                inject("inject-" + label)
+                self.inject_application_error("inject-" + label, cloud)
                 deadline = time.monotonic() + 90
                 while True:
-                    checked = self.ssh(label + "-check", "cai-agent --check", success=False)
+                    digest = hashlib.sha256(content).hexdigest()
+                    verify = "import hashlib,pathlib; assert hashlib.sha256(pathlib.Path('/opt/data/allinone/runtime.json').read_bytes()).hexdigest() == " + repr(digest)
+                    checked = self.ssh(label + "-check", "python3.11 -c " + shlex.quote(verify) + " && cai-agent --check", success=False)
                     if checked.returncode and b"allinone startup failed" in checked.stderr:
                         break
                     assert time.monotonic() < deadline, "invalid business configuration was not delivered"
                     time.sleep(3)
-                self.ssh(label + "-management", "systemctl is-active cai-ssh.service; journalctl -u cai-allinone.service --no-pager >/dev/null")
+                self.ssh(label + "-management", "systemctl is-active cai-ssh.service && journalctl -u cai-allinone.service --no-pager >/dev/null")
         finally:
             source.write_bytes(original)
             inject("restore-application")
@@ -247,15 +275,16 @@ class Consumer:
                          "--target-ip", cloud["public_ip"], timeout=600)
         try:
             self.spec_path.write_text(json.dumps(edited))
-            inject("inject-invalid-token-mode")
+            self.inject_application_error("inject-invalid-token-mode", cloud)
             deadline = time.monotonic() + 90
             while True:
-                result = self.ssh("token-private-check", "cai-agent --check", success=False)
+                verify = "import pathlib,stat; assert stat.S_IMODE(pathlib.Path(" + repr(token["target"]) + ").stat().st_mode) == 0o644"
+                result = self.ssh("token-private-check", "python3.11 -c " + shlex.quote(verify) + " && cai-agent --check", success=False)
                 if result.returncode and b"private capability token" in result.stderr:
                     break
                 assert time.monotonic() < deadline, "invalid token permissions were not applied"
                 time.sleep(3)
-            self.ssh("token-error-management", "systemctl is-active cai-ssh.service; journalctl -u cai-allinone.service --no-pager >/dev/null")
+            self.ssh("token-error-management", "systemctl is-active cai-ssh.service && journalctl -u cai-allinone.service --no-pager >/dev/null")
         finally:
             self.spec_path.write_bytes(original)
             inject("restore-token-mode")
