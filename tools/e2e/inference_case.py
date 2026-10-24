@@ -204,8 +204,11 @@ def reboot(case, service, spec, mode, instance):
         ids = address.get("instance_ids") or [address["instance_id"]]
         ips = address.get("instance_public_ips") or [address["public_ip"]]
         ip = ips[ids.index(instance)]
-        eventually(lambda: case.command("reboot-inject", "inject", "--spec", spec,
-                                         "--target-ip", ip, check=False, timeout=120).returncode == 0, 1200)
+        # Inject already retries attested delivery and reconciles managed network
+        # state. Give that one mutation the recovery budget: killing and replaying
+        # it every 120 seconds can leave an authorized transaction interrupted.
+        case.command("reboot-inject", "inject", "--spec", spec,
+                     "--target-ip", ip, timeout=1200)
     eventually(lambda: bool(validate_live(case, service, len(case.local_state(service)["deploy"].get("instance_ids") or [instance]))), 7200)
 
 
