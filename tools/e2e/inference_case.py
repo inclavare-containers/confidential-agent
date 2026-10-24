@@ -11,6 +11,7 @@ import urllib.error
 import urllib.request
 from cloud_case import Case, ROOT, eventually, release_selection, run, write_json
 from inference_fixtures import MODEL
+from metrics_probe import complete_metrics
 
 
 def request(base, path, body=None):
@@ -39,8 +40,8 @@ def infer(base, stream=False):
     return response
 
 
-def request_count(base):
-    metrics = request(base, "/metrics").decode()
+def request_count(base, evidence):
+    metrics = complete_metrics(base, evidence).decode()
     values = re.findall(r"^vllm:request_success_total(?:\{[^\n]*\})?\s+([0-9.eE+-]+)", metrics, re.M)
     assert values, "vLLM request counter is unavailable"
     return sum(float(value) for value in values)
@@ -354,7 +355,8 @@ def main():
             (case.work / ("model-response-"+str(index)+".json")).write_bytes(infer(endpoint))
             (case.work / ("stream-response-"+str(index)+".sse")).write_bytes(infer(endpoint, True))
         if replicas > 1:
-            before = {instance: request_count(endpoint) for instance, endpoint in endpoints.items()}
+            before = {instance: request_count(endpoint, case.work / ("metrics-before-" + instance))
+                      for instance, endpoint in endpoints.items()}
             for index in range(replicas * 8):
                 if kind == "nlb":
                     # NLB balances TCP connections. A multiplexed RATS-TLS
@@ -369,7 +371,8 @@ def main():
                                      case.work / (label + "-ready.json"))
                 else:
                     infer(front)
-            after = {instance: request_count(endpoint) for instance, endpoint in endpoints.items()}
+            after = {instance: request_count(endpoint, case.work / ("metrics-after-" + instance))
+                     for instance, endpoint in endpoints.items()}
             assert all(after[instance] > before[instance] for instance in ids), "LB traffic did not reach every replica"
             write_json(case.work / "distribution.json", {"before": before, "after": after})
             # Reject topology changes before touching any existing resource.
