@@ -46,9 +46,12 @@ def select_cases(cases, groups, names):
     selected = set(names)
     if not names:
         selected.update(name for name, case in cases.items()
-                        if "full" in groups or set(groups).intersection(case["groups"]))
+                        if not case.get("manual_only")
+                        and ("full" in groups or set(groups).intersection(case["groups"])))
     if selected - cases.keys():
         raise ValueError("unknown case: " + ", ".join(sorted(selected - cases.keys())))
+    if not selected:
+        raise ValueError("no runnable E2E cases selected; use --case to select a manual lane")
     def include(name, visiting):
         if name in visiting:
             raise ValueError("cyclic E2E dependencies")

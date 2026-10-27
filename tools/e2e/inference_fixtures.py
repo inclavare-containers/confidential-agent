@@ -1,5 +1,5 @@
 #!/usr/bin/env python3.11
-"""Prepare both inference variants once; distribute only signed release images."""
+"""Build and publish one debug inference image; keep its SSH key with its owner."""
 import argparse
 import json
 import os
@@ -8,6 +8,7 @@ import shutil
 
 from cloud_case import Case, release_selection, run, write_json
 from publish_fixtures import cleanup as cleanup_publications, publish_variant, resume_producer, verify_resumable_build
+from render_case import configure_repositories
 
 MODEL = "Qwen3.8-27B"
 
@@ -34,16 +35,26 @@ def cleanup(case):
         raise
 
 
-def debug_build(case):
-    """Only the local debug case can deploy the producer's original keyed build."""
-    producer = case.suite / "prepare-inference-images"
-    if external_fixtures():
-        raise RuntimeError("debug validation requires its original local producer, not exported release fixtures")
-    case.state = producer / "state"
-    spec = producer / "init/vllm-inference/vllm-inference.yaml"
-    if not verify_resumable_build(case, "vllm-inference", spec, ["debug"]):
-        raise RuntimeError("prepared debug build is missing")
-    return "vllm-inference", spec
+def debug_identity(case):
+    """Reference the original build key without importing producer deployment state."""
+    supplied = os.environ.get("E2E_INFERENCE_DEBUG_KEY_FILE")
+    metadata = case.suite / "prepare-inference-images/debug-key-path.json"
+    if not supplied and not external_fixtures() and metadata.is_file():
+        supplied = json.loads(metadata.read_text())["private_key"]
+    if not supplied:
+        raise RuntimeError("published debug inference requires E2E_INFERENCE_DEBUG_KEY_FILE pointing to the original build SSH key")
+    key = Path(supplied).expanduser().resolve()
+    if not key.is_file() or not os.access(key, os.R_OK) or not key.stat().st_size:
+        raise RuntimeError("original debug inference SSH key is missing, unreadable, or empty: " + str(key))
+    return key
+
+
+def record_debug_identity(case):
+    key = Path(case.local_state("vllm-inference")["build"]["debug_ssh"]["private_key"]).resolve()
+    if not key.is_file() or not key.stat().st_size:
+        raise RuntimeError("the debug producer's original SSH key is missing")
+    # This local pointer is never copied into the signed fixture directory.
+    write_json(case.work / "debug-key-path.json", {"private_key": str(key)})
 
 
 def main():
@@ -65,9 +76,9 @@ def main():
         return
     if external:
         with case:
-            source = Path(external) / "inference-release"
+            source = Path(external) / "inference-debug"
             release_selection(source, case.region)
-            destination = case.work / "inference-release"
+            destination = case.work / "inference-debug"
             destination.mkdir(mode=0o700)
             for filename in ["image-release.json", "publisher.pem"]:
                 shutil.copyfile(source / filename, destination / filename)
@@ -89,25 +100,28 @@ def main():
                 case.command("cosign-key", "key", "generate-cosign", "--output-key-prefix", cosign.with_suffix(""))
                 case.command("init", "init", "vllm-inference", "--non-interactive", "--output-dir", case.work / "init",
                              "--region", case.region, "--zone-id", os.environ.get("E2E_GPU_ZONE_ID", "cn-beijing-l"),
-                             "--vllm-build-variants", "release,debug", "--model-key-file", key,
+                             "--vllm-build-variants", "debug", "--model-key-file", key,
                              "--oss-bucket", bucket, "--reference-values", "rekor", "--cosign-key", cosign,
                              "--vllm-served-model-name", MODEL)
             spec = case.work / "init/vllm-inference/vllm-inference.yaml"
-            if not (args.resume and verify_resumable_build(case, "vllm-inference", spec, ["release", "debug"])):
+            if not args.resume:
+                configure_repositories(spec)
+            if not (args.resume and verify_resumable_build(case, "vllm-inference", spec, ["debug"])):
                 case.command("build", "build", "--spec", spec, timeout=28800)
-                if not verify_resumable_build(case, "vllm-inference", spec, ["release", "debug"]):
-                    raise RuntimeError("inference build did not produce both variants")
+                if not verify_resumable_build(case, "vllm-inference", spec, ["debug"]):
+                    raise RuntimeError("inference build did not produce the debug variant")
+            record_debug_identity(case)
             run(["aliyun", "--region", case.region, "sts", "GetCallerIdentity"],
                 case.work / "caller-identity")
             ledger = case.work / "published-images.json"
             records = json.loads(ledger.read_text()) if args.resume and ledger.exists() else []
-            publish_variant(case, "vllm-inference", spec, "release", case.work / "inference-release",
+            publish_variant(case, "vllm-inference", spec, "debug", case.work / "inference-debug",
                             records)
-            case.checks.update(both_variants_verified=True, signed_release_published=True,
+            case.checks.update(debug_variant_verified=True, signed_debug_published=True,
                                debug_credentials_distributed=False)
     except BaseException:
         try:
-            # Publication/network failure should not discard the two expensive
+            # Publication/network failure should not discard the expensive
             # local builds. Explicit --resume rechecks them before any reuse.
             cleanup_publications(case)
         except Exception:

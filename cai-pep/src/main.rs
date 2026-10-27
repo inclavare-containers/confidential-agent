@@ -3,10 +3,11 @@ use serde_json::{json, Value};
 use std::env;
 use std::fs;
 use std::io::{self, Read, Write};
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -281,6 +282,15 @@ fn handle_stream(mut stream: UnixStream, config: Arc<PepConfig>) -> Result<(), S
             detail,
         }) => IntentResponse::exec_failed(request.id.clone(), message, detail, audit_id),
     };
+    if let Some(error) = &response.error {
+        eprintln!(
+            "{}",
+            json!({ "component": "cai-pep", "event": "intent_error",
+            "audit_id": error.audit_id, "request_id": request.id,
+            "run_id": request.params.run_id, "session_key": request.params.session_key,
+            "tool_name": request.params.tool_name, "code": error.code, "rule_id": error.rule_id })
+        );
+    }
     let payload = serde_json::to_vec(&response)
         .map_err(|err| format!("failed to encode response JSON: {err}"))?;
     stream
@@ -306,7 +316,7 @@ fn handle_intent(
         )));
     }
 
-    let audit_id = format!("audit-{}", now_ms());
+    let audit_id = unique_id("audit");
     let started = Instant::now();
     let canonical_workdir =
         canonicalize_existing_dir(&request.params.params.workdir).map_err(|err| {
@@ -376,6 +386,8 @@ fn handle_intent(
             "component": "cai-pep",
             "event": "intent_allow",
             "audit_id": audit_id,
+            "request_id": request.id,
+            "backend": result.backend,
             "tool_name": request.params.tool_name,
             "run_id": request.params.run_id,
             "session_key": request.params.session_key,
@@ -675,9 +687,14 @@ fn run_exec_in_docker(
     let uid = metadata.uid();
     let gid = metadata.gid();
 
+    let container_name = unique_id("cai-pep");
     let mut child = Command::new("docker");
     child
         .arg("run")
+        .arg("--name")
+        .arg(&container_name)
+        .arg("--label")
+        .arg("confidential-agent.cai-pep=true")
         .arg("--rm")
         .arg("--init")
         .arg("--read-only")
@@ -714,11 +731,12 @@ fn run_exec_in_docker(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    run_command_and_capture(
+    run_command_and_capture_with_cleanup(
         &mut child,
         config.stdout_max_bytes,
         config.stderr_max_bytes,
         config.timeout_secs,
+        Some(&container_name),
     )
 }
 
@@ -727,6 +745,81 @@ fn run_command_and_capture(
     stdout_max_bytes: usize,
     stderr_max_bytes: usize,
     timeout_secs: u64,
+) -> Result<ExecOutput, String> {
+    run_command_and_capture_with_cleanup(
+        child,
+        stdout_max_bytes,
+        stderr_max_bytes,
+        timeout_secs,
+        None,
+    )
+}
+
+fn remove_sandbox(name: &str) -> Result<(), String> {
+    remove_sandbox_with_runtime("docker", name, Duration::from_secs(3))
+}
+
+fn remove_sandbox_with_runtime(runtime: &str, name: &str, timeout: Duration) -> Result<(), String> {
+    // A regular file avoids a stuck runtime or its descendants holding a pipe
+    // open after the cleanup deadline. Never wait indefinitely for cleanup.
+    let error_path = env::temp_dir().join(unique_id("cai-pep-cleanup"));
+    let error_file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&error_path)
+        .map_err(|err| format!("sandbox cleanup diagnostics: {err}"))?;
+    let spawned = Command::new(runtime)
+        .args(["rm", "--force", name])
+        .stdout(Stdio::null())
+        .stderr(Stdio::from(error_file))
+        .spawn();
+    let mut child = match spawned {
+        Ok(child) => child,
+        Err(err) => {
+            let _ = fs::remove_file(&error_path);
+            return Err(format!("sandbox cleanup failed: {err}"));
+        }
+    };
+    let started = Instant::now();
+    let result = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let mut diagnostic = String::new();
+                if let Ok(file) = fs::File::open(&error_path) {
+                    let _ = file.take(4096).read_to_string(&mut diagnostic);
+                }
+                let diagnostic = diagnostic.to_ascii_lowercase();
+                break if status.success()
+                    || diagnostic.contains("no such container")
+                    || diagnostic.contains("no container with name")
+                {
+                    Ok(())
+                } else {
+                    Err(format!("sandbox cleanup failed for {name}: {diagnostic}"))
+                };
+            }
+            Err(err) => break Err(format!("sandbox cleanup wait failed: {err}")),
+            Ok(None) if started.elapsed() >= timeout => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break Err(format!(
+                    "sandbox cleanup timed out for {name}; removal is unconfirmed"
+                ));
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(25)),
+        }
+    };
+    let _ = fs::remove_file(&error_path);
+    result
+}
+
+fn run_command_and_capture_with_cleanup(
+    child: &mut Command,
+    stdout_max_bytes: usize,
+    stderr_max_bytes: usize,
+    timeout_secs: u64,
+    container_name: Option<&str>,
 ) -> Result<ExecOutput, String> {
     let mut child = child
         .spawn()
@@ -753,11 +846,22 @@ fn run_command_and_capture(
         if start.elapsed() >= timeout {
             timed_out = true;
             let _ = child.kill();
-            break child.wait().map_err(|err| err.to_string())?;
+            // Killing a Docker/Podman client does not stop its container. Stop
+            // the sandbox before joining readers, whose pipes it may hold open.
+            let status = child.wait().map_err(|err| err.to_string())?;
+            if let Some(name) = container_name {
+                remove_sandbox(name)?;
+            }
+            break status;
         }
         thread::sleep(Duration::from_millis(100));
     };
 
+    if !timed_out {
+        if let Some(name) = container_name {
+            remove_sandbox(name)?;
+        }
+    }
     let (stdout_buf, stdout_truncated) = stdout_reader
         .join()
         .map_err(|_| "stdout reader thread panicked".to_string())?;
@@ -873,6 +977,16 @@ fn summarize_command(command: &str) -> String {
         return trimmed.to_string();
     }
     format!("{}...", &trimmed[..120])
+}
+
+fn unique_id(prefix: &str) -> String {
+    static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+    format!(
+        "{prefix}-{}-{}-{}",
+        now_ms(),
+        std::process::id(),
+        NEXT_ID.fetch_add(1, Ordering::Relaxed)
+    )
 }
 
 fn now_ms() -> u64 {
@@ -1766,6 +1880,47 @@ mod tests {
             }
             other => panic!("expected BadRequest, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn sandbox_cleanup_deadline_survives_a_stalled_runtime() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = dir.path().join("docker");
+        fs::write(&runtime, "#!/bin/sh\nsleep 5\n").unwrap();
+        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
+        let started = Instant::now();
+        let error = remove_sandbox_with_runtime(
+            runtime.to_str().unwrap(),
+            "test-sandbox",
+            Duration::from_millis(100),
+        )
+        .unwrap_err();
+        assert!(error.contains("cleanup timed out"));
+        assert!(error.contains("unconfirmed"));
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn sandbox_cleanup_distinguishes_absent_container_from_runtime_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = dir.path().join("docker");
+        fs::write(
+            &runtime,
+            "#!/bin/sh\necho 'No such container: test' >&2\nexit 1\n",
+        )
+        .unwrap();
+        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
+        remove_sandbox_with_runtime(runtime.to_str().unwrap(), "test", Duration::from_secs(1))
+            .unwrap();
+        fs::write(
+            &runtime,
+            "#!/bin/sh\necho 'Cannot connect to daemon' >&2\nexit 1\n",
+        )
+        .unwrap();
+        let error =
+            remove_sandbox_with_runtime(runtime.to_str().unwrap(), "test", Duration::from_secs(1))
+                .unwrap_err();
+        assert!(error.contains("cannot connect to daemon"));
     }
 
     #[test]

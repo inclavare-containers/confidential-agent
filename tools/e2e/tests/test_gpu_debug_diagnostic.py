@@ -23,6 +23,7 @@ class GpuDebugDiagnosticTests(unittest.TestCase):
         ]:
             with self.subTest(cc=cc, devtools=devtools, version=version):
                 case = Mock()
+                case.local_state.return_value = {"deploy": {"instance_ids": ["i-owned"]}}
                 case.ssh.side_effect = [subprocess.CompletedProcess([], 0, value, b"")
                                         for value in [cc, devtools, version]]
                 if valid:

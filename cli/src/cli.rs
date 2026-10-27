@@ -753,6 +753,9 @@ pub(crate) struct SshArgs {
     /// Select a recorded physical replica for management SSH.
     #[arg(long)]
     pub(crate) instance_id: Option<String>,
+    /// Private key matching the public key baked into a published debug image.
+    #[arg(short = 'i', long)]
+    pub(crate) identity_file: Option<PathBuf>,
     /// Allocate a terminal for an interactive remote command; scripts keep no PTY
     #[arg(short = 't', long)]
     pub(crate) tty: bool,

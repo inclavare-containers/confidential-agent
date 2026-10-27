@@ -59,35 +59,109 @@ def render_matrix_rekor_block(context):
     )
 
 
-def render_matrix_repositories(context):
+def matrix_repositories(context):
     mirror = context.get("E2E_MATRIX_REPO_MIRROR", "").rstrip("/")
     if not mirror:
-        return ""
+        return []
     parsed = urlsplit(mirror)
     if (parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password
-            or parsed.query or parsed.fragment or any(character.isspace() for character in mirror)):
+            or parsed.query or parsed.fragment or parsed.port == 0
+            or any(character.isspace() for character in mirror)):
         raise ValueError("E2E_MATRIX_REPO_MIRROR must be an HTTPS repository base without credentials or query parameters")
+    return [{"name": "alinux-" + name,
+             "baseurl": mirror + "/3/" + name + "/$basearch/",
+             "gpgkey": mirror + "/3/RPM-GPG-KEY-ALINUX-3"}
+            for name in ("os", "updates", "plus", "module", "powertools")]
+
+
+def repository_yaml(repository, indent=4):
+    prefix = " " * indent
+    return (prefix + "- name: " + repository["name"] + "\n"
+            + prefix + "  baseurl: " + yaml_quote(repository["baseurl"]) + "\n"
+            + prefix + "  gpgkey: " + yaml_quote(repository["gpgkey"]) + "\n")
+
+
+def render_matrix_repositories(context):
+    repositories = matrix_repositories(context)
+    if not repositories:
+        return ""
     lines = ["  repos:"]
-    for name in ("os", "updates", "plus", "module", "powertools"):
-        lines.extend([
-            f"    - name: alinux-{name}",
-            f"      baseurl: {yaml_quote(mirror + '/3/' + name + '/$basearch/')}",
-            f"      gpgkey: {yaml_quote(mirror + '/3/RPM-GPG-KEY-ALINUX-3')}",
-        ])
+    lines.extend(repository_yaml(repository).rstrip("\n") for repository in repositories)
     return "\n".join(lines)
 
 
 def configure_repositories(path):
-    """Retain native init's other fields and its signed HTTPS repository schema."""
-    repositories = render_matrix_repositories(os.environ)
+    """Apply the signed HTTPS mirror to canonical repositories, preserving extras."""
+    repositories = matrix_repositories(os.environ)
     if not repositories:
         return
     path = Path(path)
-    contents, count = re.subn(r"(?ms)^  repos:\n.*?(?=^  [A-Za-z_]|^[A-Za-z_]|\Z)",
-                              repositories + "\n", path.read_text())
-    if count != 1:
-        raise ValueError("generated builder must have exactly one block-style build.repos list")
-    path.write_text(contents)
+    original = path.read_text()
+    canonical = {repository["name"]: repository for repository in repositories}
+    if original.lstrip().startswith("{"):
+        document = json.loads(original)
+        build = document.setdefault("build", {})
+        if not isinstance(build, dict) or not isinstance(build.get("repos", []), list):
+            raise ValueError("generated builder requires a build mapping and repository list")
+        merged, seen = [], set()
+        for repository in build.get("repos", []):
+            if not isinstance(repository, dict):
+                raise ValueError("generated builder repositories must be mappings")
+            name = repository.get("name")
+            if name in canonical:
+                if name in seen:
+                    continue
+                repository = canonical[name]
+                seen.add(name)
+            merged.append(repository)
+        merged.extend(repository for name, repository in canonical.items() if name not in seen)
+        build["repos"] = merged
+        contents = json.dumps(document, indent=2) + "\n"
+    else:
+        builds = list(re.finditer(r"(?m)^build:[ \t]*(?:#[^\n]*)?\n", original))
+        if len(builds) != 1:
+            raise ValueError("generated builder requires one block-style build mapping")
+        start = builds[0].end()
+        boundary = re.search(r"(?m)^[A-Za-z_][^\n]*:", original[start:])
+        end = start + boundary.start() if boundary else len(original)
+        body = original[start:end]
+        headers = list(re.finditer(r"(?m)^  repos:([^\n]*)(?:\n|$)", body))
+        if len(headers) > 1:
+            raise ValueError("generated builder has duplicate build.repos mappings")
+        if not headers:
+            body = body.rstrip("\n") + "\n  repos:\n" + "".join(repository_yaml(repo) for repo in repositories)
+        else:
+            header = headers[0]
+            value, _, comment = header.group(1).partition("#")
+            if value.strip() not in ("", "[]", "null", "~"):
+                raise ValueError("generated builder requires a block-style repository list")
+            boundary = re.search(r"(?m)^  [A-Za-z_][^\n]*:", body[header.end():])
+            stop = header.end() + boundary.start() if boundary else len(body)
+            entries = body[header.end():stop]
+            starts = list(re.finditer(r"(?m)^( +)-[ \t]+", entries))
+            indent = len(starts[0].group(1)) if starts else 4
+            starts = [entry for entry in starts if len(entry.group(1)) == indent]
+            merged = entries[:starts[0].start()] if starts else entries
+            seen = set()
+            for index, entry in enumerate(starts):
+                next_start = starts[index + 1].start() if index + 1 < len(starts) else len(entries)
+                block = entries[entry.start():next_start]
+                name = re.search(r"(?m)^ *-? *name: *(['\"]?)([A-Za-z0-9_.-]+)\1 *(?:#[^\n]*)?$", block)
+                name = name.group(2) if name else None
+                if name in canonical:
+                    if name in seen:
+                        continue
+                    block = repository_yaml(canonical[name], indent)
+                    seen.add(name)
+                merged += block
+            if merged and not merged.endswith("\n"):
+                merged += "\n"
+            merged += "".join(repository_yaml(repo, indent) for name, repo in canonical.items() if name not in seen)
+            heading = "  repos:" + (" #" + comment if comment else "") + "\n"
+            body = body[:header.start()] + heading + merged + body[stop:]
+        contents = original[:start] + body + original[end:]
+    if contents != original:
+        path.write_text(contents)
 
 
 def decode_jwt_payload(token: str) -> dict:

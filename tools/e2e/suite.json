@@ -130,7 +130,8 @@
       ],
       "environment": {
         "E2E_OPENCLAW_VLLM_BUILD_VARIANTS": "debug"
-      }
+      },
+      "gpu_instances": 1
     },
     {
       "id": "openclaw-vllm-release",
@@ -156,7 +157,8 @@
       ],
       "environment": {
         "E2E_OPENCLAW_VLLM_BUILD_VARIANTS": "release"
-      }
+      },
+      "manual_only": true
     },
     {
       "id": "cmaas",
@@ -355,28 +357,22 @@
       "timeout": 21600
     },
     {
-      "id": "inference-single",
+      "id": "allinone-hardened",
       "groups": [
-        "inference"
+        "reuse"
       ],
-      "pool": "gpu",
+      "depends": [
+        "publish-reuse-images"
+      ],
       "command": [
         "python3.11",
-        "tools/e2e/inference_case.py"
+        "tools/e2e/reuse_case.py"
       ],
       "environment": {
-        "E2E_REPLICAS": "1",
-        "E2E_SLB_TYPE": "nlb",
-        "E2E_CONNECT_ENCRYPTION": "ohttp",
-        "E2E_ATTESTATION_MODE": "challenge",
-        "E2E_REUSE_IMAGE": "1",
-        "E2E_IMAGE_VARIANT": "release",
-        "E2E_ONECLICK": "1"
+        "E2E_ALLINONE_FULL_HARDENING": "1",
+        "E2E_ATTESTATION_MODE": "challenge"
       },
-      "timeout": 28800,
-      "depends": [
-        "prepare-inference-images"
-      ]
+      "timeout": 21600
     },
     {
       "id": "inference-alb",
@@ -394,36 +390,14 @@
         "E2E_CONNECT_ENCRYPTION": "ohttp",
         "E2E_ATTESTATION_MODE": "challenge",
         "E2E_REUSE_IMAGE": "1",
-        "E2E_IMAGE_VARIANT": "release",
+        "E2E_IMAGE_VARIANT": "debug",
         "E2E_ONECLICK": "1"
       },
       "timeout": 28800,
       "depends": [
         "prepare-inference-images"
-      ]
-    },
-    {
-      "id": "inference-nlb-ohttp",
-      "groups": [
-        "inference"
       ],
-      "pool": "gpu",
-      "command": [
-        "python3.11",
-        "tools/e2e/inference_case.py"
-      ],
-      "environment": {
-        "E2E_REPLICAS": "2",
-        "E2E_SLB_TYPE": "nlb",
-        "E2E_CONNECT_ENCRYPTION": "ohttp",
-        "E2E_ATTESTATION_MODE": "challenge",
-        "E2E_REUSE_IMAGE": "1",
-        "E2E_IMAGE_VARIANT": "release"
-      },
-      "timeout": 28800,
-      "depends": [
-        "prepare-inference-images"
-      ]
+      "gpu_instances": 2
     },
     {
       "id": "inference-nlb-rats",
@@ -441,58 +415,13 @@
         "E2E_CONNECT_ENCRYPTION": "rats-tls",
         "E2E_ATTESTATION_MODE": "challenge",
         "E2E_REUSE_IMAGE": "1",
-        "E2E_IMAGE_VARIANT": "release"
+        "E2E_IMAGE_VARIANT": "debug"
       },
       "timeout": 28800,
       "depends": [
         "prepare-inference-images"
-      ]
-    },
-    {
-      "id": "inference-reuse-single",
-      "groups": [
-        "inference"
       ],
-      "pool": "gpu",
-      "command": [
-        "python3.11",
-        "tools/e2e/inference_case.py"
-      ],
-      "depends": [
-        "prepare-inference-images"
-      ],
-      "environment": {
-        "E2E_REPLICAS": "1",
-        "E2E_SLB_TYPE": "nlb",
-        "E2E_CONNECT_ENCRYPTION": "ohttp",
-        "E2E_ATTESTATION_MODE": "trustee",
-        "E2E_REUSE_IMAGE": "1",
-        "E2E_IMAGE_VARIANT": "release"
-      },
-      "timeout": 28800
-    },
-    {
-      "id": "inference-reuse-alb",
-      "groups": [
-        "inference"
-      ],
-      "pool": "gpu",
-      "command": [
-        "python3.11",
-        "tools/e2e/inference_case.py"
-      ],
-      "depends": [
-        "prepare-inference-images"
-      ],
-      "environment": {
-        "E2E_REPLICAS": "2",
-        "E2E_SLB_TYPE": "alb",
-        "E2E_CONNECT_ENCRYPTION": "ohttp",
-        "E2E_ATTESTATION_MODE": "trustee",
-        "E2E_REUSE_IMAGE": "1",
-        "E2E_IMAGE_VARIANT": "release"
-      },
-      "timeout": 28800
+      "gpu_instances": 2
     },
     {
       "id": "inference-reuse-nlb",
@@ -513,35 +442,11 @@
         "E2E_CONNECT_ENCRYPTION": "ohttp",
         "E2E_ATTESTATION_MODE": "trustee",
         "E2E_REUSE_IMAGE": "1",
-        "E2E_IMAGE_VARIANT": "release",
+        "E2E_IMAGE_VARIANT": "debug",
         "E2E_SERVICE_ISOLATION": "1"
       },
-      "timeout": 28800
-    },
-    {
-      "id": "inference-debug",
-      "groups": [
-        "inference"
-      ],
-      "pool": "gpu",
-      "command": [
-        "python3.11",
-        "tools/e2e/inference_case.py"
-      ],
-      "environment": {
-        "E2E_REPLICAS": "1",
-        "E2E_SLB_TYPE": "nlb",
-        "E2E_CONNECT_ENCRYPTION": "ohttp",
-        "E2E_ATTESTATION_MODE": "challenge",
-        "E2E_REUSE_IMAGE": "0",
-        "E2E_IMAGE_VARIANT": "debug",
-        "E2E_USE_PREPARED_DEBUG": "1"
-      },
       "timeout": 28800,
-      "depends": [
-        "prepare-inference-images"
-      ],
-      "retains_local_images": true
+      "gpu_instances": 3
     },
     {
       "id": "platform-recovery",
@@ -555,7 +460,8 @@
         "python3.11",
         "tools/e2e/platform_case.py"
       ],
-      "timeout": 14400
+      "timeout": 14400,
+      "manual_only": true
     }
   ]
 }

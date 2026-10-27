@@ -509,6 +509,91 @@ mod tests {
     }
 
     #[test]
+    fn published_debug_consumers_keep_variant_binding_without_copying_ssh_keys() {
+        let (root, cli, inspection) = fixture();
+        let mut metadata: serde_json::Value =
+            serde_json::from_slice(&fs::read(&inspection).unwrap()).unwrap();
+        metadata["runtime_metadata"]["image_variant"] = "debug".into();
+        write_json_atomic(&inspection, &metadata).unwrap();
+        for id in ["debug-a", "debug-b"] {
+            let path = instance_spec(root.path(), id);
+            let yaml = fs::read_to_string(&path)
+                .unwrap()
+                .replace("  ssh: true", "  ssh: false")
+                .replace(
+                    "  provider: aliyun",
+                    "  image_variant: debug\n  provider: aliyun",
+                );
+            fs::write(&path, yaml).unwrap();
+            commands::cmd_deploy(
+                &cli,
+                &DeployArgs {
+                    skip_signature_verification: false,
+                    image_id: None,
+                    resume: false,
+                    spec: path.clone(),
+                    skip_inject: false,
+                    render_only: true,
+                    skip_peering_check: false,
+                },
+            )
+            .unwrap();
+            let spec = AgentSpec::from_path(&path).unwrap();
+            let paths = context_paths(&cli.state_dir, id);
+            let manifest = read_build_manifest(&paths.manifest).unwrap();
+            assert!(manifest.ssh.is_none() && manifest.debug_ssh.is_none());
+            assert!(!paths.secrets_dir.join("debug_ssh").exists());
+            assert!(!paths.secrets_dir.join("ssh_client").exists());
+            assert!(!paths.guest_staging_dir.exists());
+            let prepared = prepare(
+                &paths,
+                &spec,
+                &manifest,
+                &PrepareOptions {
+                    deploy_names: Some(DeployNames::new(&spec)),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let args = commands::deploy_shelter_args(&prepared);
+            assert!(args.iter().any(|arg| arg == "--release"));
+            assert!(args.iter().any(|arg| arg == "--trusted-key"));
+            assert!(args.iter().any(|arg| arg == "--expect-manifest"));
+            assert!(!args
+                .iter()
+                .any(|arg| arg == "--skip-signature-verification"));
+            let state = build_service_state(
+                &cli.state_dir,
+                &path,
+                &spec,
+                &DeployObservation::default(),
+                &prepared,
+                "built",
+            )
+            .unwrap();
+            assert!(state.build.remote);
+            assert_eq!(state.build.variant, "debug");
+            assert!(state.build.debug_ssh.is_none());
+            for variant in [Some("release"), None] {
+                metadata["runtime_metadata"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("image_variant");
+                if let Some(variant) = variant {
+                    metadata["runtime_metadata"]["image_variant"] = variant.into();
+                }
+                write_json_atomic(&inspection, &metadata).unwrap();
+                assert!(import(&cli, &spec)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("variant"));
+            }
+            metadata["runtime_metadata"]["image_variant"] = "debug".into();
+            write_json_atomic(&inspection, &metadata).unwrap();
+        }
+    }
+
+    #[test]
     fn two_instances_reuse_metadata_without_build_inputs_or_shared_secrets() {
         let (root, cli, _) = fixture();
         let mut states = Vec::new();

@@ -17,6 +17,31 @@ from cloud_case import run
 
 
 class CommandRunnerTest(unittest.TestCase):
+    def test_explicit_builder_mirror_is_applied_before_the_command_without_changing_deploy(self):
+        runner = Path(__file__).resolve().parents[1] / 'command_runner.py'
+        for label, mirror in [('build', 'https://ecs.example/alinux'), ('deploy', 'https://ecs.example/alinux'), ('build', '')]:
+            with self.subTest(label=label, mirror=mirror), tempfile.TemporaryDirectory() as directory:
+                work = Path(directory)
+                spec = work / 'spec.json'
+                original = {'build': {'image_name': 'fixture', 'repos': [
+                    {'name': 'epel', 'baseurl': 'https://epel.example/repo', 'gpgkey': 'https://epel.example/key'}]}}
+                spec.write_text(json.dumps(original))
+                probe = 'import json,pathlib,sys; print(json.dumps(json.loads(pathlib.Path(sys.argv[-1]).read_text())))'
+                environment = dict(os.environ, E2E_WORK_DIR=str(work), E2E_MATRIX_REPO_MIRROR=mirror)
+                environment.pop('E2E_REKOR_URL', None)
+                result = subprocess.run([sys.executable, str(runner), label, '--', sys.executable,
+                    '-c', probe, '--spec', str(spec)], env=environment, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                observed = json.loads(result.stdout)
+                if label == 'build' and mirror:
+                    repositories = observed['build']['repos']
+                    self.assertEqual(repositories[0], original['build']['repos'][0])
+                    self.assertEqual(len(repositories), 6)
+                    self.assertTrue(all(r['baseurl'].startswith(mirror) and r['gpgkey'].startswith(mirror)
+                                        for r in repositories[1:]))
+                else:
+                    self.assertEqual(observed, original)
+
     def test_parallel_builds_respect_the_limit_and_release_after_failure(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -524,6 +524,9 @@ def assert_independent(consumers):
     identities = [json.loads((item.directory / "state.json").read_text())
                   ["gateway_identity"]["public_key"] for item in consumers]
     assert len(set(identities)) == len(identities), "consumers share a gateway identity"
+    instances = [json.loads((item.directory / "state.json").read_text())["deploy"]["instance_id"]
+                 for item in consumers]
+    assert all(instances) and len(set(instances)) == len(instances), "consumers share a cloud instance"
     first, second = consumers[:2]
     state = json.loads((second.directory / "state.json").read_text())
     host = state["deploy"]["public_ip"]
@@ -732,13 +735,71 @@ def reboot(consumer, aliyun):
     raise RuntimeError(f"{consumer.service}: reboot recovery failed")
 
 
-def trustee_outage(consumer, aliyun, unit=None, control=None):
+def trustee_status(consumers, label):
+    """Check policy ownership and the complete remote resource namespace."""
+    status = json.loads(consumers[0].command(label, "trustee", "status", "--json").stdout)
+    expected = {item.service for item in consumers if item.attempted}
+    assert set(status["services"]) == expected
+    assert status["attestation_policy_matches"] and status["resource_policy_matches"]
+    assert status["resource_policy_owner"] == status["owner_id"]
+    assert status.get("pending_reconcile") is None
+    resources = status["remote_resources"]
+    assert {path.split("/", 1)[0] for path in resources} == expected
+    for service in expected:
+        assert status["services"][service]["enabled"] is True
+    return status
+
+
+def assert_live_lifecycle(rows, consumers):
+    expected = {item.service: item.attempted for item in consumers}
+    selected = [row for row in rows if row["local"]["service_id"] in expected]
+    assert len(selected) == len(expected)
+    assert {row["local"]["service_id"] for row in selected} == set(expected)
+    for row in selected:
+        local = row["local"]
+        if not expected[local["service_id"]]:
+            assert local["phase"] == "deleted"
+            continue
+        assert local["phase"] == "active" and not row.get("live_error")
+        daemon = row["daemon"]
+        assert daemon["phase"] == "running" and daemon["app_ready"] and daemon["mesh_ready"]
+        assert local.get("mesh_generation") is not None
+        assert daemon["mesh_generation"] == local["mesh_generation"]
+    return {row["local"]["service_id"]: row["local"]["mesh_generation"] for row in selected}
+
+
+def verify_live_lifecycle(consumers, label):
+    deadline, attempt = time.monotonic() + 300, 0
+    while True:
+        attempt += 1
+        result = consumers[0].command(f"{label}-{attempt}", "status", "--json", "--live")
+        try:
+            return assert_live_lifecycle(json.loads(result.stdout), consumers)
+        except (AssertionError, KeyError, TypeError):
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(5)
+
+
+def trustee_outage(consumer, aliyun, unit=None, control=None, peers=()):
     """The owned disposable Trustee must gate cold-boot key release."""
     before = consumer.ssh("outage-boot-before", "cat /proc/sys/kernel/random/boot_id").stdout.strip()
     cloud = json.loads((consumer.directory / "state.json").read_text())["deploy"]
     region = consumer.spec["deploy"]["region"]
     run([control, "stop"] if control else ["systemctl", "stop", unit], consumer.work / "trustee-stop")
     try:
+        trustee_state = consumer.state / "trustee/state.json"
+        original = trustee_state.read_bytes()
+        local = (consumer.directory / "state.json").read_bytes()
+        refused = consumer.command("destroy-unavailable-trustee", "destroy", consumer.service,
+                                   success=False, timeout=180)
+        assert refused.returncode not in [0, 124] and b"Trustee" in refused.stderr, \
+            "destroy did not fail on unavailable Trustee revocation"
+        assert trustee_state.read_bytes() == original, "failed revocation changed Trustee custody"
+        assert (consumer.directory / "state.json").read_bytes() == local, "failed revocation changed service ownership"
+        assert_one_deployment(consumer, aliyun)
+        for item in peers:
+            item.ssh("survives-trustee-outage", "systemctl is-active cai-allinone.service cai-ssh.service && cai-agent --check")
         run([aliyun, "--region", region, "ecs", "RebootInstance", "--RegionId", region,
              "--InstanceId", cloud["instance_id"], "--ForceStop", "true"],
             consumer.work / "outage-reboot")
@@ -787,7 +848,7 @@ def trustee_outage(consumer, aliyun, unit=None, control=None):
     raise RuntimeError(f"{consumer.service}: Trustee recovery failed without reinjection")
 
 
-def deploy_with_frozen_inputs(consumers, parallel, aliyun):
+def deploy_with_frozen_inputs(consumers, parallel, aliyun, resume=False):
     """Changing or removing A's source must not apply its edits when B is added."""
     first, second, *remaining = consumers
     assert remaining, "frozen-input coverage needs three consumers"
@@ -812,7 +873,7 @@ def deploy_with_frozen_inputs(consumers, parallel, aliyun):
     edited["service"]["ports"] = [19999]
     first.spec_path.write_text(json.dumps(edited))
     try:
-        second.deploy()
+        second.deploy(resume=resume)
         first.spec_path.rename(saved)
         with ThreadPoolExecutor(max_workers=parallel) as pool:
             list(pool.map(lambda item: item.deploy(), remaining))
@@ -825,6 +886,27 @@ def deploy_with_frozen_inputs(consumers, parallel, aliyun):
     finally:
         first.spec_path.write_bytes(original)
         saved.unlink(missing_ok=True)
+
+
+def deploy_consumers(consumers, args):
+    """Exercise concurrency and delivery resume on distinct deployments."""
+    if args.interrupt_infrastructure:
+        interrupt_infrastructure(consumers[0], args.aliyun)
+    if args.frozen_inputs or args.concurrent_deploy or args.resume_deploy:
+        consumers[0].deploy(concurrent=args.concurrent_deploy,
+                            resume=args.resume_deploy and not args.concurrent_deploy)
+        if args.concurrent_deploy:
+            assert_one_deployment(consumers[0], args.aliyun)
+        if args.frozen_inputs:
+            deploy_with_frozen_inputs(consumers, args.parallel, args.aliyun,
+                                      resume=args.resume_deploy and args.concurrent_deploy)
+        else:
+            with ThreadPoolExecutor(max_workers=args.parallel) as pool:
+                list(pool.map(lambda item: item.deploy(
+                    resume=args.resume_deploy and args.concurrent_deploy and item is consumers[1]), consumers[1:]))
+    else:
+        with ThreadPoolExecutor(max_workers=args.parallel) as pool:
+            list(pool.map(lambda item: item.deploy(), consumers))
 
 
 def stable_endpoint_peers(consumers, extra_spec):
@@ -1004,8 +1086,6 @@ def main():
         parser.error("Trustee outage coverage requires Trustee fixtures")
     if args.trustee_outage_service and args.trustee_outage_control:
         parser.error("choose one Trustee lifecycle control")
-    if args.concurrent_deploy and args.resume_deploy:
-        parser.error("choose concurrent or resumable first deployment")
     if args.resume_deploy and args.trustee_url:
         parser.error("resource-delivery resume coverage uses challenge mode")
     os.umask(0o077)
@@ -1049,21 +1129,19 @@ def main():
         reject_invalid_release(consumers[0])
         if args.incompatible_release:
             reject_incompatible_release(consumers[0], args.incompatible_release)
-        if args.interrupt_infrastructure:
-            interrupt_infrastructure(consumers[0], args.aliyun)
-        if args.frozen_inputs or args.concurrent_deploy or args.resume_deploy:
-            consumers[0].deploy(concurrent=args.concurrent_deploy, resume=args.resume_deploy)
-            if args.concurrent_deploy:
-                assert_one_deployment(consumers[0], args.aliyun)
-            if args.frozen_inputs:
-                deploy_with_frozen_inputs(consumers, args.parallel, args.aliyun)
-            else:
-                with ThreadPoolExecutor(max_workers=args.parallel) as pool:
-                    list(pool.map(lambda item: item.deploy(), consumers[1:]))
-        else:
-            with ThreadPoolExecutor(max_workers=args.parallel) as pool:
-                list(pool.map(lambda item: item.deploy(), consumers))
+        deploy_consumers(consumers, args)
         assert_independent(consumers)
+        if args.trustee_url:
+            before_sync = trustee_status(consumers, "trustee-after-deploy")
+            verify_live_lifecycle(consumers, "trustee-joint-ready")
+            consumers[0].command("trustee-idempotent-sync", "trustee", "sync")
+            synced = trustee_status(consumers, "trustee-after-sync")
+            assert synced["revision"] >= before_sync["revision"]
+            assert sorted(synced["remote_resources"]) == sorted(before_sync["remote_resources"])
+            for service in synced["services"]:
+                for binding in ["runtime_config_sha384", "uki_sha384"]:
+                    assert synced["services"][service][binding] == before_sync["services"][service][binding]
+            verify_live_lifecycle(consumers, "trustee-synced-ready")
         if args.software_versions:
             expected = json.loads(args.software_versions.read_text())
             consumers[0].verify_software_versions(expected)
@@ -1085,14 +1163,29 @@ def main():
                 consumer.ssh("independent-data", "test ! -e /opt/data/allinone/reboot-marker")
         if args.trustee_outage_service or args.trustee_outage_control:
             trustee_outage(consumers[0], args.aliyun, args.trustee_outage_service,
-                           str(args.trustee_outage_control) if args.trustee_outage_control else None)
+                           str(args.trustee_outage_control) if args.trustee_outage_control else None,
+                           peers=consumers[1:])
+            trustee_status(consumers, "trustee-after-outage")
+            verify_live_lifecycle(consumers, "trustee-outage-recovered-ready")
+            recovered = consumers[0].ssh("outage-model-recovered", consumers[0].probe["command"], timeout=600)
+            assert consumers[0].probe["expect"].encode() in recovered.stdout
         if args.publication_state:
             verify_publication_cleanup(consumers, args.publication_state, args.aliyun)
         first, *remaining = consumers
+        if args.trustee_url:
+            before_destroy = verify_live_lifecycle(consumers, "trustee-before-destroy-ready")
         first.destroy()
         first.attempted = False
+        if args.trustee_url:
+            revoked = trustee_status(consumers, "trustee-after-first-destroy")
+            assert revoked["resource_policy_sha256"] != synced["resource_policy_sha256"]
+            after_destroy = verify_live_lifecycle(consumers, "trustee-survivor-ready")
+            assert all(after_destroy[item.service] > before_destroy[item.service] for item in remaining)
         for item in remaining:
             item.ssh("survives-other-destroy", "cai-agent --version")
+            if args.trustee_url:
+                reply = item.ssh("surviving-model", item.probe["command"], timeout=600)
+                assert item.probe["expect"].encode() in reply.stdout, "surviving service model response missing marker"
     finally:
         cleanup_errors = []
         for item in consumers:
@@ -1102,6 +1195,12 @@ def main():
                 cleanup_errors.append(str(error))
         if cleanup_errors:
             raise RuntimeError("; ".join(cleanup_errors))
+    if args.trustee_url:
+        for item in consumers:
+            item.attempted = False
+        trustee_status(consumers, "trustee-after-all-destroyed")
+        verify_live_lifecycle(consumers, "trustee-all-deleted")
+        consumers[0].command("trustee-prune", "trustee", "prune")
     image = json.loads((consumers[0].directory / "manifest.json").read_text())["image"]
     region = consumers[0].spec["deploy"]["region"]
     result = run([args.aliyun, "--region", region, "ecs", "DescribeImages", "--RegionId",
@@ -1123,6 +1222,8 @@ def main():
         "cleanup_consumers_and_failure_status": bool(args.publication_state),
         "pty": args.pty,
         "trustee_outage": bool(args.trustee_outage_service or args.trustee_outage_control),
+        "trustee_destroy_refusal": bool(args.trustee_outage_service or args.trustee_outage_control),
+        "trustee_policy_lifecycle": bool(args.trustee_url),
         "model_calls": {item.service: "passed" if item.probe.get("command")
                         else {"skipped": item.probe["skip_reason"]} for item in consumers}
     }) + "\n")

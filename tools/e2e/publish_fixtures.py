@@ -5,28 +5,59 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import time
 from cloud_case import Case, ROOT, release_selection, run, write_json
 from render_case import configure_repositories
 
 # Inference has its own producer; all-in-one consumers need only this image.
-REQUIRED_PUBLICATIONS = {("allinone-builder", "release")}
-SIGNED_FIXTURE_DIRECTORIES = ("allinone",)
+REQUIRED_PUBLICATIONS = {("allinone-builder", "release"), ("allinone-hardened-builder", "release")}
+SIGNED_FIXTURE_DIRECTORIES = ("allinone", "allinone-hardened")
 
 
-def allinone_spec(case, cosign, resume=False):
-    spec = case.work / "init/allinone-builder/build.yaml"
+def allinone_spec(case, cosign, resume=False, *, hardened=False):
+    service = "allinone-hardened-builder" if hardened else "allinone-builder"
+    spec = case.work / "init" / service / "build.yaml"
     if resume:
         # Existing attempts must keep the specification whose digest was built.
         legacy = case.work / "examples/allinone/build.yaml"
-        return legacy if not spec.exists() and legacy.is_file() else spec
+        if spec.is_file():
+            return spec
+        if not hardened:
+            return legacy if legacy.is_file() else spec
     # Native init binds CA_PEP_BIN and stages every relative application asset.
-    case.command("init", "init", "allinone", "--stage", "build", "--non-interactive",
+    case.command("init-" + service, "init", "allinone", "--stage", "build", "--non-interactive",
+                 "--service-id", service,
                  "--output-dir", case.work / "init", "--region", case.region,
                  "--reference-values", "rekor", "--cosign-key", cosign)
     configure_repositories(spec)
+    if hardened:
+        contents, count = re.subn(r"(?m)^  ssh: true$", "  ssh: false", spec.read_text())
+        if count != 1:
+            raise RuntimeError("strict allinone build requires exactly one generated service.ssh field")
+        contents, count = re.subn(r"(?m)^  image_name: allinone$", "  image_name: allinone-hardened", contents)
+        if count != 1:
+            raise RuntimeError("strict allinone build requires its own image name")
+        spec.write_text(contents)
+        contract_path = spec.parent / "runtime-contract.json"
+        contract = json.loads(contract_path.read_text())
+        contract["capabilities"] = [value for value in contract["capabilities"]
+                                    if value not in {"instance-ssh-v1", "instance-ssh-credentials-v1"}]
+        write_json(contract_path, contract)
     return spec
+
+
+def verify_full_hardening_build(case):
+    manifest = json.loads((case.state / "services/allinone-hardened-builder/manifest.json").read_text())
+    rendered = Path(manifest["shelter_config"]).read_text()
+    assert re.search(r"(?m)^  harden:\n    enabled: true\n    mode: full$", rendered), \
+        "strict allinone release was not built with FULL HARDENING"
+    assert manifest.get("debug_ssh") is None and manifest.get("ssh") is None
+    contract = manifest["runtime_contract"]
+    assert contract["image_variant"] == "release"
+    assert not any(value.startswith("instance-ssh") for value in contract["capabilities"])
+    case.checks["full_hardening_release_built"] = True
 
 
 def publish_variant(case, service, spec, variant, directory, records):
@@ -207,12 +238,17 @@ def main():
             if not args.resume:
                 case.command("cosign-key", "key", "generate-cosign", "--output-key-prefix", cosign.with_suffix(""))
             allinone = allinone_spec(case, cosign, args.resume)
-            builds = [("allinone-builder", allinone, ["release"])]
-            for service, spec, variants in builds:
+            hardened = allinone_spec(case, cosign, args.resume, hardened=True)
+            builds = [("allinone-builder", allinone, "allinone"),
+                      ("allinone-hardened-builder", hardened, "allinone-hardened")]
+            for service, spec, fixture in builds:
+                variants = ["release"]
                 if not (args.resume and verify_resumable_build(case, service, spec, variants)):
                     case.command("build-"+service, "build", "--spec", spec, timeout=28800)
+                if service == "allinone-hardened-builder":
+                    verify_full_hardening_build(case)
                 for variant in variants:
-                    publish_variant(case, service, spec, variant, case.work / "allinone", records)
+                    publish_variant(case, service, spec, variant, case.work / fixture, records)
             # Older producers may own inference publications too. Retain every
             # owned entry for cleanup when resuming, without rebuilding them.
             case.checks["signed_images_published"] = REQUIRED_PUBLICATIONS <= {

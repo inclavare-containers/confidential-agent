@@ -10,6 +10,7 @@ import subprocess
 import sys
 import time
 from rekor_fixture import configure_spec
+from render_case import configure_repositories
 
 
 @contextmanager
@@ -62,6 +63,10 @@ def main():
     try:
         if label in {"build", "deploy"} and "--spec" in command:
             configure_spec(command[command.index("--spec") + 1])
+        if label == "build" and "--spec" in command:
+            # The caller explicitly selects the ECS HTTPS mirror. Apply it to
+            # native-init and legacy builders alike before CA freezes inputs.
+            configure_repositories(command[command.index("--spec") + 1])
         if label == "build":
             with build_slot(work / ("build-slot-" + str(time.time_ns()) + ".timing.json")):
                 code = subprocess.call(command)

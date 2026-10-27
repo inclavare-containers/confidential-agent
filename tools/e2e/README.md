@@ -17,12 +17,12 @@ Cases:
 
 | Case | What it covers |
 |---|---|
-| `openclaw-bailian` | `confidential-agent init openclaw` + Bailian 主路径，覆盖默认启用 PEP 的部署分支。 |
+| `openclaw-bailian` | `confidential-agent init openclaw` + Bailian 主路径，覆盖默认启用 PEP 的部署分支、真实 exec 沙箱、审批阻断、策略拒绝、资源限制和 TDX helper。 |
 | `openclaw-bailian-no-pep` | 同一条 `init openclaw` 主路径，额外传入 `--disable-pep`，覆盖不安装、不启用 cai-pep 的部署分支。 |
 | `openclaw-a2a` | Legacy two-OpenClaw A2A bridge coverage. |
 | `a2a-data-collab` | Two real LLM-backed agents collaborate over A2A: Analyst delegates a natural-language aggregate data task to a Data Owner, verifies no raw private rows leak, and asserts the A2A TNG routes use the pinned 2.9.2 RPM/config schema. |
 | `openclaw-vllm` | `init openclaw-vllm` 生成和 AppSpec 校验；设置 `E2E_OPENCLAW_VLLM_RUN_CLOUD=1` 并选择有库存的 GPU TEE zone，运行真实构建、部署、readiness/chat。未开启时不代表云端验证通过。 |
-| `openclaw-vllm-release` | 独立构建并部署旧版 OpenClaw-vLLM 的 release 变体，通过证明状态和受保护入口验证真实推理，确认未启用 debug SSH；完整矩阵同时运行原 debug 用例。 |
+| `openclaw-vllm-release` | 手动选择的独立 release 回归，通过证明状态和受保护入口验证真实推理，确认未启用 debug SSH；自动完整矩阵仅构建此入口的 debug 变体。 |
 | `cmaas` | CMaaS 是主 MCP E2E：自然语言 agent 经 gateway 调用 memory MCP tools，验证 MCP audit 链、虚拟 MCP audit tools、TEE evidence 绑定、TNG 2.9.2 builtin policy 的 deny/recovery 负例、非 TEE baseline rejection 和 snapshot confidentiality；不通过 host connect 直连 MCP `mcp_ports`。 |
 | `trustee-duo` | 同一 state/Trustee 下部署 OpenClaw Bailian 与 Codex Bailian，覆盖真实对话、同步/状态、无 CLI 重注入的 reboot 恢复、Trustee fail-closed、逐个销毁与最终清理。 |
 | `hermes-agent` | `init hermes` 生成的普通 mkosi 路径：构建期通过官方 installer 从 Hermes 源码安装，运行期通过 `cai-hermes-agent.service` 启动，并覆盖资源注入、deploy、connect、health/chat probe 和失败诊断。 |
@@ -38,6 +38,26 @@ also verifies that intercepted or denied calls never execute the original tool,
 ordinary calls still execute, and an unsupported module layout fails before
 patching installed files. An optional argument selects another OpenClaw package
 directory without modifying that package.
+
+The cloud PEP lane runs the installed OpenClaw agent through its gateway and
+executes real Docker containers. A private deterministic model drives policy
+and failure cases, including later hook vetoes, approval-required or unavailable denial, path and
+network restrictions, output/resource limits, timeout cleanup, and missing or
+invalid PEP responses. A separate real Bailian call must read an unseen random
+file, return its digest, and append exactly one byte; the runner checks the
+side effect and correlates the tool call with PEP audit events. The TDX helper
+probe runs by default (`E2E_RUN_TDX_SKILL_PROBE=1`). In TDX mode the probe omits
+the unresponsive-socket timeout case because the helper needs a longer response
+budget; the local non-TDX probe covers that timeout separately. The no-PEP lane
+also verifies that the guest does not install the PEP unit.
+This PEP matrix covers `exec`. Its live approval check verifies that approval-required
+or unavailable denial has no PEP or native side effects; it does not establish an
+interactive pending request. Pinned-module tests cover deferred pending approval,
+scheduler, voice, admission, finalization and abort gates. Container isolation checks inspect the actual
+network, mounts, capabilities and resource settings and attempt a forbidden
+write. The TDX case checks the controlled host-attestation helper and its
+measurement claims; interactive approval UI, automatic skill discovery and
+resource-exhaustion stress require separate tests.
 
 Most E2E cases intentionally mirror the user command flow. Init-covered cases first run `confidential-agent init <target> --non-interactive`, then use the generated AppSpec:
 
@@ -99,11 +119,14 @@ Common environment:
 | `E2E_CLI_AGENT_NPM_REGISTRY` | `https://registry.npmmirror.com/`; inherits `E2E_NPM_REGISTRY` when set; used by `claude-code` and `codex` CLI package installs |
 | `E2E_CLAUDE_CODE_VERSION` | 固定清单中的 Claude Code 版本 |
 | `E2E_CODEX_VERSION` | 固定清单中的 Codex 版本 |
+| `E2E_QODER_NATIVE_CONFIG` | Full all-in-one acceptance requires a current native Qoder config directory containing `.auth/user`, `.auth/machine_id`, and `settings.json`, or a valid `QODER_PERSONAL_ACCESS_TOKEN` |
+| `E2E_QODER_MODEL` | Explicit Qoder model selection; otherwise uses the native settings' selected model |
 
 Provider credentials:
 
 - Aliyun: environment AK/SK or a usable active `aliyun` CLI profile.
 - Bailian cases: `DASHSCOPE_API_KEY` or `BAILIAN_API_KEY`.
+- All-in-one Qoder: validate native authentication and the selected model using a private copy of the current config before starting cloud builds. A stored refresh-token expiry alone does not prove that the server still accepts the session. Keep the original config unchanged and supply the validated copy through `E2E_QODER_NATIVE_CONFIG`.
 - Rekor mode: `E2E_COSIGN_KEY` or an auto-generated key under the work dir. Auto-generation uses `confidential-agent key generate-cosign` with the configured native tools directory.
 - `a2a-data-collab`: defaults to unsigned AgentCards. Set `E2E_A2A_SIGNING=1` to exercise Sigstore keyless AgentCard signing; signed mode needs `CA_A2A_SIGSTORE_IDENTITY_TOKEN` or CI OIDC token request envs. `A2A_SIGNER_ISSUER` / `A2A_SIGNER_SUBJECT` may be set explicitly; otherwise a JWT `CA_A2A_SIGSTORE_IDENTITY_TOKEN` is decoded for `iss` / `sub`.
 
@@ -225,27 +248,34 @@ tools/e2e/run.sh --suite full --jobs 3 --gpu-jobs 3 --build-jobs 2
 tools/e2e/run.sh --case inference-reuse-nlb --gpu-jobs 1
 ```
 
-Groups are `legacy`, `reuse`, `inference`, and `platform`. The full matrix runs
-all eleven original cases, signed all-in-one image reuse with six harnesses under
-both attestation modes, encrypted Qwen3.8-27B inference through single instances,
-ALB/OHTTP and NLB/OHTTP or RATS-TLS, and release/debug
-variants. Platform coverage includes simultaneous deployment, interrupted
+Groups are `legacy`, `reuse`, `inference`, and `platform`. Full acceptance keeps
+all eleven native entry-point cases, six all-in-one harnesses under Challenge,
+OpenClaw and Codex under Trustee, and a separate all-in-one full-hardening smoke.
+The Challenge reuse lane also covers concurrent deployment, interrupted
 infrastructure, delivery resume, frozen inputs, application failure, console
-isolation, PTYs, and stable peer endpoints.
+isolation, PTYs, and stable peer endpoints. The Trustee lane checks policy
+lifecycle, cold-boot recovery, fail-closed destruction and surviving consumers.
 
-Image preparation is separate from deployment scenarios. `publish-reuse-images`
-builds and publishes only all-in-one release. `prepare-inference-images` is the
-only task building both release and debug in one invocation; it verifies both
-artifacts and publishes/imports release once for all seven release inference
-lanes. These lanes keep their topology, transport, attestation, one-click and
-recovery checks. The debug lane deploys the original local build using its
-original state and SSH key; it does not distribute debug keys or a signed debug
-image. Only that lane mutates the prepared build's deployment state, and its
-local images remain until all consumers finish. OpenClaw-vLLM builds debug in
-its debug lane and release in its release lane. A2A data collaboration builds
-only debug for each of its two different services.
+`publish-reuse-images` builds two release images: the reusable all-in-one image
+with attested management SSH and a separate `service.ssh: false` image with full
+hardening. The strict lane uses protected Hermes HTTP, requires a real model
+response and checks that management SSH is unavailable.
 
-The full matrix has 23 functional lanes and two fixture tasks. Metadata labels
+`prepare-inference-images` builds and publishes one debug image, reused by three
+lanes: ALB/OHTTP with two Challenge replicas, NLB/OHTTP with two Trustee replicas
+plus an isolated single-node service, and NLB/RATS-TLS with two Challenge replicas.
+The isolated service also exercises the one-click single-node entry point, wrong
+model key, and unavailable Trustee during cold boot. Each consumer has its own
+state and references the original debug SSH key explicitly. The signed image
+package contains no SSH private key or producer state. OpenClaw-vLLM builds and
+runs debug once. Together these lanes allocate eight GPU instances, including
+the isolated service; reboot tests reuse those instances. A2A data collaboration
+builds only debug for its two different services.
+
+`openclaw-vllm-release` and `platform-recovery` remain explicitly selectable with
+`--case`, but are excluded from automatic group/full selection. Their functional
+coverage is represented by the consolidated lanes above. The full matrix has
+17 functional lanes and two fixture tasks. Metadata labels
 fixture tasks separately. `--build-jobs` bounds image builds across both case
 pools (default two); deploying, loading models and running assertions keep the
 CPU/GPU case concurrency. Command timings are saved as `*.timing.json` or
@@ -296,8 +326,9 @@ Consumer reports can retrieve those entries without producer upload logs or
 local SLSA files. To include native schema regression checks,
 run `CA_BIN=/path/to/tested/confidential-agent python3.11 -m unittest discover -s tools/e2e/tests`.
 Those checks validate every harness under both attestation modes and the
-supported inference consumer specs with the real CLI; they also retain the
-rejection of published debug images with build-time SSH credentials.
+supported inference consumer specs with the real CLI; they also validate published debug consumers without producer state or private
+SSH keys. Debug SSH requires the original private key supplied separately with
+`confidential-agent ssh --identity-file`; it is never part of a signed release.
 `prepare-host.sh` installs the exact Node/OpenClaw versions needed by the host
 probes, using the existing one-click helpers. Missing host commands are reported
 as blocked prerequisites before a lane creates cloud resources.
@@ -348,9 +379,22 @@ Inference checks readiness on every expected replica and uses native vLLM
 counters to prove requests reach each backend. The NLB reuse lane creates a
 second service from the same image, compares independent identities and OHTTP
 public key groups, waits for key rotation, and verifies the other service and
-publisher image survive destruction of the replica group. The single Trustee
-reuse lane rejects a wrong model key and an unavailable Trustee during cold
-boot, then verifies recovery without reinjection after boot.
+publisher image survive destruction of the replica group. Its isolated single-node
+service rejects a wrong model key and an unavailable Trustee during cold boot,
+then verifies recovery without reinjection after boot. Boot IDs and Trustee
+console evidence prevent old readiness responses from satisfying recovery checks.
+
+For a focused survivor regression, run `python3.11 tools/e2e/inference_survivor_case.py`
+with a fresh `E2E_WORK_DIR` and `E2E_SUITE_DIR` pointing to a suite containing
+`prepare-inference-images/inference-debug/` and its original debug key metadata.
+Use the normal encrypted model and cloud fixture environment. This standalone
+driver deploys a Trustee-backed two-node NLB group and an isolated single node
+from the same signed debug image, checks real and streaming inference on all
+routes, then verifies the original single-node tunnel after group destruction.
+Its result scope is `survivor-reconfiguration-only`: it supplements the original
+lane's evidence and does not rerun or claim the full reboot, wrong-key, outage,
+or natural-rotation coverage. It is separate from the 17-lane/two-fixture matrix;
+the producer owner removes its publication after this driver's cleanup finishes.
 
 A service owns its identity and delivered credentials. Replicas of that service
 share them and own separate disks; separate services retain independent state.
@@ -361,17 +405,19 @@ group supports one connect port. Release inference checks use protected business
 and management interfaces; debug SSH is used only for the debug variant.
 
 For an independent clean consumer host, set `E2E_PUBLISHED_FIXTURES` to the
-all-in-one producer directory containing `allinone/` and
+all-in-one producer directory containing `allinone/`, `allinone-hardened/` and
 `allinone-publisher-state.json`. Set `E2E_INFERENCE_FIXTURES` to the inference
-producer directory containing `inference-release/`. The former combined export
+producer directory containing `inference-debug/`. The former combined export
 directory is also accepted through `E2E_PUBLISHED_FIXTURES` for compatibility.
 Copy only their envelopes, public keys, and publication state; do not copy guest
 disk images, caches, producer private keys, or producer runtime state. Select
-the two all-in-one lanes and the inference reuse lanes with repeated `--case`.
+the required all-in-one and inference lanes with repeated `--case`.
 Imported fixtures stay owned by their original producer, which must retain and
 clean the cloud images after this consumer run finishes.
-Independent consumers receive only signed release fixtures. The debug lane
-requires the original local producer and cannot run from public exports.
+For debug inference diagnostics, separately provision the original build SSH key
+and set `E2E_INFERENCE_DEBUG_KEY_FILE` to its private local path. It is never
+exported in the signed fixture or copied into a consumer state directory. Local
+suites resolve the original key through the producer's `debug-key-path.json`.
 Create a lease file and pass its path to the producer suite with
 `--fixture-consumer-lease`. Remove it only after the independent consumer has
 finished resource cleanup. Both producers wait for that lease before unpublishing;

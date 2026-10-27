@@ -23,7 +23,8 @@ class ModelKeyRecoveryTests(unittest.TestCase):
                 spec.write_text(json.dumps({"resources": {
                     "model_decryption_key": {"source": str(key)}}}))
                 events = []
-                cloud = {"status": "Running", "stop_reads": 0, "new_boot": False}
+                cloud = {"status": "Running", "stop_reads": 0, "new_boot": False,
+                         "wrong_boot": False, "wrong_boot_reads": 0}
 
                 def command(label, *args, **kwargs):
                     if label == "wrong-key-delivery":
@@ -53,6 +54,7 @@ class ModelKeyRecoveryTests(unittest.TestCase):
                         cloud.update(status="Running", new_boot=True)
                     else:
                         self.assertEqual(action, "RebootInstance")
+                        cloud["wrong_boot"] = True
                         # Reboot acknowledgement can precede shutdown. The old
                         # daemon is still ready after the restored-key delivery.
                     events.append(action)
@@ -72,8 +74,18 @@ class ModelKeyRecoveryTests(unittest.TestCase):
                     return json.dumps({"model": inference_case.MODEL, "choices": [
                         {"message": {"content": "INFERENCE_OK"}}]}).encode()
 
-                case = SimpleNamespace(command=command, api=api, checks={},
-                    local_state=lambda _: {"deploy": {"public_ip": "192.0.2.1"}})
+                def ssh(*args, **kwargs):
+                    number = 3 if cloud["new_boot"] else 2 if cloud["wrong_boot"] else 1
+                    if cloud["wrong_boot"] and not cloud["new_boot"]:
+                        cloud["wrong_boot_reads"] += 1
+                        # The old daemon can still answer immediately after the
+                        # cloud accepts a reboot. Do not accept that boot ID.
+                        if cloud["wrong_boot_reads"] == 1:
+                            number = 1
+                    return SimpleNamespace(stdout=("00000000-0000-0000-0000-00000000000" + str(number)).encode())
+
+                case = SimpleNamespace(command=command, api=api, ssh=ssh, checks={}, work=root,
+                    local_state=lambda _: {"deploy": {"public_ip": "192.0.2.1", "instance_id": "i-owned"}})
                 with patch.object(inference_case, "validate_live", side_effect=ready), \
                         patch.object(inference_case, "request", side_effect=request), \
                         patch.object(inference_case.time, "sleep"), \
@@ -88,9 +100,15 @@ class ModelKeyRecoveryTests(unittest.TestCase):
                         self.assertTrue(case.checks["wrong_model_key_rejected"])
                         self.assertLess(events.index("StartInstance"), events.index("new-boot-ready"))
                         self.assertEqual(events.count("real-model-response"), 1)
+                        wrong_proof = json.loads((root / "wrong-key-boot-proof.json").read_text())
+                        restored_proof = json.loads((root / "restored-key-boot-proof.json").read_text())
+                        self.assertNotEqual(wrong_proof["before"], wrong_proof["after"])
+                        self.assertEqual(restored_proof["before"], wrong_proof["after"])
+                        self.assertNotEqual(restored_proof["before"], restored_proof["after"])
                 self.assertEqual(key.read_bytes(), b"original-model-key\n")
                 self.assertEqual(events.count("wrong-key-not-ready"), 8)
                 self.assertEqual(events.count("wrong-key-request-denied"), 8)
+                self.assertGreaterEqual(cloud["wrong_boot_reads"], 2)
 
     @staticmethod
     def poll(probe, timeout):

@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import os
 from pathlib import Path
 import sys
@@ -67,9 +68,75 @@ class DownloadDefaultsTest(unittest.TestCase):
     def test_repository_mirror_rejects_insecure_or_credential_urls(self):
         for mirror in ['http://mirror.example', 'https://user:secret@mirror.example',
                        'https://mirror.example?key=secret', 'https://mirror.example#fragment',
-                       'https://mirror.example\n']:
+                       'https://mirror.example\n', 'https://mirror.example:invalid',
+                       'https://mirror.example:99999', 'https://']:
             with self.subTest(mirror=mirror), self.assertRaises(ValueError):
                 RENDER.render_matrix_repositories({'E2E_MATRIX_REPO_MIRROR': mirror})
+
+    def configure(self, source, suffix='yaml'):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / ('build.' + suffix)
+            path.write_text(source)
+            with patch.dict(os.environ, {'E2E_MATRIX_REPO_MIRROR': 'https://mirror.example/alinux'}, clear=True):
+                RENDER.configure_repositories(path)
+                output = path.read_text()
+                RENDER.configure_repositories(path)
+                self.assertEqual(path.read_text(), output, 'repository configuration is not idempotent')
+            return output
+
+    def test_absent_or_empty_yaml_repositories_are_added_without_other_build_edits(self):
+        for field in ['', '  repos: []\n', '  repos: null\n']:
+            with self.subTest(field=field):
+                output = self.configure('schema: confidential-agent/v1\nbuild:\n  image_name: fixture\n' + field
+                    + '  scripts: [./install.sh]\nattestation:\n  reference_values: rekor\n')
+                self.assertIn('  image_name: fixture\n', output)
+                self.assertIn('  scripts: [./install.sh]\n', output)
+                self.assertTrue(output.endswith('attestation:\n  reference_values: rekor\n'))
+                self.assertEqual(output.count('gpgkey:'), 5)
+
+    def test_yaml_mixed_repositories_keep_epel_and_custom_entries(self):
+        for indent in [2, 4]:
+            with self.subTest(indent=indent):
+                prefix = ' ' * indent
+                extra = (prefix + '- name: epel\n' + prefix + '  baseurl: https://epel.example/$basearch/\n'
+                    + prefix + '  gpgkey: https://epel.example/key\n'
+                    + prefix + '- baseurl: https://custom.example/packages/\n'
+                    + prefix + '  name: custom\n' + prefix + '  gpgkey: https://custom.example/key\n')
+                canonical = (prefix + '- name: "alinux-os"\n' + prefix + '  baseurl: https://old.example/os\n'
+                    + prefix + '  gpgkey: https://old.example/key\n')
+                output = self.configure('build:\n  image_name: fixture\n  repos:\n' + extra + canonical
+                    + '  scripts: [./install.sh]\nservice:\n  id: fixture\n')
+                self.assertIn(extra, output)
+                self.assertNotIn('https://old.example/', output)
+                self.assertEqual(output.count('gpgkey:'), 7)
+                self.assertEqual(output.count('name: alinux-os'), 1)
+                self.assertTrue(output.endswith('  scripts: [./install.sh]\nservice:\n  id: fixture\n'))
+
+    def test_json_repositories_preserve_other_sources_and_fields(self):
+        extra = {'name': 'epel', 'baseurl': 'https://epel.example/packages/', 'gpgkey': 'https://epel.example/key'}
+        for repositories in [None, [], [extra, {'name': 'alinux-os', 'baseurl': 'https://old.example/', 'gpgkey': 'https://old.example/key'}]]:
+            with self.subTest(repositories=repositories):
+                source = {'build': {'scripts': ['./install.sh']}, 'service': {'id': 'fixture'}}
+                if repositories is not None:
+                    source['build']['repos'] = repositories
+                output = json.loads(self.configure(json.dumps(source), 'json'))
+                self.assertEqual(output['service'], source['service'])
+                self.assertEqual(output['build']['scripts'], source['build']['scripts'])
+                selected = output['build']['repos']
+                self.assertEqual(len([repo for repo in selected if repo['name'].startswith('alinux-')]), 5)
+                if repositories:
+                    self.assertIn(extra, selected)
+                self.assertNotIn('https://old.example/', json.dumps(output))
+
+    def test_invalid_mirror_does_not_rewrite_the_builder(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'build.yaml'
+            source = 'build:\n  repos: []\n'
+            path.write_text(source)
+            with patch.dict(os.environ, {'E2E_MATRIX_REPO_MIRROR': 'http://mirror.example'}, clear=True):
+                with self.assertRaises(ValueError):
+                    RENDER.configure_repositories(path)
+            self.assertEqual(path.read_text(), source)
 
     def test_allinone_repository_defaults_are_public_without_cloud_detection(self):
         template = (RENDER.ROOT / 'examples/allinone/build.yaml').read_text()

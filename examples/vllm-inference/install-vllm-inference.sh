@@ -58,15 +58,42 @@ download_installer() {
   local url="$1" destination="$2" referer="${3:-}"
   local extra=()
   [[ -z "$referer" ]] || extra+=(--referer "$referer")
-  # Bound TLS setup and stalled reads as well as the total transfer. A failed
-  # request must never become a reusable installer, including HTTP error pages.
-  if ! curl --fail --location --retry 3 --retry-delay 2 --retry-connrefused \
-      --connect-timeout 20 --max-time 1800 --speed-time 60 --speed-limit 1024 \
-      "${extra[@]}" --output "$destination.tmp" --url "$url"; then
+  # curl 7.61 does not retry every transport failure (including HTTP/2 error
+  # 92). Keep one bounded retry loop, and avoid HTTP/2 for these large assets.
+  local attempt status http_status
+  for attempt in 1 2 3 4; do
     rm -f "$destination.tmp"
-    return 1
-  fi
-  mv "$destination.tmp" "$destination"
+    if http_status="$(curl --http1.1 --fail --location \
+        --connect-timeout 20 --max-time 1800 --speed-time 60 --speed-limit 1024 \
+        "${extra[@]}" --write-out '%{http_code}' --output "$destination.tmp" --url "$url")"; then
+      if mv "$destination.tmp" "$destination"; then
+        return 0
+      else
+        status=$?
+        rm -f "$destination.tmp"
+        return "$status"
+      fi
+    else
+      status=$?
+    fi
+    rm -f "$destination.tmp"
+    case "$status" in
+      5|6|7|16|18|28|35|52|55|56|92) ;;
+      22)
+        case "$http_status" in
+          408|429|500|502|503|504) ;;
+          *) return "$status" ;;
+        esac
+        ;;
+      *) return "$status" ;;
+    esac
+    if ((attempt == 4)); then
+      return "$status"
+    fi
+    printf 'installer download failed (curl=%s http=%s attempt=%s/4); retrying\n' \
+      "$status" "$http_status" "$attempt" >&2
+    sleep 2
+  done
 }
 
 download_nvidia_driver() {

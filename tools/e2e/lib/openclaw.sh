@@ -113,3 +113,83 @@ run_openclaw_gateway_token_probe() {
   fi
   record "- OpenClaw gateway accepts the configured token and rejects an invalid token."
 }
+
+run_openclaw_pep_e2e() {
+  local connect_port="$1" token="$2" host key remote_probe proof_id proof_dir proof_hash
+  host="$(state_value "$STATE_DIR" openclaw deploy.public_ip)"
+  key="$(state_value "$STATE_DIR" openclaw build.debug_ssh.private_key)"
+  chmod 0600 "$key"
+  wait_for_ssh "$host" "$key" 300
+  remote_probe="/tmp/ca-pep-e2e-$E2E_RUN_ID.mjs"
+  ssh_guest "$key" "$host" "umask 077; cat > '$remote_probe'" \
+    <"$ROOT_DIR/tools/e2e/probes/openclaw-pep-probe.mjs"
+  local remote_output="$remote_probe.report.json"
+  local -a probe_args=(node "$remote_probe" --output "$remote_output")
+  if [[ "${E2E_RUN_TDX_SKILL_PROBE:-1}" == "1" ]]; then
+    probe_args+=(--tdx)
+  fi
+  local probe_status=0
+  ssh_guest "$key" "$host" "${probe_args[@]}" \
+    >"$WORK_DIR/pep-enforcement-probe.json" 2>"$WORK_DIR/pep-enforcement-probe.err" || probe_status=$?
+  if [[ "$probe_status" != "0" ]]; then
+    ssh_guest "$key" "$host" "cat '$remote_output' 2>/dev/null || true" >"$WORK_DIR/pep-enforcement-probe.remote.json"
+    if jq -e '.ok == false' "$WORK_DIR/pep-enforcement-probe.remote.json" >/dev/null 2>&1; then
+      cp "$WORK_DIR/pep-enforcement-probe.remote.json" "$WORK_DIR/pep-enforcement-probe.json"
+    fi
+    ssh_guest "$key" "$host" "cat '$remote_output.gateway.log' 2>/dev/null || true" >"$WORK_DIR/pep-enforcement-gateway.log"
+    ssh_guest "$key" "$host" "cat '$remote_output.pep.log' 2>/dev/null || true" >"$WORK_DIR/pep-enforcement-pep.log"
+    record_file_as_block "Private PEP probe gateway diagnostics:" "$WORK_DIR/pep-enforcement-gateway.log" text
+    record_file_as_block "Private PEP probe daemon diagnostics:" "$WORK_DIR/pep-enforcement-pep.log" text
+  fi
+  ssh_guest "$key" "$host" "rm -f '$remote_probe' '$remote_output' '$remote_output.gateway.log' '$remote_output.pep.log'" || true
+  record_file_as_block "OpenClaw exec PEP enforcement probe:" "$WORK_DIR/pep-enforcement-probe.json" json
+  record_file_as_block "OpenClaw exec PEP enforcement probe stderr:" "$WORK_DIR/pep-enforcement-probe.err" text
+  [[ "$probe_status" == "0" ]] || return "$probe_status"
+  jq -e '.ok == true and .scope == "exec only"' "$WORK_DIR/pep-enforcement-probe.json" >/dev/null
+
+  # The model never sees the random challenge or its digest before executing.
+  # An echoed marker cannot satisfy digest, exactly-once mutation, and PEP audit.
+  proof_id="pep-$(openssl rand -hex 12)"
+  proof_dir="/workspace/ca-e2e-$proof_id"
+  proof_hash="$(ssh_guest "$key" "$host" "umask 077; mkdir '$proof_dir'; openssl rand 64 > '$proof_dir/challenge'; sha256sum '$proof_dir/challenge' | cut -d ' ' -f 1")"
+  [[ "$proof_hash" =~ ^[0-9a-f]{64}$ ]] || return 1
+  local command="sha256sum $proof_dir/challenge && printf x >> $proof_dir/executions" message
+  printf -v message 'Use the exec tool exactly once with workdir /workspace to run this exact command:\n%s\nReturn the SHA-256 printed by the tool. You must execute the tool; do not invent a hash.' "$command"
+  run_openclaw_chat_probe \
+    "ws://127.0.0.1:$connect_port" "$token" \
+    "$message" \
+    "$proof_hash" "$WORK_DIR/pep-bailian-exec-probe.json" \
+    --session "agent:main:ca-e2e-$proof_id" \
+    --instructions "Execute the requested exec command once, then report its actual stdout. Do not read the challenge with other tools." \
+    --timeout-ms "$CHAT_TIMEOUT_MS"
+
+  ssh_guest "$key" "$host" node --input-type=module - "$proof_id" "$proof_dir" \
+    >"$WORK_DIR/pep-bailian-audit-proof.json" <<'JS'
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { execFileSync } from "node:child_process";
+const [proofId, proofDir] = process.argv.slice(2);
+assert.equal(fs.readFileSync(path.join(proofDir, "executions"), "utf8"), "x", "exec did not run exactly once");
+const raw = execFileSync("journalctl", ["-u", "cai-pep.service", "--no-pager", "-o", "cat"], { encoding: "utf8" });
+const events = raw.split("\n").flatMap(line => {
+  try {
+    const event = JSON.parse(line);
+    return String(event.session_key ?? "").includes(proofId) && event.event === "intent_allow" ? [event] : [];
+  } catch { return []; }
+});
+assert.equal(events.length, 1, "expected exactly one correlated live PEP allow event");
+const event = events[0];
+assert.equal(event.tool_name, "exec");
+assert.equal(event.backend, "docker");
+assert.equal(event.exit_code, 0);
+assert.ok(event.command.includes(proofId) && event.command.startsWith("sha256sum "));
+assert.ok(event.audit_id && event.run_id && event.request_id);
+console.log(JSON.stringify({ ok: true, exactlyOnce: true, backend: event.backend,
+  auditId: event.audit_id, runId: event.run_id, requestId: event.request_id,
+  sessionKey: event.session_key }, null, 2));
+JS
+  record_file_as_block "Bailian exec side effect and correlated real PEP audit:" "$WORK_DIR/pep-bailian-audit-proof.json" json
+  ssh_guest "$key" "$host" "rm -rf '$proof_dir'"
+  record "- Real Bailian exec returned the unseen challenge digest, executed once in the PEP container, and correlated run/session/request/audit IDs."
+}

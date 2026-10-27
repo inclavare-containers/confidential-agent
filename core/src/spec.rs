@@ -616,9 +616,6 @@ impl AgentSpec {
             {
                 bail!("deploy.image reuses a published image; omit build inputs");
             }
-            if self.deploys_debug_image() {
-                bail!("deploy.image cannot reuse build-time debug SSH credentials");
-            }
         } else {
             validate_id("build.image_name", &self.build.image_name)?;
         }
@@ -703,10 +700,10 @@ impl AgentSpec {
             }
         }
         match self.image_variant() {
-            "release" if !self.build.variants.release.enabled => {
+            "release" if self.deploy.image.is_none() && !self.build.variants.release.enabled => {
                 bail!("deploy.image_variant=release requires build.variants.release.enabled=true")
             }
-            "debug" => {
+            "debug" if self.deploy.image.is_none() => {
                 let Some(debug) = &self.build.variants.debug else {
                     bail!("deploy.image_variant=debug requires build.variants.debug");
                 };
@@ -714,7 +711,7 @@ impl AgentSpec {
                     bail!("deploy.image_variant=debug requires build.variants.debug.enabled=true");
                 }
             }
-            "release" => {}
+            "release" | "debug" => {}
             other => bail!("deploy.image_variant '{}' is not supported", other),
         }
         for (name, resource) in &self.resources {
@@ -1287,8 +1284,8 @@ mod tests {
     }
 
     #[test]
-    fn published_image_rejects_ambiguous_builds_unpinned_identity_and_debug_keys() {
-        for field in ["build", "manifest", "image_id", "release", "debug"] {
+    fn published_image_rejects_ambiguous_builds_and_invalid_identity() {
+        for field in ["build", "manifest", "image_id", "release", "variant"] {
             let mut value = published_spec();
             match field {
                 "build" => {
@@ -1297,7 +1294,7 @@ mod tests {
                 "manifest" => value["deploy"]["image"]["manifest"] = "sha256:123".into(),
                 "image_id" => value["deploy"]["image"]["image_id"] = "bad image!".into(),
                 "release" => value["deploy"]["image"]["release"] = "".into(),
-                _ => value["deploy"]["image_variant"] = "debug".into(),
+                _ => value["deploy"]["image_variant"] = "unknown".into(),
             }
             assert!(
                 AgentSpec::from_yaml(
@@ -1318,6 +1315,39 @@ mod tests {
             Path::new("/project")
         )
         .is_err());
+    }
+
+    #[test]
+    fn published_debug_image_needs_no_local_build_or_private_ssh_key() {
+        let mut value = published_spec();
+        value["deploy"]["image_variant"] = "debug".into();
+        let spec = AgentSpec::from_yaml(
+            &serde_yaml::to_string(&value).unwrap(),
+            Path::new("/project"),
+        )
+        .unwrap();
+        assert!(spec.deploys_debug_image());
+        assert!(spec.build.variants.debug.is_none());
+        assert!(!spec.service.ssh);
+        value["service"]["ssh"] = true.into();
+        assert!(AgentSpec::from_yaml(
+            &serde_yaml::to_string(&value).unwrap(),
+            Path::new("/project"),
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("service.ssh requires a release image"));
+        value["service"]["ssh"] = false.into();
+        value["build"] =
+            serde_yaml::from_str("image_name: local-debug\nvariants: {debug: {enabled: true}}")
+                .unwrap();
+        assert!(AgentSpec::from_yaml(
+            &serde_yaml::to_string(&value).unwrap(),
+            Path::new("/project"),
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("omit build inputs"));
     }
 
     const SPEC: &str = r#"

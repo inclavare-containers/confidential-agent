@@ -187,6 +187,11 @@ impl ImageRuntimeContract {
                 variant == spec.image_variant(),
                 "published image variant differs from the requested deployment variant"
             );
+        } else {
+            anyhow::ensure!(
+                !spec.deploys_debug_image(),
+                "published debug image has no authenticated variant metadata; rebuild and export it before deploying"
+            );
         }
         anyhow::ensure!(
             security.get("rootfs_verity").and_then(|v| v.as_bool()) == Some(true),

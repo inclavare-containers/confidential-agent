@@ -197,10 +197,12 @@ class Case:
         data = json.loads(ready.read_text())
         return data["client_endpoints"][0]["http_base_url"]
 
-    def ssh(self, service, label, command, instance_id=None, **options):
+    def ssh(self, service, label, command, instance_id=None, identity_file=None, **options):
         arguments = ["ssh", service]
         if instance_id:
             arguments += ["--instance-id", instance_id]
+        if identity_file:
+            arguments += ["--identity-file", identity_file]
         return self.command(label, *arguments, "--", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
                             "-o", "StrictHostKeyChecking=accept-new",
                             "-o", "UserKnownHostsFile=" + str(self.work / "debug-ssh-known-hosts"), command, **options)

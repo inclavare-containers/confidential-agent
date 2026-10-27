@@ -2887,6 +2887,99 @@ resources: {}
 }
 
 #[test]
+fn configured_debug_key_is_only_staged_for_the_debug_build_variant() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let fake_bin = write_fake_prepare_tools(temp.path());
+    let old_path = std::env::var_os("PATH").unwrap_or_default();
+    std::env::set_var(
+        "PATH",
+        format!("{}:{}", fake_bin.display(), old_path.to_string_lossy()),
+    );
+    let spec = temp.path().join("openclaw.yaml");
+    fs::write(
+        temp.path().join("debug.pub"),
+        "ssh-ed25519 AAAA configured\n",
+    )
+    .unwrap();
+    fs::write(
+        &spec,
+        r#"
+schema: confidential-agent/v1
+service:
+  id: openclaw
+  ssh: true
+  ports: [18789]
+  connect: [18789]
+build:
+  image_name: openclaw-agent
+  variants:
+    release: {enabled: true}
+    debug:
+      enabled: true
+      ssh_public_key: ./debug.pub
+deploy:
+  provider: aliyun
+  image_variant: release
+  instance_type: ecs.g8i.xlarge
+  region: cn-beijing
+  zone_id: cn-beijing-l
+attestation:
+  tee: tdx
+  mode: challenge
+  reference_values: sample
+resources: {}
+"#,
+    )
+    .unwrap();
+    let mut cli = test_cli();
+    cli.state_dir = temp.path().join("state");
+    let result = cmd_build(
+        &cli,
+        &BuildArgs {
+            spec,
+            render_only: true,
+        },
+    );
+    std::env::set_var("PATH", old_path);
+    result.unwrap();
+
+    let attempt = fs::read_dir(cli.state_dir.join("services/openclaw/build-attempts"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    for variant in ["release", "debug"] {
+        let directory = attempt.join(variant);
+        let manifest = read_build_manifest(&directory.join("manifest.json")).unwrap();
+        let rendered = fs::read_to_string(directory.join("shelter.yaml")).unwrap();
+        assert!(rendered.contains("openssh-server"));
+        for (destination, staged) in [
+            ("/root/.ssh/authorized_keys", "debug_authorized_keys"),
+            (
+                "/etc/confidential-agent/debug-ssh-enabled",
+                "debug-ssh-enabled",
+            ),
+        ] {
+            assert_eq!(
+                manifest
+                    .extra_files
+                    .iter()
+                    .any(|asset| asset.destination == destination),
+                variant == "debug",
+                "{variant}: {destination}"
+            );
+            assert_eq!(rendered.contains(destination), variant == "debug");
+            assert_eq!(
+                directory.join("guest").join(staged).exists(),
+                variant == "debug"
+            );
+        }
+    }
+}
+
+#[test]
 fn mkosi_debug_deploy_stages_authorized_keys() {
     let temp = tempfile::tempdir().unwrap();
     let paths = context_paths(temp.path(), "openclaw");
@@ -3051,7 +3144,7 @@ fn debug_ssh_hint_uses_generated_private_key_and_public_ip() {
 #[test]
 fn debug_ssh_command_errors_when_state_missing() {
     let temp = tempfile::tempdir().unwrap();
-    let err = resolve_debug_ssh_command(temp.path(), "openclaw", &[]).unwrap_err();
+    let err = resolve_debug_ssh_command(temp.path(), "openclaw", None, &[]).unwrap_err();
 
     assert!(err
         .to_string()
@@ -3068,9 +3161,63 @@ fn debug_ssh_command_errors_without_debug_key() {
     );
     write_state(temp.path(), &state);
 
-    let err = resolve_debug_ssh_command(temp.path(), "openclaw", &[]).unwrap_err();
+    let err = resolve_debug_ssh_command(temp.path(), "openclaw", None, &[]).unwrap_err();
 
     assert!(err.to_string().contains("has no debug SSH key"));
+}
+
+#[test]
+fn published_debug_ssh_uses_an_explicit_key_without_changing_deployment_state() {
+    let root = tempfile::tempdir().unwrap();
+    let key = root.path().join("operator-debug-key");
+    fs::write(&key, "test private key").unwrap();
+    let mut state = debug_ssh_state("shared-debug");
+    state.build.debug_ssh = None;
+    state.build.remote = true;
+    state.deploy.public_ip = Some("lb.example.invalid".into());
+    state.deploy.instance_public_ips = vec!["192.0.2.1".into(), "192.0.2.2".into()];
+    write_state(root.path(), &state);
+    let path = context_paths(root.path(), &state.service_id).service_state;
+    let original = fs::read(&path).unwrap();
+    let arguments = vec![OsString::from("uptime")];
+    let command =
+        resolve_debug_ssh_command(root.path(), &state.service_id, Some(&key), &arguments).unwrap();
+    assert_eq!(command.private_key, key);
+    assert_eq!(command.target, "192.0.2.1");
+    assert_eq!(command.argv.last(), Some(&OsString::from("uptime")));
+    assert_eq!(fs::read(&path).unwrap(), original);
+    assert!(
+        resolve_debug_ssh_command(root.path(), &state.service_id, None, &[])
+            .unwrap_err()
+            .to_string()
+            .contains("--identity-file")
+    );
+    assert!(resolve_debug_ssh_command(
+        root.path(),
+        &state.service_id,
+        Some(&root.path().join("missing")),
+        &[]
+    )
+    .unwrap_err()
+    .to_string()
+    .contains("does not exist"));
+    state.build.variant = "release".into();
+    write_state(root.path(), &state);
+    assert!(
+        resolve_debug_ssh_command(root.path(), &state.service_id, Some(&key), &[])
+            .unwrap_err()
+            .to_string()
+            .contains("only supported for debug")
+    );
+    state.build.variant = "debug".into();
+    state.phase = "deleted".into();
+    write_state(root.path(), &state);
+    assert!(
+        resolve_debug_ssh_command(root.path(), &state.service_id, Some(&key), &[])
+            .unwrap_err()
+            .to_string()
+            .contains("deleted")
+    );
 }
 
 #[test]
@@ -3210,6 +3357,119 @@ resources: {}
     assert!(bucket.ends_with("-images"));
     assert!(names.resource_name.ends_with("-20260429103011"));
     assert!(!names.resource_name.ends_with('-'));
+}
+
+#[test]
+fn destroy_only_recovers_unobserved_attempts_with_a_confirmed_empty_inventory() {
+    for case in [
+        "empty",
+        "retry-empty",
+        "planned-private-ip",
+        "mismatched-private-ip",
+        "unbound-private-ip",
+        "retained-resource",
+        "invalid-inventory",
+        "inventory-error",
+        "provider-directory",
+        "observed-instance",
+        "observed-address",
+        "saved-result",
+        "confirmed-deployment",
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let mut service = local_state("openclaw", vec![], vec![]);
+        service.phase = if case == "retry-empty" {
+            "destroying"
+        } else if case == "confirmed-deployment" {
+            "deployed"
+        } else {
+            "deploying"
+        }
+        .into();
+        service.deploy.private_ip = None;
+        service.deploy.public_ip = None;
+        match case {
+            "provider-directory" => {
+                service.deploy.terraform_dir = Some(temp.path().join("provider"))
+            }
+            "observed-instance" => service.deploy.instance_id = Some("i-observed".into()),
+            "observed-address" => service.deploy.public_ip = Some("192.0.2.1".into()),
+            "planned-private-ip" | "mismatched-private-ip" | "unbound-private-ip" => {
+                service.deploy.private_ip = Some("10.0.1.20".into())
+            }
+            _ => {}
+        }
+        write_state(temp.path(), &service);
+        write_manifest(temp.path(), "openclaw", &service.build.build_id);
+        let paths = context_paths(temp.path(), "openclaw");
+        if matches!(case, "planned-private-ip" | "mismatched-private-ip") {
+            let requested = if case == "planned-private-ip" {
+                "10.0.1.20"
+            } else {
+                "10.0.1.21"
+            };
+            let spec = AgentSpec::from_yaml(
+                &format!("schema: confidential-agent/v1\nservice:\n  id: openclaw\n  ports: []\n  connect: []\nbuild:\n  image_name: openclaw-agent\ndeploy:\n  provider: aliyun\n  private_ip: {requested}\n  instance_type: ecs.g8i.xlarge\n  region: cn-beijing\n  zone_id: cn-beijing-l\nattestation:\n  tee: tdx\n  mode: challenge\n  reference_values: sample\nresources: {{}}\n"),
+                temp.path(),
+            ).unwrap();
+            let mut manifest = read_build_manifest(&paths.manifest).unwrap();
+            manifest.deployment = Some(DeploymentSnapshot {
+                source: service.spec.clone(),
+                spec,
+                user_data: None,
+                inputs: None,
+            });
+            write_json_atomic(&paths.manifest, &manifest).unwrap();
+        }
+        if case == "saved-result" {
+            let manifest = read_build_manifest(&paths.manifest).unwrap();
+            fs::create_dir_all(manifest.deploy_result.parent().unwrap()).unwrap();
+            fs::write(manifest.deploy_result, "retained provider result").unwrap();
+        }
+        let (inventory, inspection_exit) = match case {
+            "retained-resource" => (r#"[{"id":"retained","state":"error"}]"#, 0),
+            "invalid-inventory" => ("{}", 0),
+            "inventory-error" => ("[]", 42),
+            _ => ("[]", 0),
+        };
+        let calls = temp.path().join("shelter-calls");
+        let mut cli = test_cli();
+        cli.state_dir = temp.path().into();
+        cli.shelter_bin = temp.path().join("fake-shelter");
+        write_script(
+            &cli.shelter_bin,
+            &format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$3\" >> '{}'\ncase \"$3\" in\nrm) exit 42;;\nps) printf '%s\\n' '{}'; exit {};;\n*) exit 99;;\nesac\n",
+                calls.display(), inventory, inspection_exit
+            ),
+        );
+        let result = cmd_destroy(
+            &cli,
+            &DestroyArgs {
+                service: "openclaw".into(),
+            },
+        );
+        let recovered = matches!(case, "empty" | "retry-empty" | "planned-private-ip");
+        assert_eq!(result.is_ok(), recovered, "{case}: {result:?}");
+        let state = read_service_state_file(&paths.service_state)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            state.phase,
+            if recovered { "deleted" } else { "destroying" }
+        );
+        let calls = fs::read_to_string(calls).unwrap();
+        let inspection_expected = matches!(
+            case,
+            "empty"
+                | "retry-empty"
+                | "planned-private-ip"
+                | "retained-resource"
+                | "invalid-inventory"
+                | "inventory-error"
+        );
+        assert_eq!(calls.contains("ps\n"), inspection_expected, "{case}");
+    }
 }
 
 #[test]
@@ -5142,4 +5402,33 @@ fn candidate_shelter_accepts_ca_contracts_without_allocating_resources() {
         !work.join("deploy").exists(),
         "validation allocated deployment state"
     );
+
+    // A real pre-allocation rejection creates no identity. Its recorded CA
+    // attempt must still be deletable through the managed lifecycle command.
+    cli.state_dir = root.path().into();
+    let mut state = local_state("candidate", vec![], vec![]);
+    state.phase = "deploying".into();
+    state.deploy.private_ip = None;
+    state.deploy.public_ip = None;
+    write_state(&cli.state_dir, &state);
+    write_manifest(&cli.state_dir, "candidate", &state.build.build_id);
+    let paths = context_paths(&cli.state_dir, "candidate");
+    let mut manifest = read_build_manifest(&paths.manifest).unwrap();
+    manifest.shelter_work_dir = work.clone();
+    write_json_atomic(&paths.manifest, &manifest).unwrap();
+    cmd_destroy(
+        &cli,
+        &DestroyArgs {
+            service: "candidate".into(),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        read_service_state_file(&paths.service_state)
+            .unwrap()
+            .unwrap()
+            .phase,
+        "deleted"
+    );
+    assert!(!work.join("deploy").exists());
 }

@@ -2145,7 +2145,12 @@ pub(super) fn cmd_ssh(cli: &Cli, args: &SshArgs) -> Result<()> {
         ssh_args.push("-tt".into());
     }
     ssh_args.extend(args.ssh_args.iter().cloned());
-    let mut command = resolve_debug_ssh_command(&cli.state_dir, &args.service, &ssh_args)?;
+    let mut command = resolve_debug_ssh_command(
+        &cli.state_dir,
+        &args.service,
+        args.identity_file.as_deref(),
+        &ssh_args,
+    )?;
     if let Some(instance_id) = &args.instance_id {
         let paths = context_paths(&cli.state_dir, &args.service);
         let state =
@@ -2165,6 +2170,7 @@ pub(super) fn cmd_ssh(cli: &Cli, args: &SshArgs) -> Result<()> {
 pub(super) fn resolve_debug_ssh_command(
     state_dir: &Path,
     service: &str,
+    identity_file: Option<&Path>,
     ssh_args: &[OsString],
 ) -> Result<DebugSshCommand> {
     let paths = context_paths(state_dir, service);
@@ -2175,6 +2181,22 @@ pub(super) fn resolve_debug_ssh_command(
             paths.service_state.display()
         )
     })?;
+    anyhow::ensure!(state.phase != "deleted", "service is deleted");
+    if let Some(private_key) = identity_file {
+        anyhow::ensure!(state.build.variant == "debug",
+            "--identity-file is only supported for debug images; release SSH uses attested service credentials");
+        anyhow::ensure!(
+            private_key.is_file(),
+            "SSH identity file '{}' does not exist",
+            private_key.display()
+        );
+        let target = debug_ssh_target(&state).context("service has no deploy IP")?;
+        return Ok(DebugSshCommand {
+            private_key: private_key.into(),
+            target: target.into(),
+            argv: build_debug_ssh_argv(private_key, target, ssh_args),
+        });
+    }
     if let Some(ssh) = read_build_manifest(&paths.manifest)
         .ok()
         .and_then(|manifest| manifest.ssh)
@@ -2192,7 +2214,7 @@ pub(super) fn build_debug_ssh_command(
 ) -> Result<DebugSshCommand> {
     let key = state.build.debug_ssh.as_ref().with_context(|| {
         format!(
-            "service '{}' has no debug SSH key in local state; deploy a debug image first",
+            "service '{}' has no debug SSH key in local state; for a published debug image use ssh --identity-file <original-build-private-key>",
             state.service_id
         )
     })?;
@@ -2524,7 +2546,26 @@ pub(super) fn cmd_destroy(cli: &Cli, args: &DestroyArgs) -> Result<()> {
             write_local_service_state(&cli.state_dir, &state)
         })?;
     }
-    run_shelter(cli, &mut shelter_args)?;
+    if let Err(removal_error) = run_shelter(cli, &mut shelter_args) {
+        // A run rejected before allocation has no managed identity to remove.
+        // Recover only when CA never observed provider state and Shelter's
+        // complete inventory confirms that this service has no resources.
+        let unobserved = existing_state
+            .as_ref()
+            .is_some_and(|state| unobserved_deploy_attempt(state, &manifest));
+        if !unobserved || manifest.deploy_result.try_exists()? {
+            return Err(removal_error);
+        }
+        match shelter_inventory_is_empty(cli, &manifest.shelter_work_dir) {
+            Ok(true) => println!("[ca] Shelter confirms the deployment attempt has no resources"),
+            Ok(false) => return Err(removal_error),
+            Err(error) => {
+                return Err(removal_error.context(format!(
+                    "could not confirm the failed deployment has no resources: {error:#}"
+                )));
+            }
+        }
+    }
 
     if trustee_mode {
         trustee::cleanup_revoked_service(&cli.state_dir, &args.service)?;
@@ -2586,6 +2627,53 @@ fn deploy_runtime_state_present(deploy: &LocalDeployState) -> bool {
         || !deploy.instance_private_ips.is_empty()
         || !deploy.instance_public_ips.is_empty()
         || deploy.slb_vip.is_some()
+}
+
+fn unobserved_deploy_attempt(state: &LocalServiceState, manifest: &BuildManifest) -> bool {
+    if !matches!(state.phase.as_str(), "deploying" | "destroying") {
+        return false;
+    }
+    let mut deploy = state.deploy.clone();
+    // These are launch intent, recorded before Shelter is invoked.
+    deploy.run_id.clear();
+    deploy.resource_name.clear();
+    deploy.image_source = None;
+    deploy.image_import_name = None;
+    deploy.published_image_id = None;
+    deploy.tee.clear();
+    if manifest
+        .deployment
+        .as_ref()
+        .is_some_and(|saved| saved.spec.deploy.private_ip == deploy.private_ip)
+    {
+        deploy.private_ip = None;
+    }
+    !deploy_runtime_state_present(&deploy)
+}
+
+fn shelter_inventory_is_empty(cli: &Cli, work_dir: &Path) -> Result<bool> {
+    let output = shelter_command(
+        cli,
+        &[
+            "--work-dir".into(),
+            work_dir.as_os_str().to_os_string(),
+            "ps".into(),
+            "--all".into(),
+            "--format".into(),
+            "json".into(),
+        ],
+    )?
+    .stdin(Stdio::null())
+    .output()
+    .context("failed to inspect Shelter resource inventory")?;
+    anyhow::ensure!(
+        output.status.success(),
+        "Shelter inventory failed: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+    let inventory: Vec<serde_json::Value> =
+        serde_json::from_slice(&output.stdout).context("invalid Shelter resource inventory")?;
+    Ok(inventory.is_empty())
 }
 
 fn build_has_no_deployment(state: &LocalServiceState) -> bool {

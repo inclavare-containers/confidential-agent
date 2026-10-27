@@ -41,212 +41,119 @@ function editFunction(source, name, edit) {
 }
 
 export function patchHookRunner(source) {
+  // A deferred exec result must not skip later veto or approval hooks.
   if (source.includes("blockReason: next.blockReason ?? acc?.blockReason")) {
     return editFunction(source, "runBeforeToolCall", (body) => {
       if (!body.includes("result: next.result !== undefined ? next.result : acc?.result")) {
         body = replaceOnce(body, /blockReason: next\.blockReason \?\? acc\?\.blockReason,/,
           "$&\n\t\t\t\t\tresult: next.result !== undefined ? next.result : acc?.result,", "hook result merge");
       }
-      if (!body.includes("result.block === true || result.result !== undefined")) {
-        body = replaceOnce(body, /shouldStop: \(result\) => result\.block === true,/,
-          "shouldStop: (result) => result.block === true || result.result !== undefined,", "hook result termination");
-      }
-      return body.replace('terminalLabel: "block=true"', 'terminalLabel: "block=true or result!=undefined"');
+      return body.replace(/shouldStop: \(result\) => [^\n]+,/,
+        "shouldStop: (result) => result.block === true || (result.result !== undefined && !result.result?.caiPepDeferredId),")
+        .replace('terminalLabel: "block=true or result!=undefined"', 'terminalLabel: "block=true or immediate result"');
     });
   }
-  if (source.includes("result: lastDefined(acc?.result, next.result)")) {
-    return source;
+  let next = source;
+  if (!next.includes("result: lastDefined(acc?.result, next.result)")) {
+    next = next.replace(/blockReason:\s*lastDefined\(acc\?\.blockReason,\s*next\.blockReason\),/m,
+      "blockReason: lastDefined(acc?.blockReason, next.blockReason),\n        result: lastDefined(acc?.result, next.result),");
   }
+  return next.replace(/shouldStop: \(result\) => [^\n]+,/,
+    "shouldStop: (result) => result.block === true || (result.result !== undefined && !result.result?.caiPepDeferredId),")
+    .replace('terminalLabel: "block=true or result!=undefined"', 'terminalLabel: "block=true or immediate result"');
+}
 
-  let next = source.replace(
-    /blockReason:\s*lastDefined\(acc\?\.blockReason,\s*next\.blockReason\),/m,
-    `blockReason: lastDefined(acc?.blockReason, next.blockReason),
-        result: lastDefined(acc?.result, next.result),`,
-  );
-  next = next.replace(
-    /shouldStop:\s*\(result\)\s*=>\s*result\.block\s*===\s*true,/m,
-    "shouldStop: (result) => result.block === true || result.result !== undefined,",
-  );
-  next = next.replace(
-    /terminalLabel:\s*"block=true"/m,
-    'terminalLabel: "block=true or result!=undefined"',
-  );
-  return next;
+function withAdmittedResultResolver(source) {
+  if (source.includes("async function caiPepResolveAdmittedResult(")) return source;
+  return `// Resolve only at the original implementation invocation boundary.
+async function caiPepResolveAdmittedResult(result, params, signal, fallback) {
+  signal?.throwIfAborted();
+  if (result?.caiPepDeferredId) {
+    result = await globalThis[Symbol.for("confidential-agent.cai-pep.resolve")](result, params);
+    if (result === undefined) {
+      signal?.throwIfAborted();
+      return fallback();
+    }
+  }
+  return result !== undefined ? result : fallback();
+}
+` + source;
 }
 
 export function patchAgentLoop(source) {
   if (source.includes("function toToolDefinitions(") && source.includes('finalizerMode: "adapter"')) {
     source = editFunction(source, "toToolDefinitions", (body) => {
-      if (body.includes("if (hookOutcome.result !== undefined) return hookOutcome.result;")) return body;
-      return replaceOnce(body, /throw new Error\(hookOutcome\.reason\);\s*}/,
-        "$&\n\t\t\t\t\t\t\tif (hookOutcome.result !== undefined) return hookOutcome.result;", "adapter result");
+      body = body.replace("if (hookOutcome.result !== undefined) return hookOutcome.result;", "");
+      if (!body.includes("let caiPepResult;")) {
+        body = replaceOnce(body, /let executeParams = params;/, "$&\n            let caiPepResult;", "adapter result carrier");
+        body = replaceOnce(body, /throw new Error\(hookOutcome\.reason\);\s*}/,
+          "$&\n                caiPepResult = hookOutcome.result;", "adapter hook result");
+      }
+      if (body.includes("await caiPepResolveAdmittedResult(")) return body;
+      return replaceOnce(body, /return [^\n]*tool\.execute\(toolCallId, executeParams, signal, onUpdate\);/,
+        "return await caiPepResolveAdmittedResult(caiPepResult, executeParams, signal, () => tool.execute(toolCallId, executeParams, signal, onUpdate));", "adapter admitted result");
     });
-    return editFunction(source, "toClientToolDefinitions", (body) => {
-      if (body.includes("if (outcome.result !== undefined)")) return body;
-      return replaceOnce(body, /const paramsRecord = coerceParamsRecord\(outcome\.params, func\.parameters\);/,
+    source = editFunction(source, "toClientToolDefinitions", (body) => {
+      body = body.replace(/if \(outcome\.result !== undefined\) \{\s*recorder\?\.discard\?\.\(toolCallId, func\.name\);\s*return [^;]+;\s*}/, "");
+      if (body.includes("await caiPepResolveAdmittedResult(")) return body;
+      return replaceOnce(body, /if \(typeof onClientToolCall === "function"\)/,
         `if (outcome.result !== undefined) {
-          recorder?.discard?.(toolCallId, func.name);
-          return outcome.result;
+          const result = await caiPepResolveAdmittedResult(outcome.result, paramsRecord, signal, () => undefined);
+          if (result !== undefined) {
+            recorder?.discard?.(toolCallId, func.name);
+            return result;
+          }
         }
-        $&`, "client adapter result");
+        $&`, "client admitted result");
     });
+    return withAdmittedResultResolver(source);
   }
-  if (source.includes("result = await tool.execute(toolCallId, finalizedToolArgs, params.signal);")) {
-    return replaceOnce(source, /result = await tool\.execute\(toolCallId, finalizedToolArgs, params\.signal\);/,
-      "result = hookResult.result !== undefined ? hookResult.result : await tool.execute(toolCallId, finalizedToolArgs, params.signal);", "MCP result");
+  if (source.includes("await caiPepResolveAdmittedResult(")) return source;
+  if (source.includes("result = ") && source.includes("await tool.execute(toolCallId, finalizedToolArgs, params.signal);")) {
+    source = replaceOnce(source, /result = [^\n]*tool\.execute\(toolCallId, finalizedToolArgs, params\.signal\);/,
+      "result = await caiPepResolveAdmittedResult(hookResult.result, finalizedToolArgs, params.signal, () => tool.execute(toolCallId, finalizedToolArgs, params.signal));", "MCP admitted result");
+  } else if (source.includes("await tool.execute?.(toolCallId, hookResult.params, params.signal);")) {
+    source = replaceOnce(source, /return [^\n]*tool\.execute\?\.\(toolCallId, hookResult\.params, params\.signal\);/,
+      "return await caiPepResolveAdmittedResult(hookResult.result, hookResult.params, params.signal, () => tool.execute?.(toolCallId, hookResult.params, params.signal));", "gateway admitted result");
   }
-  if (source.includes("return await tool.execute?.(toolCallId, hookResult.params, params.signal);")) {
-    return replaceOnce(source, /return await tool\.execute\?\.\(toolCallId, hookResult\.params, params\.signal\);/,
-      "return hookResult.result !== undefined ? hookResult.result : await tool.execute?.(toolCallId, hookResult.params, params.signal);", "gateway result");
-  }
-  if (agentLoopSupportsHookResult(source)) {
-    return source;
-  }
-
-  let next = source.replace(
-    /if\s*\(hookResult\?\.params\)\s*\{\s*Object\.assign\(validatedArgs,\s*hookResult\.params\);\s*\}\s*result\s*=\s*await\s*tool\.execute\(([\s\S]*?)\);/m,
-    `if (hookResult?.params) {
-          Object.assign(validatedArgs, hookResult.params);
-        }
-        if (hookResult?.result !== undefined) {
-          result = hookResult.result;
-        } else {
-          result = await tool.execute($1);
-        }`,
-  );
-  if (next !== source) {
-    return next;
-  }
-
-  next = source.replace(
-    /return\s+jsonRpcResult\(id,\s*\{\s*content:\s*normalizeToolCallContent\(await\s+tool\.execute\(toolCallId,\s*hookResult\.params,\s*params\.signal\)\),\s*isError:\s*false\s*\}\);/m,
-    `if (hookResult?.result !== undefined) {
-            return jsonRpcResult(id, {
-              content: normalizeToolCallContent(hookResult.result),
-              isError: false
-            });
-          }
-          return jsonRpcResult(id, {
-            content: normalizeToolCallContent(await tool.execute(toolCallId, hookResult.params, params.signal)),
-            isError: false
-          });`,
-  );
-  if (next !== source) {
-    return next;
-  }
-
-  next = source.replace(
-    /if\s*\(hookOutcome\.blocked\)\s*throw\s+new\s+Error\(hookOutcome\.reason\);\s*executeParams\s*=\s*hookOutcome\.params;\s*}\s*return\s+normalizeToolExecutionResult\(\{\s*toolName:\s*normalizedName,\s*result:\s*await\s+tool\.execute\(toolCallId,\s*executeParams,\s*signal,\s*onUpdate\)\s*}\);/m,
-    `if (hookOutcome.blocked) throw new Error(hookOutcome.reason);
-            executeParams = hookOutcome.params;
-            if (hookOutcome.result !== undefined) {
-              return normalizeToolExecutionResult({
-                toolName: normalizedName,
-                result: hookOutcome.result
-              });
-            }
-          }
-          return normalizeToolExecutionResult({
-            toolName: normalizedName,
-            result: await tool.execute(toolCallId, executeParams, signal, onUpdate)
-          });`,
-  );
-  return next;
+  return withAdmittedResultResolver(source);
 }
 
 function agentLoopSupportsHookResult(source) {
-  return source.includes("hookResult?.result !== undefined") ||
+  return source.includes("await caiPepResolveAdmittedResult(") || source.includes("confidential-agent.cai-pep.resolve") || source.includes("hookResult?.result !== undefined") ||
     source.includes("hookOutcome.result !== undefined") ||
     source.includes("hookResult.result !== undefined");
 }
 
 export function patchBeforeToolCallRuntime(source) {
-  if (source.includes("const policyAdjustedParams =")) {
-    source = editFunction(source, "runBeforeToolCallHook", (body) => {
-      if (body.includes("let caiPepResult;")) return body;
-      body = replaceOnce(body, /let ownerDecisionMarked = false;/,
-        "let caiPepResult;\n\t\tlet ownerDecisionMarked = false;", "runtime result carrier");
-      body = replaceOnce(body, /}, policyAdjustedToolContext, receipt\);/,
-        "$&\n\t\t\tcaiPepResult = hookResult?.result;", "runtime hook result");
-      return replaceOnce(body, /const allowed = \{\s*blocked: false,\s*params: finalParams\s*};/,
-        `const allowed = {
-          blocked: false,
-          params: finalParams,
-          ...(caiPepResult !== undefined ? { result: caiPepResult } : {})
-        };`, "runtime allowed result");
-    });
-    return editFunction(source, "wrapToolWithBeforeToolCallHook", (body) => {
-      if (body.includes("if (outcome.result !== undefined)")) return body;
-      return replaceOnce(body, /let executeParams;/,
-        `if (outcome.result !== undefined) {
-          await recordLoopOutcome({
-            ctx,
-            toolName: normalizedToolName,
-            toolParams: outcome.params,
-            toolCallId,
-            result: outcome.result,
-            toolCallOrdinal
-          });
-          return outcome.loopWarning ? appendToolLoopWarning(outcome.result, outcome.loopWarning) : outcome.result;
-        }
-        let executeParams;`, "wrapped result short circuit");
-    });
+  if (!source.includes("const policyAdjustedParams =")) {
+    throw new Error("unsupported OpenClaw runtime: deferred PEP requires the pinned approval and execution gates");
   }
-  let next = source;
-  if (!next.includes("hookResult?.result !== undefined")) {
-    next = next.replace(
-      /if\s*\(hookResult\?\.requireApproval\)\s*\{/m,
-      `if (hookResult?.result !== undefined) return {
+  source = editFunction(source, "runBeforeToolCallHook", (body) => {
+    // Only carry the cloneable ticket through policy and approval preparation.
+    if (!body.includes("let ownerDecisionMarked = false;")) throw new Error("unsupported OpenClaw runtime: expected one patch location for approval outcome");
+    body = body.replace(/if \(caiPepResult\?\.caiPepDeferredId\) \{[\s\S]*?caiPepResult = await resolve\(caiPepResult, finalParams\);\s*}/, "");
+    if (body.includes("let caiPepResult;")) return body;
+    body = replaceOnce(body, /let ownerDecisionMarked = false;/,
+      "let caiPepResult;\n\t\tlet ownerDecisionMarked = false;", "runtime result carrier");
+    body = replaceOnce(body, /}, policyAdjustedToolContext, receipt\);/,
+      "$&\n\t\t\tcaiPepResult = hookResult?.result;", "runtime hook result");
+    return replaceOnce(body, /const allowed = \{\s*blocked: false,\s*params: finalParams\s*};/,
+      `const allowed = {
         blocked: false,
-        params: hookResult?.params ? mergeParamsWithApprovalOverrides(params, hookResult.params) : params,
-        result: hookResult.result
-      };
-      if (hookResult?.requireApproval) {`,
-    );
-  }
-
-  if (!next.includes("if (outcome.result !== undefined)")) {
-    const withResultShortCircuit = next.replace(
-      /if\s*\(outcome\.blocked\)\s*throw\s+new\s+Error\(outcome\.reason\);\s*if\s*\(toolCallId\)\s*\{/m,
-      `if (outcome.blocked) throw new Error(outcome.reason);
-        const normalizedToolName = normalizeToolName(toolName || "tool");
-        if (outcome.result !== undefined) {
-          await recordLoopOutcome({
-            ctx,
-            toolName: normalizedToolName,
-            toolParams: outcome.params,
-            toolCallId,
-            result: outcome.result
-          });
-          return outcome.result;
-        }
-        if (toolCallId) {`,
-    );
-    if (withResultShortCircuit !== next) {
-      next = withResultShortCircuit.replace(
-        /const\s+normalizedToolName\s*=\s*normalizeToolName\(toolName\s*\|\|\s*"tool"\);\s*try\s*\{/m,
-        "try {",
-      );
-    } else {
-      next = next.replace(
-        /(\n\s*)if\s*\(toolCallId\)\s*\{/m,
-        `
-        if (outcome.result !== undefined) {
-          const normalizedToolName = normalizeToolName(toolName || "tool");
-          await recordLoopOutcome({
-            ctx,
-            toolName: normalizedToolName,
-            toolParams: outcome.params,
-            toolCallId,
-            result: outcome.result
-          });
-          return outcome.result;
-        }$1if (toolCallId) {`,
-      );
-    }
-  }
-
-  return next;
+        params: finalParams,
+        ...(caiPepResult !== undefined ? { result: caiPepResult } : {})
+      };`, "runtime allowed result");
+  });
+  source = editFunction(source, "wrapToolWithBeforeToolCallHook", (body) => {
+    body = body.replace(/if \(outcome\.result !== undefined\) \{[\s\S]*?return outcome\.loopWarning \? appendToolLoopWarning\(outcome\.result, outcome\.loopWarning\) : outcome\.result;\s*}/, "");
+    if (body.includes("caiPepResolveAdmittedResult(outcome.result")) return body;
+    // This site follows validation, scheduler pause/launch, voice confirmation,
+    // cancellation, source guards and execution admission. Preserve diagnostics.
+    return replaceOnce(body, /const invoke = \(\) => liveness\.run\([\s\S]*?;/,
+      "const invoke = () => liveness.run(() => caiPepResolveAdmittedResult(outcome.result, executeParams, signal, () => execute(...args)));", "admitted implementation result");
+  });
+  return withAdmittedResultResolver(source);
 }
 
 export function patchOpenclaw(openclawRoot) {
@@ -265,7 +172,7 @@ export function patchOpenclaw(openclawRoot) {
     const next = patchHookRunner(text);
     if (!(next.includes("result: lastDefined(acc?.result, next.result)")
         || next.includes("result: next.result !== undefined ? next.result : acc?.result"))
-        || !next.includes("result.block === true || result.result !== undefined")) {
+        || !next.includes("!result.result?.caiPepDeferredId")) {
       throw new Error(`failed to patch hook result transport in ${file}`);
     }
     updates.set(file, next);
@@ -273,7 +180,7 @@ export function patchOpenclaw(openclawRoot) {
   for (const [file, text] of runtimes) {
     const next = patchBeforeToolCallRuntime(text);
     if (!(next.includes("hookResult?.result !== undefined") || next.includes("caiPepResult = hookResult?.result"))
-        || !next.includes("if (outcome.result !== undefined)")) {
+        || !next.includes("caiPepResolveAdmittedResult(outcome.result")) {
       throw new Error(`failed to patch before_tool_call runtime in ${file}`);
     }
     updates.set(file, next);

@@ -18,6 +18,21 @@ spec.loader.exec_module(suite)
 
 
 class SuiteTest(unittest.TestCase):
+    def test_manual_lanes_require_explicit_selection(self):
+        cases = {'normal': {'groups': ['legacy']},
+                 'manual': {'groups': ['legacy'], 'manual_only': True}}
+        self.assertEqual(set(suite.select_cases(cases, ['full'], [])), {'normal'})
+        self.assertEqual(set(suite.select_cases(cases, ['legacy'], [])), {'normal'})
+        self.assertEqual(set(suite.select_cases(cases, [], ['manual'])), {'manual'})
+
+    def test_empty_automatic_selection_cannot_report_success(self):
+        cases = {'platform-recovery': {'groups': ['platform'], 'manual_only': True}}
+        for groups in [['platform'], ['full'], ['missing']]:
+            with self.subTest(groups=groups), self.assertRaisesRegex(ValueError, 'no runnable E2E cases'):
+                suite.select_cases(cases, groups, [])
+        self.assertEqual(set(suite.select_cases(cases, ['platform'], ['platform-recovery'])),
+                         {'platform-recovery'})
+
     def test_deleted_image_cleanup_uses_typed_build_origin(self):
         for remote in (True, False, None, "true"):
             for phase in ("active", "deleted"):

@@ -157,7 +157,7 @@ debug:
 
 约束：
 - `release.ssh_public_key` 出现会让解析失败（[`validate_variant`](../core/src/spec.rs)）；release 镜像不允许有 SSH 入口，这是一条硬约束。
-- 当 `deploy.image_variant=debug` 但 spec 没声明 `variants.debug` 或 `enabled=false` → 直接报错。
+- 本地构建使用 `deploy.image_variant=debug`，但 spec 没声明 `variants.debug` 或 `enabled=false` → 直接报错。
 - 当 `image_variant=debug` 且没显式设 `ssh_public_key`，CLI 会**自动**在 `<state-dir>/services/<id>/secrets/debug_ssh{,.pub}` 生成 ed25519 密钥对（[`cli/src/app/debug_ssh.rs`](../cli/src/app/debug_ssh.rs)），并在 deploy 完成后输出 `ssh -i ... root@<ip>` 提示。
 - `confidential-agent build` 会构建所有 `enabled=true` 的 variants，并在 `manifest.json` 的 `variants` map 中记录每个 variant 的 `shelter_build_id` 与 build result；`deploy.image_variant` 只决定当前 state 选择哪个 variant 作为默认部署目标。
 
@@ -183,7 +183,7 @@ deploy:
 |---|---|:-:|---|
 | `provider` | enum | ✅ | 当前仅 `aliyun` |
 | `instance_type` | string | ✅ | 非空 |
-| `image_variant` | string | ❌ | `release` (默认) 或 `debug`；若是 `release`，必须 `variants.release.enabled=true`；若是 `debug`，必须 `variants.debug.enabled=true` |
+| `image_variant` | string | ❌ | `release` (默认) 或 `debug`；本地构建要求对应 `build.variants` 已启用；发布镜像要求与签名运行时元数据中的变体一致 |
 | `disk_gb` | u32 | ❌ | 未设置时请求至少 32 GiB，并按 `build.resize` 向上调整；显式值不得小于 20 GiB 或构建镜像容量。已发布镜像必须显式设置并满足镜像最低容量 |
 | `region` | string | ✅ | 非空 |
 | `zone_id` | string | ✅ | 非空。可写成 `availability_zone` 别名 |
@@ -229,7 +229,17 @@ deploy:
     # 可选：manifest: sha256:<完整的64位manifest摘要>
 ```
 
-发布端先运行 `image publish`，再运行 `image export <service> --signing-key <Ed25519 PKCS8 PEM> --output image-release.json`。消费者仅需要 release、独立认可的发布者公钥以及自己的 AppSpec 和资源文件，不需要生产端 state、构建输入或 QCOW2。CA 在创建资源前验证签名和地域映射，自动读取并保存 manifest 摘要，将验证过的参考值交给现有 challenge/Trustee 流程。可选的 `manifest` 字段用于额外固定版本；显式指定但不匹配会失败。每个 service 使用自己的身份、磁盘口令和 Terraform state；`destroy` 不删除共享镜像。该模式只允许 release 变体；需要内置调试密钥的 debug 镜像不能作为共享发布镜像。
+发布端先运行 `image publish`，再运行 `image export <service> --signing-key <Ed25519 PKCS8 PEM> --output image-release.json`。消费者仅需要 release、独立认可的发布者公钥以及自己的 AppSpec 和资源文件，不需要生产端 state、构建输入或 QCOW2。CA 在创建资源前验证签名和地域映射，自动读取并保存 manifest 摘要，将验证过的参考值交给现有 challenge/Trustee 流程。可选的 `manifest` 字段用于额外固定版本；显式指定但不匹配会失败。每个 service 使用自己的身份、磁盘口令和 Terraform state；`destroy` 不删除共享镜像。该模式同时支持 `release` 和 `debug` 变体，通过 `deploy.image_variant` 选择，消费者仍省略全部构建输入。debug 镜像的签名运行时元数据必须明确标记 `image_variant: debug`。
+
+复用 debug 镜像会沿用镜像中原有的调试 SSH 公钥；各消费者不会自动获得、重新生成或替换相应私钥。需要 SSH 时，操作员单独提供原构建私钥，不将其加入签名发布包或交付给 guest：
+
+```bash
+confidential-agent ssh debug-consumer --identity-file /private/original-debug-key -- uptime
+# 多副本直接选择记录中的 ECS 实例，不通过负载均衡地址做 SSH：
+confidential-agent ssh debug-consumer --identity-file /private/original-debug-key --instance-id i-example -- nvidia-smi
+```
+
+`service.ssh: true` 仍仅适用于 release 的部署期凭据机制；debug 使用构建期 SSH。共享 debug 公钥不改变各服务独立的磁盘口令、网关身份和业务资源。
 
 当前 E2E 默认示例使用 `cn-beijing-i + ecs.g9i.xlarge`。香港 region 的 TDX 默认组合为 `cn-hongkong-d + ecs.g8i.xlarge`；实际可用性仍可能受账号库存和可用区限制影响，必要时显式覆盖 `region`、`zone_id` 和 `instance_type`。
 
@@ -240,7 +250,7 @@ deploy:
 | `control_8006_peer_<cidr>` | 8006 | `peerings` 中含 `control` scope 的 CIDR | host CLI 通过 `attestation-challenge-client inject-resource` 注入资源 |
 | `status_8088_peer_<cidr>` | 8088 | 含 `status` scope 的 CIDR | `confidential-agentd` 只读状态 HTTP |
 | `agent_card_8089_peer_<cidr>` | 8089 | 含 `agent_card` scope 的 CIDR | 外部 peer 拉取 `/.well-known/agent-card.json` |
-| `ssh_22_peer_<cidr>` | 22 | 含 `ssh` scope 的 CIDR | 仅当 `image_variant=debug` |
+| `ssh_22_peer_<cidr>` | 22 | 含 `ssh` scope 的 CIDR | 当 `image_variant=debug` 或 `service.ssh=true` |
 | `connect_<port>_peer_<cidr>` | `service.connect[]` | 含 `connect` scope 的 CIDR | host connect / A2A client 通过 RATS-TLS 接入本服务，单向 RA |
 | `mesh_<port>_peer_<cidr>` | `service.ports[] - service.connect[]` | 同组织 active 服务公网 IP `/32` 或含 `mesh` scope 的 CIDR | 同组织 confidential-only mesh 数据面，双向 RA；gateway 只覆盖这些端口 |
 

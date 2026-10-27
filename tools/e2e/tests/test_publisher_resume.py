@@ -26,6 +26,13 @@ class PublisherResumeTest(unittest.TestCase):
             case.command.assert_not_called()
             self.assertEqual(legacy.read_text(), 'original legacy specification')
             self.assertEqual(generated.read_text(), 'original generated specification')
+            strict = case.work / 'init/allinone-hardened-builder/build.yaml'
+            strict.parent.mkdir(parents=True)
+            strict.write_text('original strict specification')
+            self.assertEqual(publish_fixtures.allinone_spec(case, case.work / 'cosign.key', True,
+                                                          hardened=True), strict)
+            self.assertEqual(strict.read_text(), 'original strict specification')
+            case.command.assert_not_called()
 
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()

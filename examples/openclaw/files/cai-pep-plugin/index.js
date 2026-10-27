@@ -63,7 +63,11 @@ function buildRequest({ command, workdir, ctx, socketPath }) {
 }
 
 function mapExecResult(result) {
+  const stdout = result.stdout;
+  const stderr = result.stderr;
   return {
+    content: [{ type: "text", text: [stdout, stderr].filter(Boolean).join("\n") || `(exit ${result.exit_code})` }],
+    isError: result.exit_code !== 0,
     stdout: typeof result?.stdout === "string" ? result.stdout : "",
     stderr: typeof result?.stderr === "string" ? result.stderr : "",
     exitCode:
@@ -80,16 +84,18 @@ function mapExecResult(result) {
   };
 }
 
-function submitIntent(socketPath, payload) {
+function submitIntent(socketPath, payload, timeoutMs = 120000) {
   return new Promise((resolve, reject) => {
     const socket = net.createConnection({ path: socketPath });
     let raw = "";
 
+    socket.setTimeout(timeoutMs, () => socket.destroy(new Error("cai-pep response timed out")));
     socket.on("connect", () => {
       socket.end(JSON.stringify(payload));
     });
     socket.on("data", (chunk) => {
       raw += chunk.toString("utf8");
+      if (raw.length > 2 * 1024 * 1024) socket.destroy(new Error("cai-pep response is too large"));
     });
     socket.on("end", () => {
       try {
@@ -103,6 +109,16 @@ function submitIntent(socketPath, payload) {
     });
   });
 }
+
+// Internal protocol shared with patch-openclaw-cai-pep.js. Tickets are one-use
+// and bounded; rejected or pending approvals never open the PEP socket.
+const deferredExecs = globalThis[Symbol.for("confidential-agent.cai-pep.tickets")] ??= new Map();
+globalThis[Symbol.for("confidential-agent.cai-pep.resolve")] ??= async (ticket, params) => {
+  const entry = deferredExecs.get(ticket.caiPepDeferredId);
+  deferredExecs.delete(ticket.caiPepDeferredId);
+  if (!entry || Date.now() - entry.createdAt > 300000) throw new Error("cai-pep execution ticket expired");
+  return entry.execute(params);
+};
 
 const plugin = {
   id: "cai-pep",
@@ -123,8 +139,7 @@ const plugin = {
         pluginConfig.socketPath ??
         topLevel.pepSocket ??
         "/run/cai/pep.sock";
-      const pepRequired =
-        pluginConfig.pepRequired ?? topLevel.pepRequired ?? true;
+      const pepRequired = pluginConfig.pepRequired ?? topLevel.pepRequired ?? true;
       const defaultWorkdir =
         pluginConfig.defaultWorkdir ?? topLevel.defaultWorkdir ?? "/workspace";
 
@@ -137,41 +152,44 @@ const plugin = {
         };
       }
 
-      const payload = buildRequest({ command, workdir, ctx, socketPath });
-      let response;
-      try {
-        response = await submitIntent(socketPath, payload);
-      } catch (error) {
-        api.logger.error?.(`cai-pep request failed: ${error.message}`);
-        if (!pepRequired) {
-          return {};
+      // The hook may still be followed by OpenClaw approval gates. Only publish
+      // a cloneable ticket here; the patched runtime consumes it after approval.
+      const id = crypto.randomUUID();
+      const now = Date.now();
+      for (const [key, entry] of deferredExecs) {
+        if (now - entry.createdAt > 300000 || deferredExecs.size >= 1024) deferredExecs.delete(key);
+      }
+      deferredExecs.set(id, { createdAt: now, async execute(finalParams) {
+        const finalCommand = normalizeCommand(finalParams);
+        if (!finalCommand.trim()) throw new Error("cai-pep: exec command is empty");
+        const payload = buildRequest({ command: finalCommand,
+          workdir: normalizeWorkdir(finalParams, defaultWorkdir), ctx, socketPath });
+        let response;
+        try {
+          response = await submitIntent(socketPath, payload, pluginConfig.responseTimeoutMs ?? 240000);
+        } catch (error) {
+          api.logger.error?.(`cai-pep request failed: ${error.message}`);
+          if (!pepRequired) return undefined;
+          throw new Error(`cai-pep unavailable: ${error.message}`);
         }
-        return {
-          block: true,
-          blockReason: `cai-pep unavailable: ${error.message}`,
-        };
-      }
-
-      if (response?.error) {
-        const reason = response.error.audit_id
-          ? `${response.error.message} (audit_id=${response.error.audit_id})`
-          : response.error.message;
-        return {
-          block: true,
-          blockReason: `cai-pep deny: ${reason}`,
-        };
-      }
-
-      if (!response?.result) {
-        return {
-          block: true,
-          blockReason: "cai-pep returned no result payload",
-        };
-      }
-
-      return {
-        result: mapExecResult(response.result),
-      };
+        if (response?.error) {
+          const reason = response.error.audit_id
+            ? `${response.error.message} (audit_id=${response.error.audit_id})`
+            : response.error.message;
+          throw new Error(`cai-pep deny: ${reason}`);
+        }
+        const result = response?.result;
+        if (response?.id !== payload.id || result?.status !== "ok" || result?.decision !== "allow" ||
+            typeof result.stdout !== "string" || typeof result.stderr !== "string" ||
+            !Number.isInteger(result.exit_code) || typeof result.audit_id !== "string" || !result.audit_id ||
+            !Number.isFinite(result.duration_ms) || result.duration_ms < 0 ||
+            !((result.backend === "docker" && result.sandbox_profile === "default-docker") ||
+              (result.backend === "host-attestation" && result.sandbox_profile === "attestation-helper"))) {
+          throw new Error("cai-pep returned an invalid result payload");
+        }
+        return mapExecResult(result);
+      } });
+      return { result: { caiPepDeferredId: id } };
     });
   },
 };

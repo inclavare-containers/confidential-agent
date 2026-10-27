@@ -25,15 +25,27 @@ function normalizeBaseUrl(raw) {
   return url;
 }
 
-async function postJson(baseUrl, pathname, token, body, timeoutMs) {
+async function postJson(baseUrl, pathname, token, body, timeoutMs, stage) {
   const url = new URL(pathname, baseUrl);
   const retryableStatuses = new Set([401, 404, 502, 503]);
-  const retryDeadline = Date.now() + timeoutMs;
-  let lastError;
+  const startedAt = Date.now();
+  const deadline = startedAt + timeoutMs;
+  // Only operator-safe context belongs in a timeout diagnostic. Fetch errors
+  // and response bodies can contain request payloads or authentication data.
+  const timedOut = () => new Error(
+    `${stage}: ${pathname} timed out (budget_ms=${timeoutMs}, elapsed_ms=${Date.now() - startedAt})`,
+  );
+  const retry = async () => {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw timedOut();
+    await new Promise(resolve => setTimeout(resolve, Math.min(2000, remaining)));
+  };
 
   while (true) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw timedOut();
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const timer = setTimeout(() => controller.abort(), remaining);
     let res;
     let text;
     try {
@@ -47,16 +59,15 @@ async function postJson(baseUrl, pathname, token, body, timeoutMs) {
         signal: controller.signal,
       });
       text = await res.text();
-    } catch (error) {
-      lastError = error;
-      if (Date.now() >= retryDeadline) {
-        throw lastError;
-      }
+    } catch {
+      if (controller.signal.aborted || Date.now() >= deadline) throw timedOut();
+      res = undefined;
     } finally {
       clearTimeout(timer);
     }
+    if (Date.now() >= deadline) throw timedOut();
     if (!res) {
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      await retry();
       continue;
     }
 
@@ -64,21 +75,17 @@ async function postJson(baseUrl, pathname, token, body, timeoutMs) {
     try {
       parsed = text ? JSON.parse(text) : {};
     } catch {
-      lastError = new Error(`${pathname} returned non-JSON HTTP ${res.status}: ${text}`);
-      if (!retryableStatuses.has(res.status) || Date.now() >= retryDeadline) {
-        throw lastError;
+      if (!retryableStatuses.has(res.status)) {
+        throw new Error(`${stage}: ${pathname} returned non-JSON HTTP ${res.status}: ${text}`);
       }
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      await retry();
       continue;
     }
     if (res.ok) return parsed;
-
-    const message = `${pathname} returned HTTP ${res.status}: ${JSON.stringify(parsed)}`;
-    lastError = new Error(message);
-    if (!retryableStatuses.has(res.status) || Date.now() >= retryDeadline) {
-      throw lastError;
+    if (!retryableStatuses.has(res.status)) {
+      throw new Error(`${stage}: ${pathname} returned HTTP ${res.status}: ${JSON.stringify(parsed)}`);
     }
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    await retry();
   }
 }
 
@@ -148,10 +155,12 @@ const peer = requireArg("peer");
 const expected = requireArg("expect");
 const peerMessage = arg("message", `请只回复 ${expected}，不要输出其他内容。`);
 const timeoutMs = Number(arg("timeout-ms", "180000"));
-const requestTimeoutMs = Math.min(timeoutMs, 120000);
 const sessionKey = arg("session", `confidential-agent-a2a-responses-${Date.now()}`);
 
 async function main() {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1000 || timeoutMs > 600000) {
+    throw new Error("--timeout-ms must be an integer between 1000 and 600000");
+  }
   const responseId = `resp_${crypto.randomUUID()}`;
   const first = await postJson(
     baseUrl,
@@ -191,7 +200,8 @@ async function main() {
       max_output_tokens: 2048,
       stream: false,
     },
-    requestTimeoutMs,
+    timeoutMs,
+    "source-function-call",
   );
 
   const call = firstFunctionCall(first, ClientA2aFunction);
@@ -217,6 +227,7 @@ async function main() {
       args: callArgs,
     },
     timeoutMs,
+    "native-a2a-tool",
   );
   if (invoked?.ok !== true) {
     throw new Error(`tools.invoke failed: ${JSON.stringify(invoked)}`);
@@ -246,7 +257,8 @@ async function main() {
       max_output_tokens: 256,
       stream: false,
     },
-    requestTimeoutMs,
+    timeoutMs,
+    "final-source-response",
   );
   const finalText = outputText(final);
   if (!finalText.includes(expected)) {

@@ -25,7 +25,7 @@ function normalizeBaseUrl(raw) {
   return url;
 }
 
-async function postJson(baseUrl, pathname, token, body, timeoutMs) {
+async function postJson(baseUrl, pathname, token, body, timeoutMs, sessionKey) {
   const url = new URL(pathname, baseUrl);
   const retryableStatuses = new Set([401, 404, 502, 503]);
   const retryDeadline = Date.now() + timeoutMs;
@@ -42,6 +42,7 @@ async function postJson(baseUrl, pathname, token, body, timeoutMs) {
         headers: {
           authorization: `Bearer ${token}`,
           "content-type": "application/json",
+          ...(sessionKey ? { "x-openclaw-session-key": sessionKey } : {}),
         },
         body: JSON.stringify(body),
         signal: controller.signal,
@@ -165,6 +166,7 @@ async function main() {
     token,
     body,
     requestTimeoutMs,
+    sessionKey,
   );
   const text = outputText(response);
   if (!text) throw new Error("OpenClaw response text is empty");

@@ -7,11 +7,12 @@ from cloud_case import Case, ROOT, release_selection, run, write_json
 from fixtures.allinone import generate
 
 
-def prepare_fixtures(work, image, region):
-    selected = generate(work / 'fixtures', image, 'challenge', region, 'platform',
-                        harnesses=['codex', 'openclaw', 'hermes'])
+def add_platform_fixtures(work, selected, prefix):
+    """Reuse native consumers for route churn after their real model probes."""
     # Two peers share a mesh port; the client has no business port.
-    for fixture in selected[1:]:
+    peers = [fixture for fixture in selected if fixture.name in {'openclaw', 'hermes'}]
+    assert len(peers) == 2
+    for fixture in peers:
         path = fixture / 'appspec.json'
         spec = json.loads(path.read_text())
         spec['service'].update(ports=[8642], connect=[])
@@ -30,11 +31,17 @@ def prepare_fixtures(work, image, region):
         configuration['connect_http_path'] = None
         write_json(probe, configuration)
     extra = work / 'extra-fixture'
-    shutil.copytree(selected[2], extra)
+    shutil.copytree(next(fixture for fixture in peers if fixture.name == 'hermes'), extra)
     spec = json.loads((extra / 'appspec.json').read_text())
-    spec['service']['id'] = 'platform-extra'
+    spec['service']['id'] = prefix + '-aaa-extra'
     write_json(extra / 'appspec.json', spec)
     return selected, extra
+
+
+def prepare_fixtures(work, image, region):
+    selected = generate(work / 'fixtures', image, 'challenge', region, 'platform',
+                        harnesses=['codex', 'openclaw', 'hermes'])
+    return add_platform_fixtures(work, selected, 'platform')
 
 
 def main():
@@ -47,7 +54,7 @@ def main():
         for fixture in [*selected, extra]:
             service = json.loads((fixture / 'appspec.json').read_text())['service']['id']
             case.register(service)
-        case.register('zzzz-platform-extra')
+        case.register('zzzz-platform-aaa-extra')
         command = ['python3.11', ROOT / 'tools/e2e/allinone-reuse.py', '--work-dir', case.work / 'consumer',
                    '--ca', case.ca, '--operator-cidr', cidr, '--parallel', '2', '--concurrent-deploy',
                    '--interrupt-infrastructure', '--frozen-inputs', '--application-errors',

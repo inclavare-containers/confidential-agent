@@ -10,7 +10,7 @@ HARNESSES = ["codex", "claude-code", "opencode", "openclaw", "hermes", "qodercli
 PROMPT = "Reply with ALLINONE_, E2E_, and OK concatenated without spaces or other text."
 
 
-def generate(directory, image, mode, region, prefix, *, harnesses=None):
+def generate(directory, image, mode, region, prefix, *, harnesses=None, ssh=True):
     os.umask(0o077)
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=False)
@@ -20,7 +20,10 @@ def generate(directory, image, mode, region, prefix, *, harnesses=None):
     url = os.environ.get("DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
     model = os.environ.get("DASHSCOPE_MODEL", "qwen3.8-max")
     fixtures = []
-    for harness in HARNESSES if harnesses is None else harnesses:
+    selected_harnesses = list(HARNESSES if harnesses is None else harnesses)
+    if not ssh and selected_harnesses != ["hermes"]:
+        raise ValueError("the no-SSH release smoke requires the protected Hermes HTTP runtime")
+    for harness in selected_harnesses:
         if harness not in HARNESSES:
             raise ValueError("unknown harness: " + harness)
         target = directory / harness
@@ -105,7 +108,7 @@ def generate(directory, image, mode, region, prefix, *, harnesses=None):
         resource("runtime.json", {"harness": harness, "environment": environment}, "/opt/data/allinone/runtime.json")
         # Consumers authenticate Rekor metadata from the signed release; they
         # do not enable build-time signing or carry a producer's cosign key.
-        spec = {"schema": "confidential-agent/v1", "service": {"id": prefix+"-"+harness, "ports": [], "ssh": True,
+        spec = {"schema": "confidential-agent/v1", "service": {"id": prefix+"-"+harness, "ports": [], "ssh": ssh,
                 "app_service": "cai-allinone.service"}, "deploy": {"provider": "aliyun", "region": region,
                 "zone_id": os.environ.get("E2E_ZONE_ID", "cn-beijing-i"), "instance_type": os.environ.get("E2E_INSTANCE_TYPE", "ecs.g9i.xlarge"),
                 "disk_gb": 120, "image": image}, "attestation": {"tee": "tdx", "mode": mode,
@@ -115,8 +118,15 @@ def generate(directory, image, mode, region, prefix, *, harnesses=None):
             spec["service"].update(ports=[18789], connect=[])
         elif harness == "hermes":
             spec["service"].update(ports=[8642], connect=[8642])
+            if not ssh:
+                spec["service"]["connect"] = [{"port": 8642, "encryption": "ohttp"}]
         (target / "appspec.json").write_text(json.dumps(spec, indent=2)+"\n")
-        (target / "probe.json").write_text(json.dumps({"command": command, "expect": "ALLINONE_E2E_OK",
-                 "runtime_command": runtime, "connect_http_path": "/health" if harness == "hermes" else None})+"\n")
+        probe = {"command": command if ssh else None, "expect": "ALLINONE_E2E_OK",
+                 "runtime_command": runtime if ssh else None,
+                 "connect_http_path": "/health" if harness == "hermes" else None}
+        if not ssh:
+            probe["http_model"] = {"token": environment["API_SERVER_KEY"], "model": model,
+                                   "message": PROMPT}
+        (target / "probe.json").write_text(json.dumps(probe)+"\n")
         fixtures.append(target)
     return fixtures

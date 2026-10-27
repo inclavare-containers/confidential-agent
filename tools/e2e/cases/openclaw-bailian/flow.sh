@@ -107,9 +107,8 @@ run_case() {
       "$CHAT_EXPECT" \
       "$WORK_DIR/chat-probe.json" \
       --timeout-ms "$CHAT_TIMEOUT_MS"
-    if [[ "${E2E_OPENCLAW_DISABLE_PEP:-0}" != "1" && "${E2E_RUN_TDX_SKILL_PROBE:-0}" == "1" ]]; then
-      echo "E2E_RUN_TDX_SKILL_PROBE=1 was requested, but the OpenClaw TDX skill probe is not wired in this e2e case" >&2
-      return 1
+    if [[ "${E2E_OPENCLAW_DISABLE_PEP:-0}" != "1" ]]; then
+      run_openclaw_pep_e2e "$connect_port" "$token"
     fi
   fi
 

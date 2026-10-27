@@ -28,17 +28,23 @@ class PublisherConsumersTest(unittest.TestCase):
         selected = suite.select_cases(cases, [], ['allinone-challenge'])
         self.assertIn('publish-reuse-images', selected)
         self.assertNotIn('prepare-inference-images', selected)
-        self.assertEqual(cases['inference-debug']['environment']['E2E_IMAGE_VARIANT'], 'debug')
-        self.assertEqual(cases['inference-debug']['environment']['E2E_REUSE_IMAGE'], '0')
-        for name in ['inference-single', 'inference-alb']:
-            self.assertEqual(cases[name]['environment']['E2E_ONECLICK'], '1')
+        inference = {name: case for name, case in cases.items() if name.startswith('inference-')}
+        self.assertEqual(set(inference), {'inference-alb', 'inference-nlb-rats', 'inference-reuse-nlb'})
+        self.assertTrue(all(case['environment']['E2E_IMAGE_VARIANT'] == 'debug' and
+                            case['environment']['E2E_REUSE_IMAGE'] == '1' for case in inference.values()))
+        self.assertEqual(cases['inference-alb']['environment']['E2E_ONECLICK'], '1')
+        self.assertEqual(cases['inference-reuse-nlb']['environment']['E2E_SERVICE_ISOLATION'], '1')
+        self.assertEqual(cases['inference-reuse-nlb']['environment']['E2E_ATTESTATION_MODE'], 'trustee')
+        full = suite.select_cases(cases, ['full'], [])
+        self.assertNotIn('openclaw-vllm-release', full)
+        self.assertEqual(sum(case.get('gpu_instances', 0) for case in full.values()), 8)
 
     def test_external_allinone_consumer_needs_no_inference_or_model_fixture(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source, work = root / 'source', root / 'consumer'
             work.mkdir()
-            for name in ['allinone']:
+            for name in ['allinone', 'allinone-hardened']:
                 fixture = source / name
                 fixture.mkdir(parents=True)
                 payload = {'images': [{'region': 'cn-beijing', 'image_id': 'm-published'}],
@@ -78,9 +84,24 @@ class PublisherConsumersTest(unittest.TestCase):
                 def command(self, label, *arguments, **_):
                     commands.append((label, arguments))
                     if arguments[:2] == ('init', 'allinone'):
-                        output = Path(arguments[arguments.index('--output-dir') + 1]) / 'allinone-builder'
+                        service = arguments[arguments.index('--service-id') + 1]
+                        output = Path(arguments[arguments.index('--output-dir') + 1]) / service
                         output.mkdir(parents=True)
-                        (output / 'build.yaml').write_text('test specification')
+                        (output / 'build.yaml').write_text('service:\n  id: ' + service + '\n  ssh: true\nbuild:\n  image_name: allinone\n')
+                        (output / 'runtime-contract.json').write_text(json.dumps({
+                            'capabilities': ['resources-v1', 'instance-ssh-v1', 'instance-ssh-credentials-v1']}))
+                    elif arguments[0] == 'build':
+                        spec = Path(arguments[arguments.index('--spec') + 1])
+                        service = spec.parent.name
+                        directory = state / 'services' / service
+                        directory.mkdir(parents=True)
+                        rendered = directory / 'shelter.yaml'
+                        rendered.write_text('security:\n  harden:\n    enabled: true\n    mode: '
+                                            + ('full' if service == 'allinone-hardened-builder' else 'partial') + '\n')
+                        contract = json.loads((spec.parent / 'runtime-contract.json').read_text())
+                        contract['image_variant'] = 'release'
+                        (directory / 'manifest.json').write_text(json.dumps({
+                            'shelter_config': str(rendered), 'runtime_contract': contract}))
                     elif arguments[:2] == ('image', 'publish'):
                         service = arguments[2]
                         variant = arguments[arguments.index('--variant') + 1]
@@ -114,14 +135,19 @@ class PublisherConsumersTest(unittest.TestCase):
             self.assertEqual(init[init.index('--stage') + 1], 'build')
             self.assertEqual(init[init.index('--reference-values') + 1], 'rekor')
             self.assertEqual(init[init.index('--cosign-key') + 1], work / 'cosign.key')
-            self.assertEqual(len([args for _, args in commands if args[0] == 'build']), 1)
+            self.assertEqual(len([args for _, args in commands if args[0] == 'build']), 2)
             build = next(args for _, args in commands if args[0] == 'build')
             self.assertEqual(build[build.index('--spec') + 1], work / 'init/allinone-builder/build.yaml')
             publications = [args for _, args in commands if args[:2] == ('image', 'publish')]
-            self.assertEqual(len(publications), 1)
-            self.assertEqual(publications[0][2], 'allinone-builder')
+            self.assertEqual(len(publications), 2)
+            self.assertEqual({args[2] for args in publications}, {'allinone-builder', 'allinone-hardened-builder'})
             self.assertTrue(all(args[args.index('--variant') + 1] == 'release' for args in publications))
             self.assertTrue(case.checks['signed_images_published'])
+            self.assertTrue(case.checks['full_hardening_release_built'])
+            strict = work / 'init/allinone-hardened-builder/build.yaml'
+            self.assertIn('  ssh: false', strict.read_text())
+            self.assertIn('  image_name: allinone-hardened', strict.read_text())
+            self.assertIn('  ssh: true', (work / 'init/allinone-builder/build.yaml').read_text())
 
 
 if __name__ == '__main__':

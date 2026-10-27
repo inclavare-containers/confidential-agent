@@ -1,5 +1,6 @@
 #!/usr/bin/env python3.11
 """Real encrypted-model inference over protected single-node and replica routes."""
+import base64
 import json
 import hashlib
 import os
@@ -10,23 +11,23 @@ import time
 import urllib.error
 import urllib.request
 from cloud_case import Case, ROOT, eventually, release_selection, run, write_json
-from inference_fixtures import MODEL
+from inference_fixtures import MODEL, debug_identity
 from metrics_probe import complete_metrics
 
 
-def request(base, path, body=None):
+def request(base, path, body=None, *, timeout=180):
     payload = json.dumps(body).encode() if body is not None else None
     message = urllib.request.Request(base.rstrip("/")+path, data=payload,
                                      headers={"Content-Type": "application/json", "Connection": "close"})
-    with urllib.request.urlopen(message, timeout=180) as response:
+    with urllib.request.urlopen(message, timeout=timeout) as response:
         return response.read()
 
 
-def infer(base, stream=False):
+def infer(base, stream=False, *, timeout=None):
     body = {"model": MODEL, "messages": [{"role": "user", "content": "Reply with INFERENCE_ and OK concatenated without spaces or any other text."}],
             "temperature": 0, "max_tokens": 64, "stream": stream,
             "chat_template_kwargs": {"enable_thinking": False}}
-    response = request(base, "/v1/chat/completions", body)
+    response = request(base, "/v1/chat/completions", body, **({"timeout": timeout} if timeout is not None else {}))
     if stream:
         packets = [line[6:] for line in response.decode().splitlines() if line.startswith("data: ")]
         assert "[DONE]" in packets, "stream did not complete"
@@ -155,6 +156,16 @@ def start_stopped_instance(case, instance):
     case.api("ecs", "StartInstance", InstanceId=instance)
 
 
+def ssh_instance_id(case, service, instance):
+    deployment = case.local_state(service)["deploy"]
+    replicas = deployment.get("instance_ids") or []
+    if replicas:
+        assert instance in replicas, "SSH target is not a recorded replica"
+        return instance
+    assert instance == deployment.get("instance_id"), "SSH target is not the recorded single instance"
+    return None
+
+
 def validate_debug_gpu(case, service, instance_id=None):
     # NVIDIA exposes these states through conf-compute, not nvidia-smi -q.
     # https://docs.nvidia.com/cc-deployment-guide-snp.pdf
@@ -163,8 +174,33 @@ def validate_debug_gpu(case, service, instance_id=None):
         ("gpu-devtools-status", "nvidia-smi conf-compute -d", rb"DevTools\s+Mode\s*:\s*OFF"),
         ("gpu-vllm-version", "/root/.venv/bin/vllm --version", rb"0\.28\.0"),
     ]:
-        diagnostic = case.ssh(service, label, command, instance_id=instance_id)
+        evidence = label + "-" + service + ("-" + instance_id if instance_id else "")
+        selector = ssh_instance_id(case, service, instance_id) if instance_id else None
+        diagnostic = case.ssh(service, evidence, command, instance_id=selector,
+                              identity_file=getattr(case, "debug_identity", None))
         assert re.fullmatch(expected, diagnostic.stdout.strip(), re.IGNORECASE), label + " did not match the required GPU runtime state"
+
+
+def boot_id(case, service, instance, label):
+    selector = ssh_instance_id(case, service, instance)
+    value = case.ssh(service, label, "cat /proc/sys/kernel/random/boot_id", instance_id=selector,
+                     identity_file=getattr(case, "debug_identity", None), timeout=30).stdout.strip()
+    assert re.fullmatch(rb"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", value), "guest boot ID is invalid"
+    return value.decode()
+
+
+def changed_boot(case, service, instance, before, label):
+    observed = {}
+    def changed():
+        value = boot_id(case, service, instance, label + "-boot-after")
+        if value == before:
+            return False
+        observed["after"] = value
+        return True
+    eventually(changed, 7200)
+    write_json(case.work / (label + "-boot-proof.json"), {
+        "instance_id": instance, "before": before, "after": observed["after"]})
+    return observed["after"]
 
 
 def oneclick(case, replicas, variant, reuse=False, kind="alb", transport="ohttp", mode="challenge"):
@@ -196,9 +232,14 @@ def connect_node(case, service, instance):
 
 
 def reboot(case, service, spec, mode, instance):
+    before = boot_id(case, service, instance, "reboot-boot-before")
     eventually(lambda: instance_status(case, instance) == "Running", 600)
     case.api("ecs", "RebootInstance", InstanceId=instance, ForceStop="true")
     time.sleep(30)
+    recover_boot(case, service, spec, mode, instance, before, "reboot-" + instance)
+
+
+def recover_boot(case, service, spec, mode, instance, before, label):
     if mode == "challenge":
         # Delivery recovery retains the exact infrastructure and shared service secrets.
         address = case.local_state(service)["deploy"]
@@ -211,17 +252,45 @@ def reboot(case, service, spec, mode, instance):
         case.command("reboot-inject", "inject", "--spec", spec,
                      "--target-ip", ip, timeout=1200)
     eventually(lambda: bool(validate_live(case, service, len(case.local_state(service)["deploy"].get("instance_ids") or [instance]))), 7200)
+    changed_boot(case, service, instance, before, label)
 
 
-def trustee_outage(case, service, spec, instance, front):
+def recovered_inference(case, front, endpoints, instance):
+    if endpoints:
+        # The load balancer can keep routing to the healthy peer. Prove that
+        # the exact stopped backend now serves a real protected model request.
+        response = infer(endpoints[instance])
+        (case.work / ("recovered-node-" + instance + ".json")).write_bytes(response)
+    (case.work / "recovered-model-response.json").write_bytes(infer(front))
+    if endpoints:
+        case.checks["recovered_backend_instance_id"] = instance
+
+
+def trustee_outage(case, service, spec, instance, front, warm_front=None):
+    before = boot_id(case, service, instance, "trustee-outage-boot-before")
     case.trustee_action("stop")
     try:
         case.api("ecs", "RebootInstance", InstanceId=instance, ForceStop="true")
         time.sleep(30)
         for _ in range(8):
+            selector = ssh_instance_id(case, service, instance)
+            ssh = case.ssh(service, "trustee-outage-debug-ssh", "true", instance_id=selector,
+                           identity_file=getattr(case, "debug_identity", None), check=False, timeout=30)
+            assert ssh.returncode, "cold boot unlocked debug SSH without Trustee key release"
             status = json.loads(case.command("trustee-unavailable", "status", "--service", service, "--live", "--json").stdout)[0]
             assert status.get("live_error") and not status.get("daemon", {}).get("app_ready"), "cold boot bypassed Trustee"
+            try:
+                request(front, "/v1/models")
+            except (OSError, urllib.error.URLError):
+                pass
+            else:
+                raise AssertionError("cold boot served a model without Trustee key release")
+            if warm_front:
+                infer(warm_front)
             time.sleep(15)
+        console = base64.b64decode(case.api("ecs", "GetInstanceConsoleOutput", InstanceId=instance)["ConsoleOutput"]).decode(errors="replace")
+        (case.work / "trustee-outage-console.txt").write_text(console)
+        assert "trustee" in console.lower() and "failed" in console.lower(), "missing cold-boot Trustee key-release failure evidence"
         if instance_status(case, instance) == "Running":
             case.api("ecs", "StopInstance", InstanceId=instance, ForceStop="true")
         eventually(lambda: instance_status(case, instance) == "Stopped", 600)
@@ -229,6 +298,7 @@ def trustee_outage(case, service, spec, instance, front):
         case.trustee_action("start")
     case.api("ecs", "StartInstance", InstanceId=instance)
     eventually(lambda: bool(validate_live(case, service, 1)), 7200)
+    changed_boot(case, service, instance, before, "trustee-outage")
     infer(front)
     case.checks["trustee_cold_boot_fail_closed"] = True
 
@@ -239,11 +309,13 @@ def wrong_model_key(case, service, spec, instance, front):
     source = Path(config["resources"]["model_decryption_key"]["source"])
     original = source.read_bytes()
     address = case.local_state(service)["deploy"]["public_ip"]
+    before = boot_id(case, service, instance, "wrong-key-boot-before")
+    wrong_boot = None
     try:
         source.write_text("deliberately-incorrect-e2e-model-key\n")
         case.command("wrong-key-delivery", "inject", "--spec", spec, "--target-ip", address)
         case.api("ecs", "RebootInstance", InstanceId=instance, ForceStop="true")
-        time.sleep(45)
+        wrong_boot = changed_boot(case, service, instance, before, "wrong-key")
         for _ in range(8):
             status = json.loads(case.command("wrong-key-status", "status", "--service", service, "--live", "--json").stdout)[0]
             assert not status.get("daemon", {}).get("app_ready"), "wrong model key produced a ready app"
@@ -263,21 +335,109 @@ def wrong_model_key(case, service, spec, instance, front):
         case.api("ecs", "StopInstance", InstanceId=instance, ForceStop="true")
     start_stopped_instance(case, instance)
     eventually(lambda: bool(validate_live(case, service, 1)), 7200)
+    changed_boot(case, service, instance, wrong_boot or before, "restored-key")
     infer(front)
     case.checks["wrong_model_key_rejected"] = True
 
 
-def isolate_service(case, service, endpoints, front, mode):
-    beta = service + "-isolated"
-    spec = prepare(case, beta, 1, "nlb", "ohttp", mode, True, "release")
-    case.deploy(beta, spec)
+def destroy_published_consumer(case, service, image):
+    case.record_resources()
+    case.command("destroy-preserve-published-" + service, "destroy", service, timeout=1800)
+    images = case.api("ecs", "DescribeImages", ImageId=image)["Images"]["Image"]
+    assert len(images) == 1, "consumer destruction removed the published image"
+    case.checks["consumer_destruction_preserves_published_image"] = True
+
+
+def verify_surviving_consumer(case, service, before, front, timeout=300, interval=5):
+    """Wait for revocation to reach the same guest, then prove protected inference."""
+    deployment = before["deploy"]
+    instance = deployment.get("instance_id")
+    generation = before.get("mesh_generation")
+    assert instance and type(generation) is int, "survivor lacks recorded instance or mesh generation"
+    assert timeout > 0 and interval > 0
+    deadline = time.monotonic() + timeout
+    proof = {"service": service, "instance_id": instance, "before_mesh_generation": generation,
+             "deployment_sha256": hashlib.sha256(json.dumps(deployment, sort_keys=True).encode()).hexdigest(),
+             "complete": False, "attempts": []}
+    try:
+        while time.monotonic() < deadline:
+            current = case.local_state(service)
+            assert current["deploy"] == deployment, "survivor deployment identity changed"
+            assert current.get("gateway_identity") == before.get("gateway_identity"), "survivor gateway identity changed"
+            assert current.get("phase") == "active", "survivor is no longer active"
+            committed = current.get("mesh_generation")
+            assert type(committed) is int, "survivor has no committed mesh generation"
+            attempt = {"local_mesh_generation": committed}
+            proof["attempts"].append(attempt)
+            result = case.command("survivor-status-" + str(len(proof["attempts"])), "status",
+                "--service", service, "--live", "--json", timeout=min(60, deadline - time.monotonic()))
+            views = json.loads(result.stdout)
+            assert len(views) == 1, "survivor live status is missing or ambiguous"
+            view = views[0]
+            local = view["local"]
+            assert local["service_id"] == service and local["phase"] == "active", "survivor live identity changed"
+            for field in ("instance_id", "run_id", "resource_name", "terraform_dir", "public_ip", "private_ip"):
+                assert local["cloud"].get(field) == deployment.get(field), "survivor live deployment changed: " + field
+            nodes = view.get("replicas", [])
+            assert len(nodes) == 1 and nodes[0].get("instance_id") == instance, "survivor replica identity changed"
+            daemon = nodes[0].get("daemon") or {}
+            if daemon:
+                assert daemon.get("service_id") == service, "survivor daemon identity changed"
+            attempt.update(live_mesh_generation=local.get("mesh_generation"),
+                daemon_mesh_generation=daemon.get("mesh_generation"), phase=daemon.get("phase"),
+                app_ready=daemon.get("app_ready"), mesh_ready=daemon.get("mesh_ready"),
+                live_error=bool(view.get("live_error") or nodes[0].get("live_error")))
+            ready = (committed > generation and local.get("mesh_generation") == committed
+                     and daemon.get("mesh_generation") == committed and daemon.get("phase") == "running"
+                     and daemon.get("app_ready") is True and daemon.get("mesh_ready") is True
+                     and not attempt["live_error"])
+            remaining = deadline - time.monotonic()
+            if ready and remaining > 0:
+                try:
+                    response = infer(front, timeout=min(180, remaining))
+                except urllib.error.HTTPError as error:
+                    raw = error.read(16385)
+                    try:
+                        code = json.loads(raw).get("code") if len(raw) <= 16384 else None
+                    except (ValueError, AttributeError):
+                        code = None
+                    attempt.update(http_status=error.code, ohttp_error_code=code if isinstance(code, str) and len(code) < 128 else None)
+                    # TNG invalidates its old HPKE key for the next request.
+                    # Other HTTP failures and incorrect model output fail here.
+                    if error.code != 500 or code != "ShouldRequestNewKeyConfigFromServerError":
+                        raise
+                else:
+                    (case.work / "survivor-model-response.json").write_bytes(response)
+                    proof.update(complete=True, mesh_generation=committed)
+                    return
+            time.sleep(min(interval, max(0, deadline - time.monotonic())))
+        raise RuntimeError("survivor did not converge and serve the model within its readiness budget")
+    finally:
+        write_json(case.work / "survivor-after-destroy.json", proof)
+
+
+def isolate_service(case, service, endpoints, front, mode, variant):
+    # The one-click entry point owns vllm-inference. The replica group has its
+    # lane ID, so beta can exercise the single-node installer in the same state.
+    beta, spec = oneclick(case, 1, variant, True, "nlb", "ohttp", mode)
     validate_live(case, beta, 1)
     beta_front = case.connect(beta, "isolated-connect")
-    infer(beta_front)
+    (case.work / "isolated-model-response.json").write_bytes(infer(beta_front))
+    (case.work / "isolated-stream-response.sse").write_bytes(infer(beta_front, True))
     a = case.local_state(service)["deploy"]
     b = case.local_state(beta)["deploy"]
     addresses = a["instance_public_ips"]
     beta_address = b["public_ip"]
+    primary_image = json.loads((case.state / "services" / service / "manifest.json").read_text())["image"]["image_id"]
+    beta_image = json.loads((case.state / "services" / beta / "manifest.json").read_text())["image"]["image_id"]
+    assert primary_image == beta_image, "isolated services did not reuse the identical published image"
+    reboot(case, beta, spec, mode, b["instance_id"])
+    infer(beta_front)
+    if variant == "debug":
+        validate_debug_gpu(case, beta)
+    if mode == "trustee":
+        wrong_model_key(case, beta, spec, b["instance_id"], beta_front)
+        trustee_outage(case, beta, spec, b["instance_id"], beta_front, warm_front=front)
     keys = {}
     def converged():
         group = [key_config(address) for address in addresses]
@@ -301,12 +461,10 @@ def isolate_service(case, service, endpoints, front, mode):
     write_json(case.work / "key-isolation.json", {"rotation_verified": True,
                "group_key_sha256": hashlib.sha256(keys["a"].encode()).hexdigest(),
                "other_service_key_sha256": hashlib.sha256(keys["b"].encode()).hexdigest()})
-    image = json.loads((secrets / service / "manifest.json").read_text())["image"]["image_id"]
-    case.record_resources()
-    case.command("destroy-group-preserve-other", "destroy", service, timeout=1800)
-    infer(beta_front)
-    images = case.api("ecs", "DescribeImages", ImageId=image)["Images"]["Image"]
-    assert len(images) == 1, "consumer destruction removed the published image"
+    survivor = case.local_state(beta)
+    destroy_published_consumer(case, service, primary_image)
+    verify_surviving_consumer(case, beta, survivor, beta_front)
+    destroy_published_consumer(case, beta, beta_image)
     case.checks.update(shared_image_service_isolation=True, ohttp_rotation=True,
                        destroying_group_preserves_other_service=True)
 
@@ -317,23 +475,16 @@ def main():
     transport = os.environ.get("E2E_CONNECT_ENCRYPTION", "ohttp")
     mode = os.environ.get("E2E_ATTESTATION_MODE", "challenge")
     reuse = os.environ.get("E2E_REUSE_IMAGE") == "1"
-    variant = os.environ.get("E2E_IMAGE_VARIANT", "release")
+    variant = os.environ.get("E2E_IMAGE_VARIANT", "debug" if reuse else "release")
     service = os.environ.get("E2E_CASE_ID", "inference")
     with Case() as case:
-        prepared_debug = None
-        if os.environ.get("E2E_USE_PREPARED_DEBUG") == "1":
-            from inference_fixtures import debug_build
-            prepared_debug = debug_build(case)
-        # Operator peerings and any Trustee must belong to the state that will
-        # actually deploy, including the original prepared debug build.
+        if variant == "debug" and reuse:
+            # Fail before operator discovery, Trustee setup or any cloud call.
+            case.debug_identity = debug_identity(case)
         case.operator()
         if mode == "trustee":
             case.trustee()
-        if prepared_debug:
-            service, spec = prepared_debug
-            case.deploy(service, spec)
-            case.checks["original_debug_build_reused"] = True
-        elif (not reuse and kind == "alb") or os.environ.get("E2E_ONECLICK") == "1":
+        if (not reuse and kind == "alb") or os.environ.get("E2E_ONECLICK") == "1":
             service, spec = oneclick(case, replicas, variant, reuse, kind, transport, mode)
         else:
             spec = prepare(case, service, replicas, kind, transport, mode, reuse, variant)
@@ -392,6 +543,7 @@ def main():
                 assert case.command("reject-topology-"+label, "deploy", *arguments, "--spec", invalid, check=False).returncode
             assert case.local_state(service)["deploy"] == deployment
             # One failed node must be visible even while the remaining node serves requests.
+            before_boot = boot_id(case, service, ids[0], "degraded-boot-before")
             case.api("ecs", "StopInstance", InstanceId=ids[0], ForceStop="true")
             def degraded():
                 status = json.loads(case.command("degraded-status", "status", "--service", service, "--live", "--json").stdout)[0]
@@ -399,19 +551,23 @@ def main():
             eventually(degraded, 300)
             eventually(lambda: bool(infer(front)), 300)
             start_stopped_instance(case, ids[0])
-            reboot(case, service, spec, mode, ids[0])
+            recover_boot(case, service, spec, mode, ids[0], before_boot, "degraded-recovery-" + ids[0])
         else:
             reboot(case, service, spec, mode, ids[0])
-        (case.work / "recovered-model-response.json").write_bytes(infer(front))
+        recovered_inference(case, front, endpoints, ids[0])
         if variant == "release":
             assert not any(node["daemon"].get("debug_ssh_ready") for node in nodes)
         else:
-            validate_debug_gpu(case, service, instance_id=ids[0] if replicas > 1 else None)
+            for instance in ids:
+                validate_debug_gpu(case, service, instance_id=instance)
         if mode == "trustee" and replicas == 1:
             wrong_model_key(case, service, spec, ids[0], front)
             trustee_outage(case, service, spec, ids[0], front)
         if os.environ.get("E2E_SERVICE_ISOLATION") == "1":
-            isolate_service(case, service, endpoints, front, mode)
+            isolate_service(case, service, endpoints, front, mode, variant)
+        elif reuse:
+            image = json.loads((case.state / "services" / service / "manifest.json").read_text())["image"]["image_id"]
+            destroy_published_consumer(case, service, image)
         case.checks.update(real_model=True, streaming=True, per_replica=True, replicas=replicas,
                            transport=transport, load_balancer=kind if replicas > 1 else None,
                            attestation=mode, source="published-image" if reuse else "build", reboot=True)

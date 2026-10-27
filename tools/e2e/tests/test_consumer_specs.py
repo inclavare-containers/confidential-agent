@@ -81,13 +81,7 @@ class ConsumerSpecTest(unittest.TestCase):
                                 spec = inference.prepare(case, 'schema-probe', replicas, kind,
                                                          transport, mode, True, variant)
                                 self.assertFalse((work / 'cosign.key').exists())
-                                if variant == 'release':
-                                    self.command('spec', 'validate', '--spec', spec)
-                                else:
-                                    rejected = subprocess.run([os.environ['CA_BIN'], 'spec', 'validate',
-                                                               '--spec', str(spec)], capture_output=True, text=True)
-                                    self.assertNotEqual(rejected.returncode, 0)
-                                    self.assertIn('cannot reuse build-time debug SSH credentials', rejected.stdout)
+                                self.command('spec', 'validate', '--spec', spec)
 
     def test_fresh_inference_specs_validate_with_declarative_packages(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -696,15 +696,17 @@ fn prepare(
                 destination: file.target.clone(),
                 executable: file.executable,
             }));
-        stage_mkosi_debug_ssh_authorized_keys(
-            &mut assets,
-            &paths,
-            spec.build
-                .variants
-                .debug
-                .as_ref()
-                .and_then(|debug| debug.ssh_public_key.as_deref()),
-        )?;
+        if spec.deploys_debug_image() {
+            stage_mkosi_debug_ssh_authorized_keys(
+                &mut assets,
+                &paths,
+                spec.build
+                    .variants
+                    .debug
+                    .as_ref()
+                    .and_then(|debug| debug.ssh_public_key.as_deref()),
+            )?;
+        }
     }
     let deploy_names = options.deploy_names.clone();
     // Managed runs allocate their own deployment ID and Terraform directory.
