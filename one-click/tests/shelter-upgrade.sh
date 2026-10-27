@@ -37,7 +37,7 @@ install_shelter_rpm() {
 }
 install_bundled_shelter_rpm() { install_shelter_rpm "$(resolve_shelter_rpm)"; }
 CA_REFERENCE_VALUES=sample
-CA_MODE=cleanup
+CA_MODE=deploy
 CA_SLSA_GENERATOR=/unused
 if [[ "$TEST_OVERRIDE" == binary ]]; then export CA_SHELTER_BIN="$TEST_ROOT/bin/shelter"; fi
 if [[ "$TEST_OVERRIDE" == source ]]; then
@@ -56,6 +56,10 @@ run_case() {
   cp "$REPO_DIR/common/software-versions.sh" "$root/common/"
   printf '%s' "$package" >"$root/package"
   touch "$root/hack/shelter-0.3.2-1.al8.x86_64.rpm"
+  touch "$root/hack/shelter-0.3.2-2.al8.x86_64.rpm"
+  touch "$root/hack/shelter-0.3.2-3.al8.x86_64.rpm"
+  printf '%s\n' '{"file":"shelter-0.3.2-2.al8.x86_64.rpm"}' > "$root/hack/shelter-rpm.json"
+  cp "$REPO_DIR/hack/resolve-shelter-rpm.sh" "$root/hack/"
   cat >"$root/bin/shelter" <<'BIN'
 #!/usr/bin/env bash
 printf 'shelter 0.3.2\n'
@@ -69,7 +73,7 @@ CHECK
   cat >"$root/hack/check-shelter-rpm.sh" <<'CHECK'
 #!/usr/bin/env bash
 set -euo pipefail
-[[ "$2" == "$TEST_ROOT/hack/shelter-0.3.2-1.al8.x86_64.rpm" ]]
+[[ "$2" == "$TEST_ROOT/hack/shelter-0.3.2-2.al8.x86_64.rpm" ]]
 printf '%s\n' "$1" >>"$TEST_ROOT/package-checks"
 [[ "$(cat "$TEST_ROOT/package")" != old ]]
 CHECK

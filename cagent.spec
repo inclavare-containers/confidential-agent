@@ -9,7 +9,7 @@
 
 Name:           cagent
 Version:        0.1.0
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        Confidential Agent host CLI and guest image assets
 License:        Apache-2.0
 URL:            https://github.com/inclavare-containers/confidential-agent
@@ -25,7 +25,7 @@ BuildRequires:  glibc-devel
 BuildRequires:  python3.11
 BuildRequires:  /usr/bin/pkg-config
 
-Requires:       shelter >= 0.3.2-1
+Requires:       shelter >= 0.3.2-2
 Requires:       attestation-challenge-client
 Requires:       libtdx-verify
 Requires:       trusted-network-gateway = 2.9.2-1.al8
@@ -81,6 +81,9 @@ install -m 0644 hack/shelter-rpm.json %{buildroot}%{_datadir}/cagent/shelter-rpm
 %check
 export CARGO_TARGET_DIR=%{cagent_target}
 cargo test --release --locked --offline -p confidential-agent-cli --quiet
+bash one-click/tests/shelter-cleanup.sh
+bash one-click/tests/shelter-upgrade.sh
+bash one-click/tests/paired-rpm-upgrade.sh
 %{cagent_target}/release/confidential-agent --version
 native-tools/cosign version >/dev/null
 native-tools/aliyun version >/dev/null
@@ -98,6 +101,10 @@ native-tools/ossutil64 --version >/dev/null
 %{_datadir}/cagent/
 
 %changelog
+* Tue Oct 27 2026 Weidong Sun <sunweidong@linux.alibaba.com> - 0.1.0-2
+- Require Shelter 0.3.2-2 so package upgrades select the current runtime contract.
+- Check cleanup capabilities without requiring image-build tool versions.
+
 * Mon Oct 19 2026 Weidong Sun <sunweidong@linux.alibaba.com> - 0.1.0-1
 - Package native host tools and guest assets without a Docker dependency.
 - Share the attestation runtime and Rekor tool with host packages and Shelter.

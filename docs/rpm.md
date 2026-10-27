@@ -13,7 +13,7 @@ sudo dnf install -y rpm-build cargo rust gcc glibc-devel pkgconf-pkg-config pyth
 packaging/build-rpm.sh
 ```
 
-产物位于 `target/rpm/RPMS/x86_64/cagent-0.1.0-1.al8.x86_64.rpm`，
+产物位于 `target/rpm/RPMS/x86_64/cagent-0.1.0-2.al8.x86_64.rpm`，
 SRPM 位于 `target/rpm/SRPMS/`。源码准备阶段缓存并校验固定版本的
 cosign、aliyun、ossutil，GitHub 下载默认先尝试国内代理再回退官方地址；
 可用 `CA_GITHUB_PROXY_URL` 修改代理。`target/rpm/SOURCES/SHA256SUMS`
@@ -21,17 +21,23 @@ cosign、aliyun、ossutil，GitHub 下载默认先尝试国内代理再回退官
 使用 `--locked --offline`，不会再次下载依赖。
 
 打包输出目录同时包含配套 Shelter RPM、`shelter-rpm.json` 和两包的
-`SHA256SUMS`。Shelter 当前来自提交 `51e4089a856903c8b2ecfc5f6a2aefdb2fa95b2a`，
-在主线运行时和 VMM 基础上保留可移植镜像发布、可选 manifest 版本固定、
+`SHA256SUMS`。配套 Shelter 为 `0.3.2-2`，其准确源码提交记录在
+`hack/shelter-rpm.json` 的 `source_commit` 字段中。
+one-click 和 E2E 安装入口按该记录选择 RPM，避免目录中遗留的其他版本被误选。
+该版本在主线运行时和 VMM 基础上保留可移植镜像发布、可选 manifest 版本固定、
 ext4 稀疏文件提取与副本生命周期功能。CA 使用显式 v1 构建配置和 v2 运行时配置。
 内置 Cryptpilot guest 使用官方 0.9.3，CA 安装预检要求 host 和 guest 均为 0.9.3。
 Cryptpilot 启动配置直接使用最终根设备 `/dev/mapper/rootfs`，避免标签扫描探测内部增量设备。
+one-click 的 cleanup 使用已安装的 Shelter，只预检实例删除和剩余节点网络更新命令。
+清理不会因 Cryptpilot 构建工具版本不同而被拒绝，也不会在删除前自动替换 Shelter 包；
+构建和部署仍执行配套 RPM 与 Cryptpilot 版本预检。
 Shelter RPM 显式依赖 `zstd`，安装时由 DNF 自动解析，以支持默认的 Zstd initrd 压缩。
 `hack/shelter-rpm.json` 记录源码提交、RPM SHA-256 和 payload 摘要；
 准备 cagent 源码包时会核对该记录与实际 Shelter RPM。
 
-`CAGENT_BUILD_JOBS` 控制打包并行度，默认 4。最终 release 固定为 `1`，
-本地验证过程不递增 RPM 的 Release。
+`CAGENT_BUILD_JOBS` 控制打包并行度，默认 4。公开发布不同 payload 时递增
+RPM 的 Release；当前 cagent 为 `0.1.0-2`，并依赖 `shelter >= 0.3.2-2`，
+使 DNF 能区分先前的 `-1` 包。本地验证过程不递增 Release。
 
 ## 在干净机器安装
 
@@ -39,7 +45,7 @@ Shelter RPM 显式依赖 `zstd`，安装时由 DNF 自动解析，以支持默�
 
 ```bash
 sha256sum -c SHA256SUMS
-sudo dnf install -y ./shelter-0.3.2-1.al8.x86_64.rpm ./cagent-0.1.0-1.al8.x86_64.rpm
+sudo dnf install -y ./shelter-0.3.2-2.al8.x86_64.rpm ./cagent-0.1.0-2.al8.x86_64.rpm
 confidential-agent version
 rpm -q cagent shelter attestation-challenge-client libtdx-verify trusted-network-gateway
 ```

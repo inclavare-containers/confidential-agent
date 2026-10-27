@@ -615,7 +615,7 @@ resolve_shelter_rpm() {
     printf '%s\n' "$E2E_SHELTER_RPM"
     return
   fi
-  find "$ROOT_DIR/hack" -maxdepth 1 -type f -name 'shelter-*.rpm' | sort -V | tail -n 1
+  "$ROOT_DIR/hack/resolve-shelter-rpm.sh"
 }
 
 install_bundled_shelter_rpm() {

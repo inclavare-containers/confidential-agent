@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 
 ensure_shelter() {
+  case "${CA_MODE:-}" in
+    cleanup|cleanup-openclaw-vllm|cleanup-vllm-inference)
+      ensure_shelter_cleanup
+      return
+      ;;
+  esac
   local shelter_rpm=""
   if [[ -n "${CA_SHELTER_BIN:-}" ]]; then
     [[ -x "$CA_SHELTER_BIN" ]] || die "CA_SHELTER_BIN is not executable: $CA_SHELTER_BIN"
@@ -28,6 +34,17 @@ ensure_shelter() {
   fi
 }
 
+ensure_shelter_cleanup() {
+  CA_SHELTER_BIN="${CA_SHELTER_BIN:-$(command -v shelter || true)}"
+  [[ -n "$CA_SHELTER_BIN" && -x "$CA_SHELTER_BIN" ]] ||
+    die "Shelter is required for cleanup; install a compatible CLI or set CA_SHELTER_BIN"
+  export CA_SHELTER_BIN
+  "$ROOT_DIR/hack/check-shelter.sh" "$CA_SHELTER_BIN" --cleanup ||
+    die "Shelter lacks the managed removal/network commands required for cleanup"
+  "$CA_SHELTER_BIN" --version >/dev/null
+  log "using Shelter for cleanup: $CA_SHELTER_BIN"
+}
+
 resolve_shelter_rpm() {
   if [[ -n "${CA_SHELTER_RPM:-}" ]]; then
     [[ -f "$CA_SHELTER_RPM" ]] || die "Shelter RPM does not exist: $CA_SHELTER_RPM"
@@ -35,13 +52,7 @@ resolve_shelter_rpm() {
     return
   fi
 
-  local rpm
-  for rpm in "$ROOT_DIR"/hack/shelter-*.rpm; do
-    [[ -f "$rpm" ]] || continue
-    printf '%s\n' "$rpm"
-    return
-  done
-  die "Shelter is required and no bundled Shelter RPM was found under $ROOT_DIR/hack. Set CA_SHELTER_BIN or CA_SHELTER_RPM."
+  "$ROOT_DIR/hack/resolve-shelter-rpm.sh"
 }
 
 assert_shelter_upgrade_idle() {
