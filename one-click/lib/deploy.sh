@@ -445,18 +445,18 @@ start_connect() {
     fi
     if ! kill -0 "$(cat "$pid_path")" >/dev/null 2>&1; then
       if [[ "$CA_SERVICE_ID" == "vllm-inference" ]]; then
-        warn "connect process exited before vLLM became reachable; see $log_path"
+        die "connect process exited before vLLM became reachable; see $log_path"
       else
-        warn "connect process exited before OpenClaw became reachable; see $log_path"
+        die "connect process exited before OpenClaw became reachable; see $log_path"
       fi
       return
     fi
     sleep 3
   done
   if [[ "$CA_SERVICE_ID" == "vllm-inference" ]]; then
-    warn "connect did not become HTTP-ready (probe $readiness_path) within ${CA_CONNECT_TIMEOUT_SEC}s; see $log_path"
+    die "connect did not become HTTP-ready (probe $readiness_path) within ${CA_CONNECT_TIMEOUT_SEC}s; see $log_path"
   else
-    warn "connect did not become HTTP-ready within ${CA_CONNECT_TIMEOUT_SEC}s; see $log_path"
+    die "connect did not become HTTP-ready within ${CA_CONNECT_TIMEOUT_SEC}s; see $log_path"
   fi
 }
 

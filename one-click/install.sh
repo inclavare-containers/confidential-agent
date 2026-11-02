@@ -2,12 +2,12 @@
 set -eu
 
 DEFAULT_REPO="https://github.com/inclavare-containers/confidential-agent.git"
-DEFAULT_BRANCH="one-click"
+DEFAULT_BRANCH="master"
 
 usage() {
     cat <<'EOF'
 Usage:
-  curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-agent/one-click/one-click/install.sh | sh
+  curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install.sh | sh
   sh one-click/install.sh [deploy|install-only|cleanup] [options]
 
 Bootstrap options:

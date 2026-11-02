@@ -2,12 +2,12 @@
 set -eu
 
 DEFAULT_REPO="https://github.com/inclavare-containers/confidential-agent.git"
-DEFAULT_BRANCH="secure-llm-inference"
+DEFAULT_BRANCH="master"
 
 usage() {
     cat <<'EOF'
 Usage:
-  curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-agent/secure-llm-inference/one-click/install-vllm-inference.sh | sh
+  curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install-vllm-inference.sh | sh
   sh one-click/install-vllm-inference.sh [deploy|install-only|cleanup] [options]
 
 Bootstrap options:

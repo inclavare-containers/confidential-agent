@@ -78,6 +78,8 @@ Confidential Agent 的保护范围包括：
 
 登录部署机后，设置阿里云访问凭证：
 
+使用专用 RAM 用户，确认其具备 ECS、VPC 和 OSS 的创建及清理权限。本文一键流程可使用 `AliyunECSFullAccess`、`AliyunVPCFullAccess`、`AliyunOSSFullAccess` 三项系统策略；后续收敛权限时需同时验证部署与清理。首次导入镜像前，由账号管理员确认 `AliyunECSImageImportDefaultRole` 已配置并绑定 `AliyunECSImageImportRolePolicy`；部署用户不需要 RAM 管理权限。
+
 ```bash
 export ALICLOUD_ACCESS_KEY="<YOUR_ACCESS_KEY>"
 export ALICLOUD_SECRET_KEY="<YOUR_SECRET_KEY>"
@@ -103,13 +105,27 @@ export DINGTALK_BOT_CLIENT_SECRET="<YOUR_DINGTALK_CLIENT_SECRET>"
 交互式部署：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-agent/one-click/one-click/install.sh | sh
+set -euo pipefail
+INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install.sh"
+INSTALL_SCRIPT="$(mktemp)"
+curl -fL --connect-timeout 10 --max-time 90 \
+  "https://github.jobcher.com/gh/${INSTALL_URL}" -o "$INSTALL_SCRIPT" || \
+curl -fL --connect-timeout 10 --max-time 90 \
+  "$INSTALL_URL" -o "$INSTALL_SCRIPT"
+sh "$INSTALL_SCRIPT"
 ```
 
 非交互部署示例：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-agent/one-click/one-click/install.sh | sh -s -- \
+set -euo pipefail
+INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install.sh"
+INSTALL_SCRIPT="$(mktemp)"
+curl -fL --connect-timeout 10 --max-time 90 \
+  "https://github.jobcher.com/gh/${INSTALL_URL}" -o "$INSTALL_SCRIPT" || \
+curl -fL --connect-timeout 10 --max-time 90 \
+  "$INSTALL_URL" -o "$INSTALL_SCRIPT"
+sh "$INSTALL_SCRIPT" \
   --non-interactive \
   --yes \
   --region cn-beijing \
@@ -122,7 +138,14 @@ curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-a
 百炼 API 场景默认启用 PEP。如只验证 OpenClaw、百炼、远程证明资源注入、TNG connect 和 Gateway Token 基础链路，可显式禁用 PEP：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-agent/one-click/one-click/install.sh | sh -s -- \
+set -euo pipefail
+INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install.sh"
+INSTALL_SCRIPT="$(mktemp)"
+curl -fL --connect-timeout 10 --max-time 90 \
+  "https://github.jobcher.com/gh/${INSTALL_URL}" -o "$INSTALL_SCRIPT" || \
+curl -fL --connect-timeout 10 --max-time 90 \
+  "$INSTALL_URL" -o "$INSTALL_SCRIPT"
+sh "$INSTALL_SCRIPT" \
   --non-interactive \
   --yes \
   --disable-pep
@@ -133,7 +156,14 @@ curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-a
 vLLM 场景在 GPU TEE 实例内启动本地 vLLM OpenAI-compatible API，OpenClaw 通过 `local-vllm` provider 调用 `http://127.0.0.1:8090/v1`。
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-agent/one-click/one-click/install-openclaw-vllm.sh | sh -s -- \
+set -euo pipefail
+INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install-openclaw-vllm.sh"
+INSTALL_SCRIPT="$(mktemp)"
+curl -fL --connect-timeout 10 --max-time 90 \
+  "https://github.jobcher.com/gh/${INSTALL_URL}" -o "$INSTALL_SCRIPT" || \
+curl -fL --connect-timeout 10 --max-time 90 \
+  "$INSTALL_URL" -o "$INSTALL_SCRIPT"
+sh "$INSTALL_SCRIPT" \
   --non-interactive \
   --yes \
   --region cn-beijing \
@@ -149,21 +179,28 @@ vLLM 默认配置如下：
 | ModelScope 模型 | `Qwen/Qwen3.6-35B-A3B` |
 | 模型目录 | `/opt/models/Qwen3.6-35B-A3B` |
 | served model name | `Qwen3.6-35B-A3B` |
-| vLLM 版本 | `0.19.1` |
+| vLLM 版本 | `0.28.0` |
 | vLLM 端口 | `8090` |
 | 镜像变体 | 默认构建并部署 `release` 变体 |
 
 如需覆盖模型或端口，传入：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-agent/one-click/one-click/install-openclaw-vllm.sh | sh -s -- \
+set -euo pipefail
+INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install-openclaw-vllm.sh"
+INSTALL_SCRIPT="$(mktemp)"
+curl -fL --connect-timeout 10 --max-time 90 \
+  "https://github.jobcher.com/gh/${INSTALL_URL}" -o "$INSTALL_SCRIPT" || \
+curl -fL --connect-timeout 10 --max-time 90 \
+  "$INSTALL_URL" -o "$INSTALL_SCRIPT"
+sh "$INSTALL_SCRIPT" \
   --non-interactive \
   --yes \
   --vllm-model-id Qwen/Qwen3.6-35B-A3B \
   --vllm-model-dir /opt/models/Qwen3.6-35B-A3B \
   --vllm-served-model-name Qwen3.6-35B-A3B \
   --vllm-port 8090 \
-  --vllm-version 0.19.1
+  --vllm-version 0.28.0
 ```
 
 > **重要**
@@ -173,7 +210,14 @@ curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-a
 排障时，可显式构建 `debug` 变体以启用 debug SSH：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-agent/one-click/one-click/install-openclaw-vllm.sh | sh -s -- \
+set -euo pipefail
+INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install-openclaw-vllm.sh"
+INSTALL_SCRIPT="$(mktemp)"
+curl -fL --connect-timeout 10 --max-time 90 \
+  "https://github.jobcher.com/gh/${INSTALL_URL}" -o "$INSTALL_SCRIPT" || \
+curl -fL --connect-timeout 10 --max-time 90 \
+  "$INSTALL_URL" -o "$INSTALL_SCRIPT"
+sh "$INSTALL_SCRIPT" \
   --non-interactive \
   --yes \
   --vllm-build-variants debug
@@ -186,7 +230,14 @@ curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-a
 脚本会探测部署机公网出口 IP，并把 operator 入口限制到该 IP `/32`。非交互模式下可通过 `--allowed-cidr` 指定一个或多个 CIDR：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-agent/one-click/one-click/install.sh | sh -s -- \
+set -euo pipefail
+INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install.sh"
+INSTALL_SCRIPT="$(mktemp)"
+curl -fL --connect-timeout 10 --max-time 90 \
+  "https://github.jobcher.com/gh/${INSTALL_URL}" -o "$INSTALL_SCRIPT" || \
+curl -fL --connect-timeout 10 --max-time 90 \
+  "$INSTALL_URL" -o "$INSTALL_SCRIPT"
+sh "$INSTALL_SCRIPT" \
   --non-interactive \
   --yes \
   --allowed-cidr 203.0.113.10/32,198.51.100.0/24
@@ -196,14 +247,14 @@ curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-a
 
 > **警告**
 >
-> `0.0.0.0/0` 会扩大暴露面。默认 OpenClaw 配置禁用 device auth，控制面主要由 OpenClaw Gateway Token 保护。生产环境请限制为具体公网出口 IP 或企业出口 CIDR。
+> `0.0.0.0/0` 会扩大暴露面。OpenClaw 使用 Gateway Token 和客户端设备配对保护控制面。生产环境请限制为具体公网出口 IP 或企业出口 CIDR。
 
 ### 步骤五：等待部署完成
 
 部署成功后，脚本会输出类似信息：
 
 ```text
-Confidential Agent one-click summary
+Deployment summary
   state_dir: /root/.confidential-agent
   work_dir:  /root/.confidential-agent/one-click
   spec:      /root/.confidential-agent/one-click/openclaw-vllm/openclaw-vllm.yaml
@@ -238,12 +289,14 @@ http://127.0.0.1:18789/openclaw
 如果浏览器运行在个人电脑上，先建立 SSH 端口转发：
 
 ```bash
-ssh -L 18789:127.0.0.1:18789 root@<DEPLOY_MACHINE_PUBLIC_IP>
+ssh -N -L 18789:127.0.0.1:18789 "root@<DEPLOY_MACHINE_PUBLIC_IP>"
 ```
 
 然后访问 `http://127.0.0.1:18789/openclaw`，输入步骤五输出的 Gateway Token。
 
 #### OpenClaw 桌面客户端
+
+这是可选接入方式，未包含在本轮云端验收中。若客户端运行在个人电脑上，先按上一节建立 SSH 转发。
 
 配置 Remote 模式：
 
@@ -255,10 +308,26 @@ ssh -L 18789:127.0.0.1:18789 root@<DEPLOY_MACHINE_PUBLIC_IP>
 #### OpenClaw TUI
 
 ```bash
-openclaw tui --url ws://127.0.0.1:18789 --token <YOUR_GATEWAY_TOKEN>
+openclaw tui --url ws://127.0.0.1:18789 --token "<YOUR_GATEWAY_TOKEN>"
 ```
 
+端口以 `Deployment summary` 为准；已有隧道占用 18789 时可能自动选择其他端口。如需恢复连接信息，百炼路径读取 `one-click/connect.log`，all-in-one 路径读取 `one-click/connect-openclaw-vllm.log`：
+
+```bash
+WORK_DIR="$HOME/.confidential-agent/one-click"
+CONNECT_LOG="$WORK_DIR/connect-openclaw-vllm.log" # 百炼路径改为 connect.log
+CONNECT_PORT="$(awk '/^connect 127\.0\.0\.1:/ {split($2,a,":"); print a[2]; exit}' "$CONNECT_LOG")"
+GATEWAY_TOKEN="$(cat "$WORK_DIR/secrets/gateway.token")"
+openclaw tui --url "ws://127.0.0.1:${CONNECT_PORT}" --token "$GATEWAY_TOKEN"
+```
+
+首次使用该部署机的 TUI 时，如果出现 `device pairing required`，先使用同一 Gateway Token 登录 Web 控制台，打开 **Settings > Devices**。核对刚发起的 `openclaw-tui` 请求、设备信息和请求权限，批准该请求，然后重新运行上面的 TUI 命令。配对完成后，可以直接在 TUI 中对话；更换客户端身份后需要重新配对。
+
+配对尚未完成时，远程执行 `openclaw devices list --url ... --token ...` 也可能返回 `missing scope: operator.pairing`，不能依靠这条未配对的 CLI 连接完成首次授权。
+
 #### 钉钉聊天
+
+这是可选接入方式，需自行提供专用应用凭据并验证；本轮未进行钉钉收发测试。
 
 部署时传入 `--enable-dingtalk`，并确保 `DINGTALK_BOT_CLIENT_ID` 和 `DINGTALK_BOT_CLIENT_SECRET` 已设置。钉钉请求进入 OpenClaw 后，配置、凭据和 Agent 状态均在机密实例内处理。
 
@@ -293,19 +362,52 @@ cai-pep attest collect-and-verify \
 
 日志中的 WARN，例如 collateral 过期提示或 GPU evidence 为空提示，不应直接当作认证失败。认证结论以 JSON claims 中的硬件和 evidence 字段为准。
 
+同时记录 TCB 状态。当前策略返回 `affirming` 不等于 TCB 已更新至最新；例如 `OutOfDate` 应在结论中如实说明。
+
+在部署机上检查实时状态并生成证明报告：
+
+```bash
+confidential-agent --state-dir "$HOME/.confidential-agent" status --live
+confidential-agent --state-dir "$HOME/.confidential-agent" \
+  report --include-a2a --json > report.json
+jq '{schema, services: (.services | map({
+  service_id, collect_status, tee: .tee_info.tee,
+  phase: .daemon.phase, app_ready: .daemon.app_ready,
+  mesh_ready: .daemon.mesh_ready, attestation: .attestation.status,
+  cpu_status: .attestation.ear_claims.submods.cpu0["ear.status"],
+  rekor: .rekor.status
+}))}' report.json
+```
+
+预期 `schema=confidential-agent/attestation-report/v1`；目标服务的 `collect_status=ok`、`tee=tdx`、`phase=running`、`app_ready=true`、`mesh_ready=true`、`attestation=ok`、`cpu_status=affirming`、`rekor=found`。只有实际对话、实际 TDX skill 调用、实时状态和报告均通过，才算完成验收；脚本退出 0 或打印 summary 本身不足以证明成功。
+
 ### 步骤八：释放资源
 
 释放百炼 API 场景资源：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-agent/one-click/one-click/install.sh | sh -s -- cleanup \
+set -euo pipefail
+INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install.sh"
+INSTALL_SCRIPT="$(mktemp)"
+curl -fL --connect-timeout 10 --max-time 90 \
+  "https://github.jobcher.com/gh/${INSTALL_URL}" -o "$INSTALL_SCRIPT" || \
+curl -fL --connect-timeout 10 --max-time 90 \
+  "$INSTALL_URL" -o "$INSTALL_SCRIPT"
+sh "$INSTALL_SCRIPT" cleanup \
   --state-dir "$HOME/.confidential-agent"
 ```
 
 释放 vLLM 场景资源：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-agent/one-click/one-click/install-openclaw-vllm.sh | sh -s -- cleanup \
+set -euo pipefail
+INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install-openclaw-vllm.sh"
+INSTALL_SCRIPT="$(mktemp)"
+curl -fL --connect-timeout 10 --max-time 90 \
+  "https://github.jobcher.com/gh/${INSTALL_URL}" -o "$INSTALL_SCRIPT" || \
+curl -fL --connect-timeout 10 --max-time 90 \
+  "$INSTALL_URL" -o "$INSTALL_SCRIPT"
+sh "$INSTALL_SCRIPT" cleanup \
   --state-dir "$HOME/.confidential-agent"
 ```
 
@@ -325,7 +427,7 @@ kill "$(cat "$HOME/.confidential-agent/one-click/connect-openclaw-vllm.pid")"   
 
 > **警告**
 >
-> 销毁操作不可逆，会删除 ECS 实例、自定义镜像、OSS 对象、安全组、VPC、交换机等云资源。确认云资源已释放后，才建议删除本地状态目录：
+> 销毁操作不可逆，会删除 ECS 实例、自定义镜像、OSS 对象、安全组、VPC、交换机等云资源。镜像导入生成的快照可能独立保留；请在部署地域核对本次镜像 ID、名称及创建时间，仅删除确认属于本次部署且不再需要的快照。确认上述云资源及快照均已释放后，再删除本地状态目录：
 >
 > ```bash
 > rm -rf "$HOME/.confidential-agent"
@@ -363,7 +465,8 @@ find "$HOME/.confidential-agent" -name "*.rekor-meta.json" -print
 验证 inclusion proof：
 
 ```bash
-/usr/libexec/shelter/bin/rekor-cli verify --log-index <LOG_INDEX> --rekor_server https://rekor.sigstore.dev
+LOG_INDEX="<本次构建的 log index>"
+/usr/libexec/shelter/bin/rekor-cli verify --log-index "$LOG_INDEX" --rekor_server https://rekor.sigstore.dev
 ```
 
 查看 Rekor 日志一致性：
@@ -371,6 +474,8 @@ find "$HOME/.confidential-agent" -name "*.rekor-meta.json" -print
 ```bash
 /usr/libexec/shelter/bin/rekor-cli loginfo --rekor_server https://rekor.sigstore.dev
 ```
+
+首次运行保存当前检查点；保留该检查点后再次运行，才能验证新旧检查点间的一致性。
 
 ## 常见问题
 

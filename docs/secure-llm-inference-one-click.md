@@ -80,6 +80,15 @@
 
 如果您希望快速体验此方案，可以使用我们为您准备的加密模型文件进行试用。选择下表中的预加密模型后，您将能够跳过该步骤，直接进入[步骤二：准备凭证](#步骤二准备凭证)。
 
+使用演示模型时，仍需先创建部署参数引用的演示密钥文件：
+
+```bash
+umask 077
+printf '%s\n' '0Bn4Q1wwY9fN3P' > "$HOME/cachefs-password"
+```
+
+此密码公开且仅用于演示，不提供自有模型的保密性；自有模型应使用独立生成的密钥。
+
 | 模型名称 | 加密方式 | 加密密码 | OSS地域 | 模型存储位置 |
 |----------|----------|----------|---------|--------------|
 | Qwen3.8-27B | Gocryptfs | 0Bn4Q1wwY9fN3P | cn-beijing | conf-ai:/qwen3.8-27b-gocryptfs/ |
@@ -170,7 +179,7 @@ modelscope download --model Qwen/Qwen3.8-27B
       cat ~/cachefs-password | gocryptfs cipher plain
 
       # move AI model to ~/mount/plain
-      cp -r ${PLAINTEXT_MODEL_PATH}/. ~/mount/plain
+      cp -r "${PLAINTEXT_MODEL_PATH}/." ~/mount/plain
 
       # unmount after encryption is complete
       fusermount -u ~/mount/plain
@@ -212,7 +221,14 @@ export ALICLOUD_SECRET_KEY="<YOUR_SECRET_KEY>"
 在部署机上执行以下命令进入交互式部署：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-agent/secure-llm-inference/one-click/install-vllm-inference.sh | sh
+set -euo pipefail
+INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install-vllm-inference.sh"
+INSTALL_SCRIPT="$(mktemp)"
+curl -fL --connect-timeout 10 --max-time 90 \
+  "https://github.jobcher.com/gh/${INSTALL_URL}" -o "$INSTALL_SCRIPT" || \
+curl -fL --connect-timeout 10 --max-time 90 \
+  "$INSTALL_URL" -o "$INSTALL_SCRIPT"
+sh "$INSTALL_SCRIPT"
 ```
 
 脚本默认进入交互模式，会自动询问缺失的阿里云凭证、模型密钥文件、OSS 路径等必要参数。常用默认配置如下：
@@ -236,7 +252,14 @@ curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-a
 非交互部署示例：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-agent/secure-llm-inference/one-click/install-vllm-inference.sh | sh -s -- \
+set -euo pipefail
+INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install-vllm-inference.sh"
+INSTALL_SCRIPT="$(mktemp)"
+curl -fL --connect-timeout 10 --max-time 90 \
+  "https://github.jobcher.com/gh/${INSTALL_URL}" -o "$INSTALL_SCRIPT" || \
+curl -fL --connect-timeout 10 --max-time 90 \
+  "$INSTALL_URL" -o "$INSTALL_SCRIPT"
+sh "$INSTALL_SCRIPT" \
   --non-interactive \
   --yes \
   --region cn-beijing \
@@ -251,7 +274,14 @@ curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-a
 多副本（N 个 运行vLLM的gn8v-tee实例 + 1个ALB）部署示例：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-agent/secure-llm-inference/one-click/install-vllm-inference.sh | sh -s -- \
+set -euo pipefail
+INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install-vllm-inference.sh"
+INSTALL_SCRIPT="$(mktemp)"
+curl -fL --connect-timeout 10 --max-time 90 \
+  "https://github.jobcher.com/gh/${INSTALL_URL}" -o "$INSTALL_SCRIPT" || \
+curl -fL --connect-timeout 10 --max-time 90 \
+  "$INSTALL_URL" -o "$INSTALL_SCRIPT"
+sh "$INSTALL_SCRIPT" \
   --non-interactive \
   --yes \
   --region cn-beijing \
@@ -343,13 +373,22 @@ TNG隧道监听在部署机本地 `127.0.0.1:8080`。通过 `curl http://127.0.0
 
 * **从其他客户端（如个人电脑/手机端）访问**
 
-为方便演示，我们对可信网关TNG隧道的实现做了封装，需先将部署机的服务状态目录（默认 `$HOME/.confidential-agent`）拷贝到该机器，再在该机器上运行以下命令启动隧道监听（默认 `127.0.0.1:8080`）：
+客户端需要安装与部署机兼容的 `confidential-agent` 和 TNG 工具。默认安全组只允许部署机的公网出口；在复制状态前，先在部署机上授权客户端的实际公网出口 CIDR：
+
+  ```bash
+  CLIENT_CIDR="198.51.100.23/32"  # 替换为客户端实际公网出口
+  confidential-agent --state-dir "$HOME/.confidential-agent" peering add \
+    --role operator --cidr "$CLIENT_CIDR" --label external-client
+  confidential-agent --state-dir "$HOME/.confidential-agent" peering apply
+  ```
+
+再将部署机的服务状态目录（默认 `$HOME/.confidential-agent`）复制到客户端，并在客户端启动隧道（默认监听 `127.0.0.1:8080`）：
 
   ```bash
   confidential-agent connect start --service vllm-inference
   ```
 
-随后便可和部署机一样的方式访问推理服务。
+如果复制到自定义路径，给客户端命令增加 `--state-dir <复制后的路径>`。`connect start` 成功表示本地隧道已启动，还需执行 `curl http://127.0.0.1:8080/v1/models` 确认远端可达，再使用上面的对话请求验证推理。客户端不需要阿里云 AccessKey。
 
 如需集成可信网关客户端到您的业务中来发起推理请求，我们支持如下几种访问方式，您可以结合您的业务场景进行选择不同的集成方式
 
@@ -357,21 +396,41 @@ TNG隧道监听在部署机本地 `127.0.0.1:8080`。通过 `curl http://127.0.0
 | --- | --- |
 | 代理网关（HTTP代理/socks5代理/透明代理）| 可从[GitHub仓库](https://github.com/inclavare-containers/TNG/releases/tag/v2.9.2)获取二进制/容器，[文档及示例](https://github.com/inclavare-containers/TNG/blob/v2.9.2/docs/configuration_zh.md) |
 | Python SDK | `pip install tng-sdk==2.9.2`，[文档及示例](https://github.com/inclavare-containers/TNG/tree/v2.9.2/tng-python) |
-| Go SDK | `go get github.com/inclavare-containers/tng/tng-go`，[文档及示例](https://github.com/inclavare-containers/TNG/tree/v2.9.2/tng-go) |
+| Go SDK | 使用 TNG `v2.9.2` 源码中的 `tng-go` 模块，[文档及示例](https://github.com/inclavare-containers/TNG/tree/v2.9.2/tng-go) |
 | JS SDK | `npm i @inclavare-containers/tng@2.9.2`，[文档及示例](https://github.com/inclavare-containers/TNG/tree/v2.9.2/tng-wasm) |
+
+这些集成方式需要配置与部署一致的加密协议、证明策略和参考值。可用 `confidential-agent connect --service vllm-inference --render-only` 查看当前客户端配置；不要使用 SDK 示例中的 `no_ra=True` 替代证明验证。HTTP/SOCKS5 代理按 IP 过滤目标时使用 `ip` 或 `ip_cidr`，`domain` 只匹配域名。
+
+Go SDK 的未指定版本安装命令可能返回 `no matching versions`。取得 TNG `v2.9.2` 源码后，可在已有 Go 项目中使用本地模块：
+
+```bash
+go mod edit -require=github.com/inclavare-containers/tng/tng-go@v0.0.0
+go mod edit -replace=github.com/inclavare-containers/tng/tng-go=/绝对路径/TNG/tng-go
+```
+
+浏览器 JS SDK 使用 OHTTP，还需要部署 WASM 所要求的 COOP/COEP 响应头。跨域直连必须配置允许该页面来源的 CORS；本次部署默认配置下，浏览器可能在证明交换成功后仍因业务响应缺少 CORS 头而拒绝请求。也可通过页面同源的代理转发 OHTTP 密文，再由浏览器 SDK 完成解密和验证；仅安装 npm 包并不足以完成浏览器接入。
 
 ### 步骤六（可选）：释放资源
 
 不再需要服务时，在部署机上执行以下命令释放云资源：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-agent/secure-llm-inference/one-click/install-vllm-inference.sh | sh -s -- cleanup \
+set -euo pipefail
+INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install-vllm-inference.sh"
+INSTALL_SCRIPT="$(mktemp)"
+curl -fL --connect-timeout 10 --max-time 90 \
+  "https://github.jobcher.com/gh/${INSTALL_URL}" -o "$INSTALL_SCRIPT" || \
+curl -fL --connect-timeout 10 --max-time 90 \
+  "$INSTALL_URL" -o "$INSTALL_SCRIPT"
+sh "$INSTALL_SCRIPT" cleanup \
   --state-dir "$HOME/.confidential-agent"
 ```
 
 **警告**
 
 销毁操作不可逆，会删除 ECS 实例、自定义镜像、OSS 对象、安全组、VPC、交换机等云资源。请确认不再需要实例中的数据后再执行。
+
+镜像导入生成的快照可能独立保留。清理后请在对应地域查询快照，按本次镜像 ID、名称和创建时间核对归属，仅删除已不再需要的本次导入快照。双副本部署还需确认 ALB、监听器、服务器组及公网 EIP 已释放；所有资源确认释放后再删除本地状态目录。
 
 安全验证
 ---------
@@ -395,7 +454,8 @@ Created entry at index 1205944956, available at: https://rekor.sigstore.dev/api/
 验证包含性（inclusion proof），确认记录镜像参考值的条目确实存在于 Rekor 的默克尔树根中：
 
 ```bash
-rekor-cli verify --log-index 1205944956 --rekor_server https://rekor.sigstore.dev
+LOG_INDEX="<本次构建的 log index>" # 从本次上传日志或 Rekor metadata 读取，不能使用上面的示例值
+/usr/libexec/shelter/bin/rekor-cli verify --log-index "$LOG_INDEX" --rekor_server https://rekor.sigstore.dev
 ```
 
 如果输出中包含两段相同的 hash 值，则说明验证成功：
@@ -408,8 +468,10 @@ Expected Root Hash: 1291abcee27148a4c00241ba8719f798ce060e8a5ccc8b18249017c25c6d
 验证一致性（consistency proof），确保 Rekor 上存储的参考值条目没有被删改：
 
 ```bash
-rekor-cli loginfo --rekor_server https://rekor.sigstore.dev
+/usr/libexec/shelter/bin/rekor-cli loginfo --rekor_server https://rekor.sigstore.dev
 ```
+
+首次运行保存当前日志检查点；保留本地检查点后再次运行，才能验证新旧检查点之间的一致性。首次输出成功不能单独证明跨检查点一致性。
 
 输出中包含以下内容则说明验证成功：
 

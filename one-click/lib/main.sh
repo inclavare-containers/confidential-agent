@@ -235,7 +235,7 @@ init_defaults() {
   CA_SLSA_GENERATOR="${CA_SLSA_GENERATOR:-/usr/libexec/shelter/slsa/slsa-generator}"
   CA_STATUS_TIMEOUT_SEC="${CA_STATUS_TIMEOUT_SEC:-900}"
   CA_CONNECT_TIMEOUT_SEC="${CA_CONNECT_TIMEOUT_SEC:-240}"
-  CA_CONNECT_READINESS_PATH="${CA_CONNECT_READINESS_PATH:-/openclaw}"
+  CA_CONNECT_READINESS_PATH="${CA_CONNECT_READINESS_PATH:-}"
   CA_BIN="${CA_BIN:-$ROOT_DIR/target/release/confidential-agent}"
   CA_AGENTD_BIN="${CA_AGENTD_BIN:-$(dirname "$CA_BIN")/confidential-agentd}"
   CA_GATEWAY_BIN="${CA_GATEWAY_BIN:-$(dirname "$CA_BIN")/cai-gateway}"

@@ -84,7 +84,7 @@ flowchart TB
 最短路径是 one-click installer。它会在本机安装依赖、在缺少 Shelter 时安装仓库内置的 Shelter RPM、构建当前源码、生成 OpenClaw 配置、交互式选择 operator CIDR，然后通过 Shelter 在阿里云上创建一台 TDX/GPU TEE ECS。需要逐步控制每个 CLI 动作时，参考 [OpenClaw CLI 分步部署示例](docs/openclaw-cli-step-by-step.md)；需要百炼 API 与本地 vLLM 双场景文档时，参考 [OpenClaw one-click 最佳实践](docs/openclaw-one-click-best-practice/README.md)。
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-agent/one-click/one-click/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install.sh | sh
 ```
 
 在 Alibaba Cloud Linux 3 上，脚本会优先通过系统源安装 `cargo`/`rust`，并为 Cargo 写入 Aliyun crates mirror。默认不会走 rustup；只有显式传入 `--allow-rustup` 时，系统源工具链不可用才会 fallback 到 rustup。
@@ -107,7 +107,7 @@ export ALICLOUD_ACCESS_KEY=<your-ak>
 export ALICLOUD_SECRET_KEY=<your-sk>
 export DASHSCOPE_API_KEY=<your-bailian-key>
 
-curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-agent/one-click/one-click/install.sh | sh -s -- \
+curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install.sh | sh -s -- \
   --non-interactive \
   --region cn-beijing \
   --zone-id cn-beijing-i \
@@ -120,7 +120,7 @@ curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-a
 export ALICLOUD_ACCESS_KEY=<your-ak>
 export ALICLOUD_SECRET_KEY=<your-sk>
 
-curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-agent/one-click/one-click/install-openclaw-vllm.sh | sh -s -- \
+curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install-openclaw-vllm.sh | sh -s -- \
   --non-interactive \
   --yes \
   --region cn-beijing \
@@ -132,7 +132,7 @@ curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-a
 如果只想安装 host 侧组件，不创建云资源：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-agent/one-click/one-click/install.sh | sh -s -- install-only
+curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install.sh | sh -s -- install-only
 ```
 
 升级 host 组件前，请等待正在运行的构建、部署和连接操作结束，升级期间不要启动新操作。安装器在替换 Shelter RPM 前检查已安装的 Shelter 可执行文件是否仍被进程使用；若存在活动进程，会保留原包并报出对应 PID。相同版本的重复安装会复用已验证的 RPM。
@@ -164,7 +164,7 @@ TUI 持续刷新本地 service state 与 Guest `:8088/status`，并自动通过 
 清理云资源：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-agent/one-click/one-click/install.sh | sh -s -- cleanup \
+curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install.sh | sh -s -- cleanup \
   --state-dir "$HOME/.confidential-agent"
 ```
 
