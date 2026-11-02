@@ -81,10 +81,27 @@ flowchart TB
 
 ## 快速开始 (Quick Start)
 
-最短路径是 one-click installer。它会在本机安装依赖、在缺少 Shelter 时安装仓库内置的 Shelter RPM、构建当前源码、生成 OpenClaw 配置、交互式选择 operator CIDR，然后通过 Shelter 在阿里云上创建一台 TDX/GPU TEE ECS。需要逐步控制每个 CLI 动作时，参考 [OpenClaw CLI 分步部署示例](docs/openclaw-cli-step-by-step.md)；需要百炼 API 与本地 vLLM 双场景文档时，参考 [OpenClaw one-click 最佳实践](docs/openclaw-one-click-best-practice/README.md)。
+只安装原生工具时，推荐从 [v0.2.0 Release](https://github.com/inclavare-containers/confidential-agent/releases/tag/v0.2.0) 下载 `install-rpm.sh`，运行 `sudo bash install-rpm.sh --version 0.2.0`。它安装 cagent 和配套 Shelter RPM，无需编译 CA；支持 Alibaba Cloud Linux 3 x86_64，详见 [RPM 安装说明](docs/rpm.md)。
+
+完整构建部署可使用 one-click installer。它会在本机安装依赖、下载并校验清单固定的 Shelter RPM、构建当前源码、生成 OpenClaw 配置、交互式选择 operator CIDR，然后通过 Shelter 在阿里云上创建一台 TDX/GPU TEE ECS。需要逐步控制每个 CLI 动作时，参考 [OpenClaw CLI 分步部署示例](docs/openclaw-cli-step-by-step.md)；需要百炼 API 与本地 vLLM 双场景文档时，参考 [OpenClaw one-click 最佳实践](docs/openclaw-one-click-best-practice/README.md)。
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install.sh | sh
+set -euo pipefail
+INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install.sh"
+INSTALL_SCRIPT="$(mktemp)"
+PROXY_URL="${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}"
+FIRST_URL="${PROXY_URL:+${PROXY_URL%/}/}${INSTALL_URL}"
+SECOND_URL="$INSTALL_URL"
+if [[ "${CA_GITHUB_PROXY_FIRST:-1}" == 0 ]]; then
+  SECOND_URL="$FIRST_URL"
+  FIRST_URL="$INSTALL_URL"
+fi
+if ! curl -fL --connect-timeout 10 --max-time 90 "$FIRST_URL" -o "$INSTALL_SCRIPT" ||
+   [[ "$(head -c 2 "$INSTALL_SCRIPT")" != '#!' ]]; then
+  curl -fL --connect-timeout 10 --max-time 90 "$SECOND_URL" -o "$INSTALL_SCRIPT"
+fi
+[[ "$(head -c 2 "$INSTALL_SCRIPT")" == '#!' ]]
+sh "$INSTALL_SCRIPT"
 ```
 
 在 Alibaba Cloud Linux 3 上，脚本会优先通过系统源安装 `cargo`/`rust`，并为 Cargo 写入 Aliyun crates mirror。默认不会走 rustup；只有显式传入 `--allow-rustup` 时，系统源工具链不可用才会 fallback 到 rustup。
@@ -103,11 +120,26 @@ curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-a
 脚本会交互式询问缺失的阿里云凭证、百炼 API Key、是否启用钉钉，以及 operator access CIDR。启用钉钉时，镜像会安装并构建 `soimy/openclaw-channel-dingtalk`，再写入 `dingtalk` channel 配置。脚本也会在部署机安装同版本 Node.js/OpenClaw CLI，并把 `confidential-agent` 安装到 PATH。CIDR 默认使用当前部署机公网 IP `/32`，仅支持 IPv4；也可以选择自定义 CIDR 列表，或选择 `0.0.0.0/0`。选择 `0.0.0.0/0` 时脚本会先提示这会把控制面、状态、debug SSH 和 connect 入口暴露给所有 IPv4 来源，且默认 OpenClaw 配置禁用 device auth、仅靠 gateway token 鉴权，0.0.0.0/0 模式下务必妥善保管 token。非交互传入的 `--allowed-cidr` 可用于你的浏览器或运维出口，支持逗号分隔、加引号的空格分隔，或重复传入；脚本仍会额外探测部署机出口 IP 并加入 `deployer` peering，避免资源注入和 connect 被安全组挡住。百炼 API 非交互部署示例：
 
 ```bash
-export ALICLOUD_ACCESS_KEY=<your-ak>
-export ALICLOUD_SECRET_KEY=<your-sk>
-export DASHSCOPE_API_KEY=<your-bailian-key>
+export ALICLOUD_ACCESS_KEY="<your-ak>"
+export ALICLOUD_SECRET_KEY="<your-sk>"
+export DASHSCOPE_API_KEY="<your-bailian-key>"
 
-curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install.sh | sh -s -- \
+set -euo pipefail
+INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install.sh"
+INSTALL_SCRIPT="$(mktemp)"
+PROXY_URL="${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}"
+FIRST_URL="${PROXY_URL:+${PROXY_URL%/}/}${INSTALL_URL}"
+SECOND_URL="$INSTALL_URL"
+if [[ "${CA_GITHUB_PROXY_FIRST:-1}" == 0 ]]; then
+  SECOND_URL="$FIRST_URL"
+  FIRST_URL="$INSTALL_URL"
+fi
+if ! curl -fL --connect-timeout 10 --max-time 90 "$FIRST_URL" -o "$INSTALL_SCRIPT" ||
+   [[ "$(head -c 2 "$INSTALL_SCRIPT")" != '#!' ]]; then
+  curl -fL --connect-timeout 10 --max-time 90 "$SECOND_URL" -o "$INSTALL_SCRIPT"
+fi
+[[ "$(head -c 2 "$INSTALL_SCRIPT")" == '#!' ]]
+sh "$INSTALL_SCRIPT" \
   --non-interactive \
   --region cn-beijing \
   --zone-id cn-beijing-i \
@@ -117,10 +149,25 @@ curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-a
 本地 vLLM/GPU TEE 部署示例：
 
 ```bash
-export ALICLOUD_ACCESS_KEY=<your-ak>
-export ALICLOUD_SECRET_KEY=<your-sk>
+export ALICLOUD_ACCESS_KEY="<your-ak>"
+export ALICLOUD_SECRET_KEY="<your-sk>"
 
-curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install-openclaw-vllm.sh | sh -s -- \
+set -euo pipefail
+INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install-openclaw-vllm.sh"
+INSTALL_SCRIPT="$(mktemp)"
+PROXY_URL="${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}"
+FIRST_URL="${PROXY_URL:+${PROXY_URL%/}/}${INSTALL_URL}"
+SECOND_URL="$INSTALL_URL"
+if [[ "${CA_GITHUB_PROXY_FIRST:-1}" == 0 ]]; then
+  SECOND_URL="$FIRST_URL"
+  FIRST_URL="$INSTALL_URL"
+fi
+if ! curl -fL --connect-timeout 10 --max-time 90 "$FIRST_URL" -o "$INSTALL_SCRIPT" ||
+   [[ "$(head -c 2 "$INSTALL_SCRIPT")" != '#!' ]]; then
+  curl -fL --connect-timeout 10 --max-time 90 "$SECOND_URL" -o "$INSTALL_SCRIPT"
+fi
+[[ "$(head -c 2 "$INSTALL_SCRIPT")" == '#!' ]]
+sh "$INSTALL_SCRIPT" \
   --non-interactive \
   --yes \
   --region cn-beijing \
@@ -132,7 +179,22 @@ curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-a
 如果只想安装 host 侧组件，不创建云资源：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install.sh | sh -s -- install-only
+set -euo pipefail
+INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install.sh"
+INSTALL_SCRIPT="$(mktemp)"
+PROXY_URL="${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}"
+FIRST_URL="${PROXY_URL:+${PROXY_URL%/}/}${INSTALL_URL}"
+SECOND_URL="$INSTALL_URL"
+if [[ "${CA_GITHUB_PROXY_FIRST:-1}" == 0 ]]; then
+  SECOND_URL="$FIRST_URL"
+  FIRST_URL="$INSTALL_URL"
+fi
+if ! curl -fL --connect-timeout 10 --max-time 90 "$FIRST_URL" -o "$INSTALL_SCRIPT" ||
+   [[ "$(head -c 2 "$INSTALL_SCRIPT")" != '#!' ]]; then
+  curl -fL --connect-timeout 10 --max-time 90 "$SECOND_URL" -o "$INSTALL_SCRIPT"
+fi
+[[ "$(head -c 2 "$INSTALL_SCRIPT")" == '#!' ]]
+sh "$INSTALL_SCRIPT" install-only
 ```
 
 升级 host 组件前，请等待正在运行的构建、部署和连接操作结束，升级期间不要启动新操作。安装器在替换 Shelter RPM 前检查已安装的 Shelter 可执行文件是否仍被进程使用；若存在活动进程，会保留原包并报出对应 PID。相同版本的重复安装会复用已验证的 RPM。
@@ -164,7 +226,22 @@ TUI 持续刷新本地 service state 与 Guest `:8088/status`，并自动通过 
 清理云资源：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install.sh | sh -s -- cleanup \
+set -euo pipefail
+INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install.sh"
+INSTALL_SCRIPT="$(mktemp)"
+PROXY_URL="${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}"
+FIRST_URL="${PROXY_URL:+${PROXY_URL%/}/}${INSTALL_URL}"
+SECOND_URL="$INSTALL_URL"
+if [[ "${CA_GITHUB_PROXY_FIRST:-1}" == 0 ]]; then
+  SECOND_URL="$FIRST_URL"
+  FIRST_URL="$INSTALL_URL"
+fi
+if ! curl -fL --connect-timeout 10 --max-time 90 "$FIRST_URL" -o "$INSTALL_SCRIPT" ||
+   [[ "$(head -c 2 "$INSTALL_SCRIPT")" != '#!' ]]; then
+  curl -fL --connect-timeout 10 --max-time 90 "$SECOND_URL" -o "$INSTALL_SCRIPT"
+fi
+[[ "$(head -c 2 "$INSTALL_SCRIPT")" == '#!' ]]
+sh "$INSTALL_SCRIPT" cleanup \
   --state-dir "$HOME/.confidential-agent"
 ```
 

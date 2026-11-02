@@ -13,7 +13,9 @@ rpm --dbpath "$work/db" --initdb
 ca_version="$(awk '$1 == "Version:" { print $2 }' "$repo/cagent.spec")"
 ca_release="$(awk '$1 == "Release:" { sub(/%.*/, "", $2); print $2 }' "$repo/cagent.spec")"
 required="$(awk '$1 == "Requires:" && $2 == "shelter" { print $2, $3, $4 }' "$repo/cagent.spec")"
-[[ "$required" == 'shelter >= 0.3.2-2' && "$ca_release" -gt 1 ]]
+[[ "$required" == 'shelter >= 0.3.2-2' ]]
+old_ca_version=0.1.0
+old_ca_release=2
 
 make_package() {
   local name="$1" version="$2" release="$3" requirement="$4"
@@ -39,11 +41,11 @@ SPEC
 
 make_package shelter 0.3.2 1 ''
 make_package shelter 0.3.2 2 ''
-make_package cagent "$ca_version" 1 'Requires: shelter >= 0.3.2-1'
+make_package cagent "$old_ca_version" "$old_ca_release" 'Requires: shelter >= 0.3.2-1'
 make_package cagent "$ca_version" "$ca_release" "Requires: $required"
 old_shelter="$work/packages/shelter-0.3.2-1.noarch.rpm"
 new_shelter="$work/packages/shelter-0.3.2-2.noarch.rpm"
-old_ca="$work/packages/cagent-$ca_version-1.noarch.rpm"
+old_ca="$work/packages/cagent-$old_ca_version-$old_ca_release.noarch.rpm"
 new_ca="$work/packages/cagent-$ca_version-$ca_release.noarch.rpm"
 rpm --dbpath "$work/db" -U --noscripts "$old_shelter" "$old_ca"
 if rpm --dbpath "$work/db" -U --test --noscripts "$new_ca" > "$work/rejected" 2>&1; then

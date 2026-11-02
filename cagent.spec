@@ -8,8 +8,8 @@
 %global __brp_python_bytecompile %{nil}
 
 Name:           cagent
-Version:        0.1.0
-Release:        2%{?dist}
+Version:        0.2.0
+Release:        1%{?dist}
 Summary:        Confidential Agent host CLI and guest image assets
 License:        Apache-2.0
 URL:            https://github.com/inclavare-containers/confidential-agent
@@ -101,6 +101,11 @@ native-tools/ossutil64 --version >/dev/null
 %{_datadir}/cagent/
 
 %changelog
+* Mon Nov 02 2026 Weidong Sun <sunweidong@linux.alibaba.com> - 0.2.0-1
+- Publish the host CLI and guest assets with a verified companion Shelter RPM.
+- Fetch pinned Shelter packages from GitHub Releases instead of Git LFS.
+- Install TNG 2.9.2 and attestation tools through RPM dependencies.
+
 * Tue Oct 27 2026 Weidong Sun <sunweidong@linux.alibaba.com> - 0.1.0-2
 - Require Shelter 0.3.2-2 so package upgrades select the current runtime contract.
 - Check cleanup capabilities without requiring image-build tool versions.

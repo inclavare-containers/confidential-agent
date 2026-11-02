@@ -224,10 +224,18 @@ export ALICLOUD_SECRET_KEY="<YOUR_SECRET_KEY>"
 set -euo pipefail
 INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install-vllm-inference.sh"
 INSTALL_SCRIPT="$(mktemp)"
-curl -fL --connect-timeout 10 --max-time 90 \
-  "https://github.jobcher.com/gh/${INSTALL_URL}" -o "$INSTALL_SCRIPT" || \
-curl -fL --connect-timeout 10 --max-time 90 \
-  "$INSTALL_URL" -o "$INSTALL_SCRIPT"
+PROXY_URL="${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}"
+FIRST_URL="${PROXY_URL:+${PROXY_URL%/}/}${INSTALL_URL}"
+SECOND_URL="$INSTALL_URL"
+if [[ "${CA_GITHUB_PROXY_FIRST:-1}" == 0 ]]; then
+  SECOND_URL="$FIRST_URL"
+  FIRST_URL="$INSTALL_URL"
+fi
+if ! curl -fL --connect-timeout 10 --max-time 90 "$FIRST_URL" -o "$INSTALL_SCRIPT" ||
+   [[ "$(head -c 2 "$INSTALL_SCRIPT")" != '#!' ]]; then
+  curl -fL --connect-timeout 10 --max-time 90 "$SECOND_URL" -o "$INSTALL_SCRIPT"
+fi
+[[ "$(head -c 2 "$INSTALL_SCRIPT")" == '#!' ]]
 sh "$INSTALL_SCRIPT"
 ```
 
@@ -255,10 +263,18 @@ sh "$INSTALL_SCRIPT"
 set -euo pipefail
 INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install-vllm-inference.sh"
 INSTALL_SCRIPT="$(mktemp)"
-curl -fL --connect-timeout 10 --max-time 90 \
-  "https://github.jobcher.com/gh/${INSTALL_URL}" -o "$INSTALL_SCRIPT" || \
-curl -fL --connect-timeout 10 --max-time 90 \
-  "$INSTALL_URL" -o "$INSTALL_SCRIPT"
+PROXY_URL="${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}"
+FIRST_URL="${PROXY_URL:+${PROXY_URL%/}/}${INSTALL_URL}"
+SECOND_URL="$INSTALL_URL"
+if [[ "${CA_GITHUB_PROXY_FIRST:-1}" == 0 ]]; then
+  SECOND_URL="$FIRST_URL"
+  FIRST_URL="$INSTALL_URL"
+fi
+if ! curl -fL --connect-timeout 10 --max-time 90 "$FIRST_URL" -o "$INSTALL_SCRIPT" ||
+   [[ "$(head -c 2 "$INSTALL_SCRIPT")" != '#!' ]]; then
+  curl -fL --connect-timeout 10 --max-time 90 "$SECOND_URL" -o "$INSTALL_SCRIPT"
+fi
+[[ "$(head -c 2 "$INSTALL_SCRIPT")" == '#!' ]]
 sh "$INSTALL_SCRIPT" \
   --non-interactive \
   --yes \
@@ -277,10 +293,18 @@ sh "$INSTALL_SCRIPT" \
 set -euo pipefail
 INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install-vllm-inference.sh"
 INSTALL_SCRIPT="$(mktemp)"
-curl -fL --connect-timeout 10 --max-time 90 \
-  "https://github.jobcher.com/gh/${INSTALL_URL}" -o "$INSTALL_SCRIPT" || \
-curl -fL --connect-timeout 10 --max-time 90 \
-  "$INSTALL_URL" -o "$INSTALL_SCRIPT"
+PROXY_URL="${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}"
+FIRST_URL="${PROXY_URL:+${PROXY_URL%/}/}${INSTALL_URL}"
+SECOND_URL="$INSTALL_URL"
+if [[ "${CA_GITHUB_PROXY_FIRST:-1}" == 0 ]]; then
+  SECOND_URL="$FIRST_URL"
+  FIRST_URL="$INSTALL_URL"
+fi
+if ! curl -fL --connect-timeout 10 --max-time 90 "$FIRST_URL" -o "$INSTALL_SCRIPT" ||
+   [[ "$(head -c 2 "$INSTALL_SCRIPT")" != '#!' ]]; then
+  curl -fL --connect-timeout 10 --max-time 90 "$SECOND_URL" -o "$INSTALL_SCRIPT"
+fi
+[[ "$(head -c 2 "$INSTALL_SCRIPT")" == '#!' ]]
 sh "$INSTALL_SCRIPT" \
   --non-interactive \
   --yes \
@@ -418,10 +442,18 @@ go mod edit -replace=github.com/inclavare-containers/tng/tng-go=/绝对路径/TN
 set -euo pipefail
 INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install-vllm-inference.sh"
 INSTALL_SCRIPT="$(mktemp)"
-curl -fL --connect-timeout 10 --max-time 90 \
-  "https://github.jobcher.com/gh/${INSTALL_URL}" -o "$INSTALL_SCRIPT" || \
-curl -fL --connect-timeout 10 --max-time 90 \
-  "$INSTALL_URL" -o "$INSTALL_SCRIPT"
+PROXY_URL="${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}"
+FIRST_URL="${PROXY_URL:+${PROXY_URL%/}/}${INSTALL_URL}"
+SECOND_URL="$INSTALL_URL"
+if [[ "${CA_GITHUB_PROXY_FIRST:-1}" == 0 ]]; then
+  SECOND_URL="$FIRST_URL"
+  FIRST_URL="$INSTALL_URL"
+fi
+if ! curl -fL --connect-timeout 10 --max-time 90 "$FIRST_URL" -o "$INSTALL_SCRIPT" ||
+   [[ "$(head -c 2 "$INSTALL_SCRIPT")" != '#!' ]]; then
+  curl -fL --connect-timeout 10 --max-time 90 "$SECOND_URL" -o "$INSTALL_SCRIPT"
+fi
+[[ "$(head -c 2 "$INSTALL_SCRIPT")" == '#!' ]]
 sh "$INSTALL_SCRIPT" cleanup \
   --state-dir "$HOME/.confidential-agent"
 ```

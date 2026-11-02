@@ -1,0 +1,92 @@
+name: Binary packages
+
+on:
+  push:
+    branches: [master, 'release/**']
+    tags: ['v*.*.*']
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: binary-packages-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  checks:
+    if: github.repository == 'inclavare-containers/confidential-agent'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
+      - name: Install test tools
+        run: sudo apt-get update && sudo apt-get install -y rpm
+      - name: Check versions and scripts
+        run: |
+          python3.11 packaging/check-version.py
+          bash -n packaging/*.sh one-click/lib/*.sh hack/*.sh
+          sh -n one-click/install.sh one-click/install-openclaw-vllm.sh one-click/install-vllm-inference.sh
+          git diff --check
+      - name: Test verified downloads and package upgrades
+        run: |
+          python3.11 -m unittest discover -s packaging/tests -v
+          bash one-click/tests/connect-readiness.sh
+          bash one-click/tests/workspace-paths.sh
+          bash one-click/tests/shelter-cleanup.sh
+          bash one-click/tests/shelter-upgrade.sh
+          bash one-click/tests/paired-rpm-upgrade.sh
+
+  rpm:
+    needs: checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Download verified companion Shelter package
+        env:
+          CA_GITHUB_PROXY_FIRST: "0"
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm
+          python3 hack/fetch-shelter-rpm.py
+      - name: Build Alinux3 RPM and offline inputs
+        run: packaging/ci-build.sh
+      - name: Test installation in a fresh Alinux3 container
+        run: packaging/ci-install-test.sh
+      - name: Preserve tested release files
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: binary-release
+          path: target/release-dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    if: github.repository == 'inclavare-containers/confidential-agent' && startsWith(github.ref, 'refs/tags/v')
+    needs: rpm
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: binary-release
+          path: release-files
+      - name: Publish the tested draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 packaging/publish-release.py release-files

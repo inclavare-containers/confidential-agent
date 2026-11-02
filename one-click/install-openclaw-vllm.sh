@@ -72,10 +72,10 @@ ensure_git() {
 }
 
 github_proxy_repo_url() {
-    [ -n "${CA_GITHUB_PROXY_URL:-https://gh-proxy.org/}" ] || return 1
+    [ -n "${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}" ] || return 1
     case "$1" in
         https://github.com/*)
-            proxy="${CA_GITHUB_PROXY_URL:-https://gh-proxy.org/}"
+            proxy="${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}"
             case "$proxy" in
                 */) printf '%s%s\n' "$proxy" "$1" ;;
                 *) printf '%s/%s\n' "$proxy" "$1" ;;

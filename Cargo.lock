@@ -93,7 +93,7 @@ dependencies = [
 
 [[package]]
 name = "cai-gateway"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -106,7 +106,7 @@ dependencies = [
 
 [[package]]
 name = "cai-pep"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -212,7 +212,7 @@ dependencies = [
 
 [[package]]
 name = "confidential-agent-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -237,7 +237,7 @@ dependencies = [
 
 [[package]]
 name = "confidential-agent-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -251,7 +251,7 @@ dependencies = [
 
 [[package]]
 name = "confidential-agent-shelter"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "confidential-agent-core",
@@ -263,7 +263,7 @@ dependencies = [
 
 [[package]]
 name = "confidential-agentd"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "base64",

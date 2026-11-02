@@ -108,10 +108,18 @@ export DINGTALK_BOT_CLIENT_SECRET="<YOUR_DINGTALK_CLIENT_SECRET>"
 set -euo pipefail
 INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install.sh"
 INSTALL_SCRIPT="$(mktemp)"
-curl -fL --connect-timeout 10 --max-time 90 \
-  "https://github.jobcher.com/gh/${INSTALL_URL}" -o "$INSTALL_SCRIPT" || \
-curl -fL --connect-timeout 10 --max-time 90 \
-  "$INSTALL_URL" -o "$INSTALL_SCRIPT"
+PROXY_URL="${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}"
+FIRST_URL="${PROXY_URL:+${PROXY_URL%/}/}${INSTALL_URL}"
+SECOND_URL="$INSTALL_URL"
+if [[ "${CA_GITHUB_PROXY_FIRST:-1}" == 0 ]]; then
+  SECOND_URL="$FIRST_URL"
+  FIRST_URL="$INSTALL_URL"
+fi
+if ! curl -fL --connect-timeout 10 --max-time 90 "$FIRST_URL" -o "$INSTALL_SCRIPT" ||
+   [[ "$(head -c 2 "$INSTALL_SCRIPT")" != '#!' ]]; then
+  curl -fL --connect-timeout 10 --max-time 90 "$SECOND_URL" -o "$INSTALL_SCRIPT"
+fi
+[[ "$(head -c 2 "$INSTALL_SCRIPT")" == '#!' ]]
 sh "$INSTALL_SCRIPT"
 ```
 
@@ -121,10 +129,18 @@ sh "$INSTALL_SCRIPT"
 set -euo pipefail
 INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install.sh"
 INSTALL_SCRIPT="$(mktemp)"
-curl -fL --connect-timeout 10 --max-time 90 \
-  "https://github.jobcher.com/gh/${INSTALL_URL}" -o "$INSTALL_SCRIPT" || \
-curl -fL --connect-timeout 10 --max-time 90 \
-  "$INSTALL_URL" -o "$INSTALL_SCRIPT"
+PROXY_URL="${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}"
+FIRST_URL="${PROXY_URL:+${PROXY_URL%/}/}${INSTALL_URL}"
+SECOND_URL="$INSTALL_URL"
+if [[ "${CA_GITHUB_PROXY_FIRST:-1}" == 0 ]]; then
+  SECOND_URL="$FIRST_URL"
+  FIRST_URL="$INSTALL_URL"
+fi
+if ! curl -fL --connect-timeout 10 --max-time 90 "$FIRST_URL" -o "$INSTALL_SCRIPT" ||
+   [[ "$(head -c 2 "$INSTALL_SCRIPT")" != '#!' ]]; then
+  curl -fL --connect-timeout 10 --max-time 90 "$SECOND_URL" -o "$INSTALL_SCRIPT"
+fi
+[[ "$(head -c 2 "$INSTALL_SCRIPT")" == '#!' ]]
 sh "$INSTALL_SCRIPT" \
   --non-interactive \
   --yes \
@@ -141,10 +157,18 @@ sh "$INSTALL_SCRIPT" \
 set -euo pipefail
 INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install.sh"
 INSTALL_SCRIPT="$(mktemp)"
-curl -fL --connect-timeout 10 --max-time 90 \
-  "https://github.jobcher.com/gh/${INSTALL_URL}" -o "$INSTALL_SCRIPT" || \
-curl -fL --connect-timeout 10 --max-time 90 \
-  "$INSTALL_URL" -o "$INSTALL_SCRIPT"
+PROXY_URL="${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}"
+FIRST_URL="${PROXY_URL:+${PROXY_URL%/}/}${INSTALL_URL}"
+SECOND_URL="$INSTALL_URL"
+if [[ "${CA_GITHUB_PROXY_FIRST:-1}" == 0 ]]; then
+  SECOND_URL="$FIRST_URL"
+  FIRST_URL="$INSTALL_URL"
+fi
+if ! curl -fL --connect-timeout 10 --max-time 90 "$FIRST_URL" -o "$INSTALL_SCRIPT" ||
+   [[ "$(head -c 2 "$INSTALL_SCRIPT")" != '#!' ]]; then
+  curl -fL --connect-timeout 10 --max-time 90 "$SECOND_URL" -o "$INSTALL_SCRIPT"
+fi
+[[ "$(head -c 2 "$INSTALL_SCRIPT")" == '#!' ]]
 sh "$INSTALL_SCRIPT" \
   --non-interactive \
   --yes \
@@ -159,10 +183,18 @@ vLLM 场景在 GPU TEE 实例内启动本地 vLLM OpenAI-compatible API，OpenCl
 set -euo pipefail
 INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install-openclaw-vllm.sh"
 INSTALL_SCRIPT="$(mktemp)"
-curl -fL --connect-timeout 10 --max-time 90 \
-  "https://github.jobcher.com/gh/${INSTALL_URL}" -o "$INSTALL_SCRIPT" || \
-curl -fL --connect-timeout 10 --max-time 90 \
-  "$INSTALL_URL" -o "$INSTALL_SCRIPT"
+PROXY_URL="${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}"
+FIRST_URL="${PROXY_URL:+${PROXY_URL%/}/}${INSTALL_URL}"
+SECOND_URL="$INSTALL_URL"
+if [[ "${CA_GITHUB_PROXY_FIRST:-1}" == 0 ]]; then
+  SECOND_URL="$FIRST_URL"
+  FIRST_URL="$INSTALL_URL"
+fi
+if ! curl -fL --connect-timeout 10 --max-time 90 "$FIRST_URL" -o "$INSTALL_SCRIPT" ||
+   [[ "$(head -c 2 "$INSTALL_SCRIPT")" != '#!' ]]; then
+  curl -fL --connect-timeout 10 --max-time 90 "$SECOND_URL" -o "$INSTALL_SCRIPT"
+fi
+[[ "$(head -c 2 "$INSTALL_SCRIPT")" == '#!' ]]
 sh "$INSTALL_SCRIPT" \
   --non-interactive \
   --yes \
@@ -189,10 +221,18 @@ vLLM 默认配置如下：
 set -euo pipefail
 INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install-openclaw-vllm.sh"
 INSTALL_SCRIPT="$(mktemp)"
-curl -fL --connect-timeout 10 --max-time 90 \
-  "https://github.jobcher.com/gh/${INSTALL_URL}" -o "$INSTALL_SCRIPT" || \
-curl -fL --connect-timeout 10 --max-time 90 \
-  "$INSTALL_URL" -o "$INSTALL_SCRIPT"
+PROXY_URL="${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}"
+FIRST_URL="${PROXY_URL:+${PROXY_URL%/}/}${INSTALL_URL}"
+SECOND_URL="$INSTALL_URL"
+if [[ "${CA_GITHUB_PROXY_FIRST:-1}" == 0 ]]; then
+  SECOND_URL="$FIRST_URL"
+  FIRST_URL="$INSTALL_URL"
+fi
+if ! curl -fL --connect-timeout 10 --max-time 90 "$FIRST_URL" -o "$INSTALL_SCRIPT" ||
+   [[ "$(head -c 2 "$INSTALL_SCRIPT")" != '#!' ]]; then
+  curl -fL --connect-timeout 10 --max-time 90 "$SECOND_URL" -o "$INSTALL_SCRIPT"
+fi
+[[ "$(head -c 2 "$INSTALL_SCRIPT")" == '#!' ]]
 sh "$INSTALL_SCRIPT" \
   --non-interactive \
   --yes \
@@ -213,10 +253,18 @@ sh "$INSTALL_SCRIPT" \
 set -euo pipefail
 INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install-openclaw-vllm.sh"
 INSTALL_SCRIPT="$(mktemp)"
-curl -fL --connect-timeout 10 --max-time 90 \
-  "https://github.jobcher.com/gh/${INSTALL_URL}" -o "$INSTALL_SCRIPT" || \
-curl -fL --connect-timeout 10 --max-time 90 \
-  "$INSTALL_URL" -o "$INSTALL_SCRIPT"
+PROXY_URL="${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}"
+FIRST_URL="${PROXY_URL:+${PROXY_URL%/}/}${INSTALL_URL}"
+SECOND_URL="$INSTALL_URL"
+if [[ "${CA_GITHUB_PROXY_FIRST:-1}" == 0 ]]; then
+  SECOND_URL="$FIRST_URL"
+  FIRST_URL="$INSTALL_URL"
+fi
+if ! curl -fL --connect-timeout 10 --max-time 90 "$FIRST_URL" -o "$INSTALL_SCRIPT" ||
+   [[ "$(head -c 2 "$INSTALL_SCRIPT")" != '#!' ]]; then
+  curl -fL --connect-timeout 10 --max-time 90 "$SECOND_URL" -o "$INSTALL_SCRIPT"
+fi
+[[ "$(head -c 2 "$INSTALL_SCRIPT")" == '#!' ]]
 sh "$INSTALL_SCRIPT" \
   --non-interactive \
   --yes \
@@ -233,10 +281,18 @@ sh "$INSTALL_SCRIPT" \
 set -euo pipefail
 INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install.sh"
 INSTALL_SCRIPT="$(mktemp)"
-curl -fL --connect-timeout 10 --max-time 90 \
-  "https://github.jobcher.com/gh/${INSTALL_URL}" -o "$INSTALL_SCRIPT" || \
-curl -fL --connect-timeout 10 --max-time 90 \
-  "$INSTALL_URL" -o "$INSTALL_SCRIPT"
+PROXY_URL="${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}"
+FIRST_URL="${PROXY_URL:+${PROXY_URL%/}/}${INSTALL_URL}"
+SECOND_URL="$INSTALL_URL"
+if [[ "${CA_GITHUB_PROXY_FIRST:-1}" == 0 ]]; then
+  SECOND_URL="$FIRST_URL"
+  FIRST_URL="$INSTALL_URL"
+fi
+if ! curl -fL --connect-timeout 10 --max-time 90 "$FIRST_URL" -o "$INSTALL_SCRIPT" ||
+   [[ "$(head -c 2 "$INSTALL_SCRIPT")" != '#!' ]]; then
+  curl -fL --connect-timeout 10 --max-time 90 "$SECOND_URL" -o "$INSTALL_SCRIPT"
+fi
+[[ "$(head -c 2 "$INSTALL_SCRIPT")" == '#!' ]]
 sh "$INSTALL_SCRIPT" \
   --non-interactive \
   --yes \
@@ -389,10 +445,18 @@ jq '{schema, services: (.services | map({
 set -euo pipefail
 INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install.sh"
 INSTALL_SCRIPT="$(mktemp)"
-curl -fL --connect-timeout 10 --max-time 90 \
-  "https://github.jobcher.com/gh/${INSTALL_URL}" -o "$INSTALL_SCRIPT" || \
-curl -fL --connect-timeout 10 --max-time 90 \
-  "$INSTALL_URL" -o "$INSTALL_SCRIPT"
+PROXY_URL="${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}"
+FIRST_URL="${PROXY_URL:+${PROXY_URL%/}/}${INSTALL_URL}"
+SECOND_URL="$INSTALL_URL"
+if [[ "${CA_GITHUB_PROXY_FIRST:-1}" == 0 ]]; then
+  SECOND_URL="$FIRST_URL"
+  FIRST_URL="$INSTALL_URL"
+fi
+if ! curl -fL --connect-timeout 10 --max-time 90 "$FIRST_URL" -o "$INSTALL_SCRIPT" ||
+   [[ "$(head -c 2 "$INSTALL_SCRIPT")" != '#!' ]]; then
+  curl -fL --connect-timeout 10 --max-time 90 "$SECOND_URL" -o "$INSTALL_SCRIPT"
+fi
+[[ "$(head -c 2 "$INSTALL_SCRIPT")" == '#!' ]]
 sh "$INSTALL_SCRIPT" cleanup \
   --state-dir "$HOME/.confidential-agent"
 ```
@@ -403,10 +467,18 @@ sh "$INSTALL_SCRIPT" cleanup \
 set -euo pipefail
 INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install-openclaw-vllm.sh"
 INSTALL_SCRIPT="$(mktemp)"
-curl -fL --connect-timeout 10 --max-time 90 \
-  "https://github.jobcher.com/gh/${INSTALL_URL}" -o "$INSTALL_SCRIPT" || \
-curl -fL --connect-timeout 10 --max-time 90 \
-  "$INSTALL_URL" -o "$INSTALL_SCRIPT"
+PROXY_URL="${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}"
+FIRST_URL="${PROXY_URL:+${PROXY_URL%/}/}${INSTALL_URL}"
+SECOND_URL="$INSTALL_URL"
+if [[ "${CA_GITHUB_PROXY_FIRST:-1}" == 0 ]]; then
+  SECOND_URL="$FIRST_URL"
+  FIRST_URL="$INSTALL_URL"
+fi
+if ! curl -fL --connect-timeout 10 --max-time 90 "$FIRST_URL" -o "$INSTALL_SCRIPT" ||
+   [[ "$(head -c 2 "$INSTALL_SCRIPT")" != '#!' ]]; then
+  curl -fL --connect-timeout 10 --max-time 90 "$SECOND_URL" -o "$INSTALL_SCRIPT"
+fi
+[[ "$(head -c 2 "$INSTALL_SCRIPT")" == '#!' ]]
 sh "$INSTALL_SCRIPT" cleanup \
   --state-dir "$HOME/.confidential-agent"
 ```
@@ -485,7 +557,7 @@ LOG_INDEX="<本次构建的 log index>"
 
 #### Q2：`Shelter is required` 或 `SLSA generator is required`
 
-确认仓库 `hack/` 下存在 `shelter-*.rpm`，或通过 `--shelter-rpm` 指定 RPM。
+检查 `hack/shelter-rpm.json` 指定的 Release URL 是否可访问。默认安装器会下载到 `target/dependencies/shelter/` 并校验 SHA256 和 RPM payload；也可通过 `--shelter-rpm` 指定本地 RPM。
 
 #### Q3：Web 端口打不开
 

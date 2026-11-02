@@ -14,3 +14,6 @@
 __pycache__/
 *.py[cod]
 docs/superpowers/
+
+# Optional legacy companion RPM cache; distribution is through Releases.
+/hack/shelter-*.rpm

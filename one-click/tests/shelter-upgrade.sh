@@ -58,8 +58,10 @@ run_case() {
   touch "$root/hack/shelter-0.3.2-1.al8.x86_64.rpm"
   touch "$root/hack/shelter-0.3.2-2.al8.x86_64.rpm"
   touch "$root/hack/shelter-0.3.2-3.al8.x86_64.rpm"
-  printf '%s\n' '{"file":"shelter-0.3.2-2.al8.x86_64.rpm"}' > "$root/hack/shelter-rpm.json"
-  cp "$REPO_DIR/hack/resolve-shelter-rpm.sh" "$root/hack/"
+  printf '%s\n' '{"file":"shelter-0.3.2-2.al8.x86_64.rpm","sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","payload_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}' > "$root/hack/shelter-rpm.json"
+  cp "$REPO_DIR/hack/resolve-shelter-rpm.sh" "$REPO_DIR/hack/fetch-shelter-rpm.py" "$root/hack/"
+  printf '#!/bin/sh\nprintf "%%s" "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"\n' > "$root/bin/rpm"
+  chmod +x "$root/bin/rpm"
   cat >"$root/bin/shelter" <<'BIN'
 #!/usr/bin/env bash
 printf 'shelter 0.3.2\n'

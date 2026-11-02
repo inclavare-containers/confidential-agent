@@ -4,6 +4,32 @@
 all-in-one 构建和部署不需要宿主机 Docker 或 Podman。Guest 内应用如果启用
 PEP，仍可以使用 Guest 自己的容器隔离。
 
+## 从 Release 安装
+
+v0.2.0 的正式入口是 [GitHub Release](https://github.com/inclavare-containers/confidential-agent/releases/tag/v0.2.0)。可从附件下载 `install-rpm.sh`，或在 Bash 中使用代理优先、官方回退的方式下载：
+
+```bash
+set -euo pipefail
+INSTALL_URL="https://github.com/inclavare-containers/confidential-agent/releases/download/v0.2.0/install-rpm.sh"
+INSTALL_SCRIPT="$(mktemp)"
+PROXY_URL="${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}"
+FIRST_URL="${PROXY_URL:+${PROXY_URL%/}/}${INSTALL_URL}"
+SECOND_URL="$INSTALL_URL"
+if [[ "${CA_GITHUB_PROXY_FIRST:-1}" == 0 ]]; then
+  SECOND_URL="$FIRST_URL"
+  FIRST_URL="$INSTALL_URL"
+fi
+if ! curl -fL --connect-timeout 10 --max-time 90 "$FIRST_URL" -o "$INSTALL_SCRIPT" ||
+   [[ "$(head -c 2 "$INSTALL_SCRIPT")" != '#!' ]]; then
+  curl -fL --connect-timeout 10 --max-time 90 "$SECOND_URL" -o "$INSTALL_SCRIPT"
+fi
+[[ "$(head -c 2 "$INSTALL_SCRIPT")" == '#!' ]]
+sudo --preserve-env=CA_GITHUB_PROXY_URL,CA_GITHUB_PROXY_FIRST bash "$INSTALL_SCRIPT" --version 0.2.0
+confidential-agent --version
+```
+
+安装器下载并校验 cagent 和配套 Shelter 两个 RPM，再通过 DNF 一起安装。无需先克隆源码或编译 CA。该方式需要联网访问 Release 和 Alinux3 软件源；`--download-only --output-dir DIR` 可只下载已校验的两个包和清单，`--from-dir DIR` 可安装本地包。后者仍可能从软件源获取系统依赖，不等于完全离线安装。
+
 ## 构建 RPM
 
 在打包机安装构建依赖，然后从源码根目录执行：
@@ -13,7 +39,7 @@ sudo dnf install -y rpm-build cargo rust gcc glibc-devel pkgconf-pkg-config pyth
 packaging/build-rpm.sh
 ```
 
-产物位于 `target/rpm/RPMS/x86_64/cagent-0.1.0-2.al8.x86_64.rpm`，
+产物位于 `target/rpm/RPMS/x86_64/cagent-0.2.0-1.al8.x86_64.rpm`，
 SRPM 位于 `target/rpm/SRPMS/`。源码准备阶段缓存并校验固定版本的
 cosign、aliyun、ossutil，GitHub 下载默认先尝试国内代理再回退官方地址；
 可用 `CA_GITHUB_PROXY_URL` 修改代理。`target/rpm/SOURCES/SHA256SUMS`
@@ -32,20 +58,21 @@ one-click 的 cleanup 使用已安装的 Shelter，只预检实例删除和剩�
 清理不会因 Cryptpilot 构建工具版本不同而被拒绝，也不会在删除前自动替换 Shelter 包；
 构建和部署仍执行配套 RPM 与 Cryptpilot 版本预检。
 Shelter RPM 显式依赖 `zstd`，安装时由 DNF 自动解析，以支持默认的 Zstd initrd 压缩。
-`hack/shelter-rpm.json` 记录源码提交、RPM SHA-256 和 payload 摘要；
-准备 cagent 源码包时会核对该记录与实际 Shelter RPM。
+`hack/shelter-rpm.json` 记录固定 Release URL、源码提交、RPM SHA-256 和 payload 摘要。
+`hack/resolve-shelter-rpm.sh` 按该记录解析包，缺少时下载到 `target/dependencies/shelter/`（可用 `CA_SHELTER_RPM_CACHE` 覆盖），并校验两个摘要。Shelter RPM 通过 GitHub Releases 分发。准备 cagent 源码包时也会核对实际 Shelter RPM。
 
 `CAGENT_BUILD_JOBS` 控制打包并行度，默认 4。公开发布不同 payload 时递增
-RPM 的 Release；当前 cagent 为 `0.1.0-2`，并依赖 `shelter >= 0.3.2-2`，
-使 DNF 能区分先前的 `-1` 包。本地验证过程不递增 Release。
+RPM 的 Release；当前 cagent 为 `0.2.0-1`，并依赖 `shelter >= 0.3.2-2`。
+升级 Version 时，Release 从 `1` 开始。
 
 ## 在干净机器安装
 
 把 confidential-agent 和随项目发布的 Shelter RPM 放在同一目录，安装：
 
 ```bash
-sha256sum -c SHA256SUMS
-sudo dnf install -y ./shelter-0.3.2-2.al8.x86_64.rpm ./cagent-0.1.0-2.al8.x86_64.rpm
+# 若只下载了两个 RPM，仅校验清单中对应的两项。
+grep -E '  (cagent-0\.2\.0-1\.al8\.x86_64|shelter-0\.3\.2-2\.al8\.x86_64)\.rpm$' SHA256SUMS | sha256sum -c -
+sudo dnf install -y ./shelter-0.3.2-2.al8.x86_64.rpm ./cagent-0.2.0-1.al8.x86_64.rpm
 confidential-agent version
 rpm -q cagent shelter attestation-challenge-client libtdx-verify trusted-network-gateway
 ```
@@ -59,6 +86,8 @@ RPM 安装 CLI、Guest 构建资产和示例，并自动解析原生验证工具
 分阶段模板为只读基础镜像之外的加密可写层预留磁盘空间；Hermes 默认使用 60 GB 部署盘。
 发布使用工作区持久化的独立 OSS 命名，已有发布记录继续保留其原 bucket 和对象位置。
 目前 Shelter RPM 仍携带构建依赖，因此这也是可用于构建镜像的安装环境。
+
+## 初始化项目
 
 初始化向导可直接读取 RPM 内的模板，无需源码目录：
 
@@ -214,3 +243,33 @@ confidential-agent deploy --spec instance.yaml --skip-signature-verification
 跳过后文件中的参考值没有发布签名的来源保证，使用者需要自行信任该来源。
 CLI 覆盖选项会记录到部署快照；使用原 spec 恢复同一部署时应传相同覆盖选项，或使用包含该设置的 spec。
 原有镜像与构建记录保持可用；用户现有 NEXT_STEPS 是普通项目文件，不会随 RPM 升级自动重写。
+
+## GitHub 下载与大陆网络
+
+首个安装脚本、one-click 的源码拉取、Shelter RPM 和固定原生工具下载均支持代理优先及官方回退。下载器校验 RPM 的 SHA256 和 payload 摘要；校验失败时尝试下一个下载地址。
+
+```bash
+# 默认：代理优先，失败回退官方；可替换为自己可信且支持对应资源类型的代理。
+export CA_GITHUB_PROXY_URL="https://gh-proxy.org/"
+export CA_GITHUB_PROXY_FIRST=1
+
+# 海外/可直连网络：官方优先，失败再尝试上述代理。
+export CA_GITHUB_PROXY_FIRST=0
+
+# 完全关闭代理（显式空值，不等于未设置）。
+export CA_GITHUB_PROXY_URL=""
+```
+
+自定义代理需要支持所用的 raw 文件、Git fetch 和 Release 附件。使用 sudo 时保留这两个环境变量，或在 root shell 设置。代理与官方地址均不可达时，可通过 `--from-dir` 安装已下载的本地包。
+
+## 维护者发布流程
+
+`.github/workflows/binary-release.yml` 使用 GitHub 托管的 Ubuntu runner 和固定摘要的 Alinux3 容器。分支和 PR 执行版本检查、下载与升级测试、RPM 构建及全新安装测试；`vX.Y.Z` 标签在这些检查通过后发布对应的 draft Release。
+
+1. 更新工作区、RPM、安装器及安装测试中的版本，更新 `Cargo.lock`，并在 `docs/releases/vX.Y.Z.md` 编写发布说明。运行 `python3.11 packaging/check-version.py` 检查版本一致性。
+2. 更新 Shelter 时，先发布其独立 RPM Release，再更新 `hack/shelter-rpm.json` 中的 URL、源码提交和摘要。构建任务从该 URL 下载配套包，cagent Release 同时附带这份 RPM。
+3. 提交代码，在主仓库创建对应版本的 draft Release，然后创建并推送 `vX.Y.Z` 标签。CI 验证标签、版本和产物源码提交，上传附件后公开 Release。
+
+构建和测试任务使用 `contents: read`；发布任务使用 GitHub 内置的 `GITHUB_TOKEN` 和 `contents: write`。如果附件上传中断，重跑失败的发布任务可继续上传；已有同名附件的摘要必须一致。
+
+发布附件包括 cagent 与 Shelter RPM、cagent SRPM、构建输入归档、安装脚本、版本与依赖清单及 `SHA256SUMS`。`release-manifest.json` 记录源码提交和包摘要，`build-environment.txt` 记录构建环境中的 RPM 版本。

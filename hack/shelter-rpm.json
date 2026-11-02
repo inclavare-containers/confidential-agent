@@ -3,5 +3,6 @@
   "source_commit": "6111b1aff6c26b918bd76e07da7b388a4358b282",
   "source_archive_sha256": "4f74620d9008f1d7dddcc7ba529e92dd3f787c417fb16763303f1f985f5eb4db",
   "sha256": "389f57b5030b7af8c0ece5f9dd55252d864a6592004bbb4026635cadbd024acf",
-  "payload_sha256": "b17baae3e6fa4a0b00915a952cc460dfd4659a7f4e328b2f4ef1811ac242d2d5"
+  "payload_sha256": "b17baae3e6fa4a0b00915a952cc460dfd4659a7f4e328b2f4ef1811ac242d2d5",
+  "url": "https://github.com/inclavare-containers/confidential-agent/releases/download/shelter-v0.3.2-2/shelter-0.3.2-2.al8.x86_64.rpm"
 }

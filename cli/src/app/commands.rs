@@ -3247,9 +3247,21 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         let server = thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
-            let mut buf = [0_u8; 512];
-            let read = stream.read(&mut buf).unwrap();
-            let request = String::from_utf8_lossy(&buf[..read]);
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            // TCP reads need not contain the whole request. Closing with unread
+            // headers can reset the connection while the client is still writing.
+            let mut request = Vec::new();
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                // A small buffer also exercises multiple reads on loopback.
+                let mut buf = [0_u8; 16];
+                let read = stream.read(&mut buf).unwrap();
+                assert!(read > 0, "client closed before completing its headers");
+                request.extend_from_slice(&buf[..read]);
+                assert!(request.len() < 8192, "unexpectedly large request headers");
+            }
+            let request = std::str::from_utf8(&request).unwrap();
             assert!(request.starts_with("GET /status HTTP/1.1"));
 
             let body = serde_json::json!({

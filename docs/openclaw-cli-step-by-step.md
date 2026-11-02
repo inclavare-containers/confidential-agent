@@ -21,7 +21,8 @@ sudo install -m 0755 target/release/confidential-agentd /usr/local/bin/confident
 sudo install -m 0755 target/release/cai-gateway /usr/local/bin/cai-gateway
 sudo install -m 0755 target/release/cai-pep /usr/local/bin/cai-pep
 
-sudo yum install -y hack/shelter-*.rpm
+sudo yum install -y python3.11
+sudo yum install -y "$(hack/resolve-shelter-rpm.sh)"
 sudo packaging/install-native-tools.sh
 ```
 
