@@ -62,6 +62,8 @@ build:
     - source: ./files/cai-agent
       target: /usr/local/bin/cai-agent
       executable: true
+    - source: ./files/finalize-runtime.py
+      target: /usr/local/libexec/confidential-agent/allinone/finalize-runtime.py
     - source: ./files/cai-allinone.service
       target: /etc/systemd/system/cai-allinone.service
     - source: ./files/cai-ssh.service

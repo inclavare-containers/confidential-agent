@@ -21,7 +21,7 @@ test -s /opt/data/allinone/home/.agents/skills/tdx-remote-attestation/SKILL.md
 "$cli" claude-code
 install -d -m 0755 /opt/data/allinone
 install -d -m 0700 /opt/data/allinone/home
-HERMES_HOME=/opt/data/allinone/hermes \
+HERMES_HOME=/opt/data/allinone/hermes HERMES_COMPACT_RUNTIME=1 \
     /usr/local/libexec/confidential-agent/hermes/install-hermes-agent-runtime.sh
 npm config set registry "$NPM_REGISTRY"
 npm install -g --no-audit --no-fund \
@@ -72,6 +72,7 @@ install -d -m 0755 /usr/local/share/confidential-agent
     npm list -g --depth=0 --json
     git -C /usr/local/lib/hermes-agent rev-parse HEAD
 } > /usr/local/share/confidential-agent/allinone-versions.txt
+python3.11 /usr/local/libexec/confidential-agent/allinone/finalize-runtime.py
 for command in openclaw hermes qoder opencode codex claude; do
     "$command" --version
 done

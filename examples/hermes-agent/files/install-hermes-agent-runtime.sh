@@ -316,6 +316,43 @@ record = {'source_sha256': hashlib.sha256(source.encode()).hexdigest(),
 PY
 }
 
+prepare_hermes_stripped_python() {
+    [[ "${HERMES_COMPACT_RUNTIME:-0}" == "1" ]] || return 0
+    # Select the upstream stripped archive before PM installs and seals it.
+    # Never strip installed executables: that would invalidate PM's tree hashes
+    # and can destroy the appended payload of bundled Bun executables.
+    python3.11 - "$HERMES_INSTALL_DIR" "$HERMES_PAYLOAD_DIR" <<'PY'
+import hashlib,json,os,platform,sys
+from pathlib import Path
+repo,payload = (Path(value) for value in sys.argv[1:])
+assert sys.platform == 'linux' and platform.machine() == 'x86_64', 'compact Hermes Python is pinned for Linux x86_64'
+filename = repo / 'pm/lock.json'
+original = filename.read_bytes()
+lock = json.loads(original)
+python = lock['packages']['python']
+assert python['version'] == '3.14.7+20260901', 'refresh the compact Python pin for this Hermes version'
+base = 'https://github.com/astral-sh/python-build-standalone/releases/download/20260901/'
+name = 'cpython-3.14.7+20260901-x86_64-unknown-linux-gnu-install_only'
+source = {'url': base + name + '.tar.gz',
+          'sha256': '0ab3305457051cd3e7c031857e005f1bda17c218a1990567dacaaac6dd1d14f0'}
+replacement = {'url': base + name + '_stripped.tar.gz',
+               'sha256': '3959f92825141e04adf44982d3a83ee57af0877e893b0796e04c1468749d9b04'}
+artifact = python['artifacts']['linux-x64']
+assert artifact in (source, replacement), 'unexpected upstream Python artifact; refusing to replace its pin'
+if artifact == source:
+    python['artifacts']['linux-x64'] = replacement
+    temporary = filename.with_suffix('.compact.tmp')
+    temporary.write_text(json.dumps(lock, indent=2) + '\n')
+    temporary.chmod(filename.stat().st_mode & 0o777)
+    os.replace(temporary, filename)
+payload.mkdir(parents=True, exist_ok=True)
+(payload / 'compact-python.json').write_text(json.dumps({
+    'version': python['version'], 'source': source, 'selected': replacement,
+    'lock_sha256': hashlib.sha256(filename.read_bytes()).hexdigest(),
+}, indent=2) + '\n')
+PY
+}
+
 run_hermes_installer_stages() {
     local installer="$1"
     shift
@@ -337,6 +374,7 @@ print("\n".join(names))
         if [[ "$stage" == repository ]]; then
             prepare_hermes_locked_downloads
             prepare_hermes_binary_downloads
+            prepare_hermes_stripped_python
         fi
     done <<< "$stages"
 }
