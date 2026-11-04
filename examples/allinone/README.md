@@ -174,6 +174,15 @@ software update. Actual installed versions are recorded in
 `/usr/local/share/confidential-agent/allinone-versions.txt`. Application pins do
 not alone promise bit-for-bit reproducibility of every dependency.
 
+The build removes npm and inactive Node download caches, and hard-links
+identical application files only when their permissions, ownership and extended
+attributes match. It retains Hermes frontend build dependencies for development
+and rebuild commands. Hermes uses the official stripped Python archive from the
+same pinned Python build; its download digest is still verified by Hermes PM.
+The image records these selections in
+`/usr/local/lib/cai-hermes/compact-python.json` and reclaimed file storage in
+`/usr/local/share/confidential-agent/allinone-compaction.json`.
+
 ## Runtime modes and instance maintenance
 
 Codex supports `mode: "cli"` and `mode: "app-server"`. For app-server, set
