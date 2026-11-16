@@ -14,7 +14,7 @@ run_case() {
   INIT_OUTPUT_DIR="$(absolute_dir "$INIT_OUTPUT_DIR")"
   CODEX_DIR="$INIT_OUTPUT_DIR/codex"
   DASHSCOPE_BASE_URL="${DASHSCOPE_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}"
-  DASHSCOPE_MODEL="${DASHSCOPE_MODEL:-qwen3.8-max}"
+  DASHSCOPE_MODEL="${DASHSCOPE_MODEL:-qwen4-max}"
   CODEX_REMOTE_PORT="${E2E_CODEX_REMOTE_PORT:-4500}"
   CHAT_MESSAGE="${E2E_CHAT_MESSAGE:-Reply with CA_E2E_OK and no other text.}"
   CHAT_EXPECT="${E2E_CHAT_EXPECT:-CA_E2E_OK}"

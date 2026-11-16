@@ -1,7 +1,7 @@
 # Codex Confidential Agent
 
 This example installs Codex in a TDX guest, configures Bailian Pay-as-you-go
-`qwen3.8-max` through the Responses API, and exposes Codex `app-server` remote
+`qwen4-max` through the Responses API, and exposes Codex `app-server` remote
 mode through a TNG-protected `connect` port.
 
 No Codex hook, long-running PEP service, or PEP policy is installed. The
@@ -21,7 +21,7 @@ Run commands from the repository root. You need:
 Optional overrides:
 
 ```bash
-export DASHSCOPE_MODEL="${DASHSCOPE_MODEL:-qwen3.8-max}"
+export DASHSCOPE_MODEL="${DASHSCOPE_MODEL:-qwen4-max}"
 export DASHSCOPE_BASE_URL="${DASHSCOPE_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}"
 ```
 
@@ -42,7 +42,7 @@ mkdir -p examples/codex/secrets
 
 cat > examples/codex/secrets/config.toml <<EOF
 model_provider = "Model_Studio"
-model = "${DASHSCOPE_MODEL:-qwen3.8-max}"
+model = "${DASHSCOPE_MODEL:-qwen4-max}"
 
 [model_providers.Model_Studio]
 name = "Model_Studio"

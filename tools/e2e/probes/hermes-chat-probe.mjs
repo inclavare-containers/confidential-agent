@@ -106,7 +106,7 @@ function chatText(response) {
 
 const baseUrl = normalizeBaseUrl(requireArg("url"));
 const token = requireArg("token");
-const model = arg("model", "qwen3.8-max");
+const model = arg("model", "qwen4-max");
 const message = arg("message", "Reply with CA_E2E_OK and no other text.");
 const expected = arg("expect", "CA_E2E_OK");
 const timeoutMs = Number(arg("timeout-ms", "180000"));

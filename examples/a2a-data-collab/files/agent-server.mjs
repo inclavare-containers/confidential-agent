@@ -75,7 +75,7 @@ function errorMessage(error) {
 
 async function callLlm(config, messages, purpose) {
   const baseUrl = String(config.dashscopeBaseUrl || "https://dashscope.aliyuncs.com/compatible-mode/v1").replace(/\/+$/, "");
-  const model = String(config.model || "qwen3.8-max");
+  const model = String(config.model || "qwen4-max");
   const apiKey = String(config.apiKey || "").trim();
   if (!apiKey) throw new Error("apiKey is required for real LLM inference");
   let response;

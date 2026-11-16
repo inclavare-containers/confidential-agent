@@ -1,7 +1,7 @@
 # Claude Code Confidential Agent
 
 This example installs Claude Code in a TDX guest and configures it for Bailian
-Pay-as-you-go `qwen3.8-max` through the Anthropic-compatible endpoint.
+Pay-as-you-go `qwen4-max` through the Anthropic-compatible endpoint.
 Credentials are runtime resources and are released to the guest only after
 remote attestation succeeds.
 
@@ -21,7 +21,7 @@ Run commands from the repository root. You need:
 Optional overrides:
 
 ```bash
-export DASHSCOPE_MODEL="${DASHSCOPE_MODEL:-qwen3.8-max}"
+export DASHSCOPE_MODEL="${DASHSCOPE_MODEL:-qwen4-max}"
 export DASHSCOPE_ANTHROPIC_BASE_URL="${DASHSCOPE_ANTHROPIC_BASE_URL:-https://dashscope.aliyuncs.com/apps/anthropic}"
 ```
 
@@ -45,11 +45,11 @@ cat > examples/claude-code/secrets/settings.json <<EOF
   "env": {
     "ANTHROPIC_AUTH_TOKEN": "${DASHSCOPE_API_KEY}",
     "ANTHROPIC_BASE_URL": "${DASHSCOPE_ANTHROPIC_BASE_URL:-https://dashscope.aliyuncs.com/apps/anthropic}",
-    "ANTHROPIC_MODEL": "${DASHSCOPE_MODEL:-qwen3.8-max}",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "qwen3.8-max",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": "${DASHSCOPE_MODEL:-qwen3.8-max}",
-    "ANTHROPIC_DEFAULT_OPUS_MODEL": "${DASHSCOPE_MODEL:-qwen3.8-max}",
-    "CLAUDE_CODE_SUBAGENT_MODEL": "${DASHSCOPE_MODEL:-qwen3.8-max}"
+    "ANTHROPIC_MODEL": "${DASHSCOPE_MODEL:-qwen4-max}",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "qwen4-max",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "${DASHSCOPE_MODEL:-qwen4-max}",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "${DASHSCOPE_MODEL:-qwen4-max}",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "${DASHSCOPE_MODEL:-qwen4-max}"
   }
 }
 EOF

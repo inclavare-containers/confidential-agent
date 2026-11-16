@@ -141,7 +141,7 @@ run_case() {
   CLAUDE_CODE_DIR="$INIT_OUTPUT_DIR/claude-code"
   DASHSCOPE_BASE_URL="${DASHSCOPE_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}"
   DASHSCOPE_ANTHROPIC_BASE_URL="${DASHSCOPE_ANTHROPIC_BASE_URL:-https://dashscope.aliyuncs.com/apps/anthropic}"
-  DASHSCOPE_MODEL="${DASHSCOPE_MODEL:-qwen3.8-max}"
+  DASHSCOPE_MODEL="${DASHSCOPE_MODEL:-qwen4-max}"
   CHAT_MESSAGE="${E2E_CHAT_MESSAGE:-Please respond with CA_E2E_OK and no other text.}"
   CHAT_EXPECT="${E2E_CHAT_EXPECT:-CA_E2E_OK}"
   TDX_EXPECT="${E2E_TDX_EXPECT:-TDX}"

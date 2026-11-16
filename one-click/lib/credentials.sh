@@ -145,8 +145,8 @@ ensure_aliyun_cli_region() {
 }
 
 ensure_bailian_credentials() {
-  if [[ -n "${CA_BAILIAN_API_KEY:-}" ]]; then
-    export DASHSCOPE_API_KEY="$CA_BAILIAN_API_KEY"
+  if [[ -n "${CA_API_KEY:-}" ]]; then
+    export DASHSCOPE_API_KEY="$CA_API_KEY"
   fi
   if [[ -z "${DASHSCOPE_API_KEY:-}" && -n "${BAILIAN_API_KEY:-}" ]]; then
     export DASHSCOPE_API_KEY="$BAILIAN_API_KEY"
@@ -155,11 +155,11 @@ ensure_bailian_credentials() {
     return
   fi
   if [[ "$CA_NON_INTERACTIVE" == "1" ]]; then
-    die "Bailian API key is required. Set DASHSCOPE_API_KEY/BAILIAN_API_KEY or pass --bailian-api-key."
+    die "Inference API key is required. Set CA_API_KEY/DASHSCOPE_API_KEY/BAILIAN_API_KEY or pass --api-key."
   fi
   local key
-  prompt_secret key "Bailian/DashScope API key"
-  [[ -n "$key" ]] || die "Bailian API key cannot be empty"
+  prompt_secret key "Inference API key"
+  [[ -n "$key" ]] || die "Inference API key cannot be empty"
   export DASHSCOPE_API_KEY="$key"
 }
 

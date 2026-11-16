@@ -14,6 +14,7 @@ export CA_SOFTWARE_VERSIONS_FILE="$ROOT_DIR/software-versions.json"
 . "$SCRIPT_DIR/credentials.sh"
 # shellcheck source=one-click/lib/openclaw.sh
 . "$SCRIPT_DIR/openclaw.sh"
+. "$SCRIPT_DIR/harness.sh"
 # shellcheck source=one-click/lib/deploy.sh
 . "$SCRIPT_DIR/deploy.sh"
 
@@ -158,8 +159,14 @@ Deploy options:
   --instance-type TYPE           Default: ecs.g9i.xlarge
   --disk-gb GB                   Default: 200
   --allowed-cidr CIDR[,CIDR...]  Operator access CIDR list; may be repeated
-  --bailian-api-key KEY          Bailian/DashScope API key
-  --bailian-model MODEL          Bailian model id; default: qwen3.8-max
+  --harness NAME                 openclaw (default), hermes, codex, claude-code, qodercli, opencode
+  --api-base-url URL             Inference API base URL; defaults to Bailian
+  --api-key KEY                  Inference API key (or CA_API_KEY)
+  --model MODEL                  Model id; default: qwen4-max
+  --bailian-api-key KEY           Alias for --api-key
+  --bailian-model MODEL           Alias for --model
+  --image-release PATH           Existing signed allinone release for CLI harnesses
+  --trusted-key PATH             Trusted publisher key for --image-release
   --gateway-token TOKEN          OpenClaw gateway token; generated if omitted
   --openclaw-version VERSION     Default: 2026.10.3
   --node-version VERSION         Default: 24.21.0
@@ -210,7 +217,12 @@ init_defaults() {
   CA_DISK_GB="${CA_DISK_GB:-}"
   CA_REPLICAS="${CA_REPLICAS:-1}"
   CA_REFERENCE_VALUES="${CA_REFERENCE_VALUES:-rekor}"
-  CA_BAILIAN_MODEL="${CA_BAILIAN_MODEL:-$(ca_software_version bailian_model)}"
+  CA_HARNESS="${CA_HARNESS:-}"
+  CA_MODEL="${CA_MODEL:-${CA_BAILIAN_MODEL:-${DASHSCOPE_MODEL:-}}}"
+  CA_API_KEY="${CA_API_KEY:-${CA_BAILIAN_API_KEY:-}}"
+  CA_API_BASE_URL="${CA_API_BASE_URL:-}"
+  CA_IMAGE_RELEASE="${CA_IMAGE_RELEASE:-}"
+  CA_TRUSTED_KEY="${CA_TRUSTED_KEY:-}"
   CA_OPENCLAW_VERSION="${CA_OPENCLAW_VERSION:-$(ca_software_version openclaw)}"
   CA_NODE_VERSION="${CA_NODE_VERSION:-$(ca_software_version node)}"
   CA_NPM_REGISTRY="${CA_NPM_REGISTRY:-https://registry.npmmirror.com/}"
@@ -278,8 +290,12 @@ parse_args() {
         fi
         shift 2
         ;;
-      --bailian-api-key) CA_BAILIAN_API_KEY="${2:?missing value for --bailian-api-key}"; shift 2 ;;
-      --bailian-model) CA_BAILIAN_MODEL="${2:?missing value for --bailian-model}"; shift 2 ;;
+      --harness) CA_HARNESS="${2:?missing value for --harness}"; shift 2 ;;
+      --api-key|--bailian-api-key) CA_API_KEY="${2:?missing API key}"; shift 2 ;;
+      --api-base-url) CA_API_BASE_URL="${2:?missing value for --api-base-url}"; shift 2 ;;
+      --model|--bailian-model) CA_MODEL="${2:?missing model}"; shift 2 ;;
+      --image-release) CA_IMAGE_RELEASE="${2:?missing value for --image-release}"; shift 2 ;;
+      --trusted-key) CA_TRUSTED_KEY="${2:?missing value for --trusted-key}"; shift 2 ;;
       --gateway-token) CA_GATEWAY_TOKEN="${2:?missing value for --gateway-token}"; shift 2 ;;
       --openclaw-version) CA_OPENCLAW_VERSION="${2:?missing value for --openclaw-version}"; shift 2 ;;
       --node-version) CA_NODE_VERSION="${2:?missing value for --node-version}"; shift 2 ;;
@@ -371,11 +387,19 @@ apply_target_defaults() {
 
   case "$target" in
     openclaw)
-      CA_SERVICE_ID="openclaw"
-      CA_SERVICE_LABEL="OpenClaw"
-      CA_PROJECT_NAME="openclaw"
-      CA_SPEC_NAME="openclaw.yaml"
-      CA_CONNECT_NAME="connect"
+      if [[ "${CA_HARNESS:-openclaw}" == openclaw ]]; then
+        CA_SERVICE_ID="openclaw"
+        CA_SERVICE_LABEL="OpenClaw"
+        CA_PROJECT_NAME="openclaw"
+        CA_SPEC_NAME="openclaw.yaml"
+        CA_CONNECT_NAME="connect"
+      else
+        CA_SERVICE_ID="allinone-$CA_HARNESS"
+        CA_SERVICE_LABEL="$CA_HARNESS"
+        CA_PROJECT_NAME="$CA_SERVICE_ID"
+        CA_SPEC_NAME="instance.yaml"
+        CA_CONNECT_NAME="connect-$CA_SERVICE_ID"
+      fi
       CA_ZONE_ID="${CA_ZONE_ID:-cn-beijing-i}"
       CA_INSTANCE_TYPE="${CA_INSTANCE_TYPE:-ecs.g9i.xlarge}"
       CA_DISK_GB="${CA_DISK_GB:-200}"
@@ -421,11 +445,10 @@ validate_options() {
     *) die "--reference-values must be sample or rekor" ;;
   esac
   [[ "$CA_DISK_GB" =~ ^[0-9]+$ ]] || die "--disk-gb must be an integer"
-  [[ -n "$CA_BAILIAN_MODEL" ]] || die "--bailian-model cannot be empty"
   [[ "$CA_OPENCLAW_VLLM_PORT" =~ ^[0-9]+$ ]] || die "--vllm-port must be an integer"
   # Both OpenClaw specs enable A2A, and A2A agent cards require Rekor
   # metadata; fail here instead of after the image build at inject time.
-  if [[ "$CA_MODE" == deploy-openclaw* && "$CA_REFERENCE_VALUES" != "rekor" ]]; then
+  if [[ "$CA_MODE" == deploy-openclaw-vllm || ( "$CA_MODE" == deploy-openclaw && "$CA_HARNESS" == openclaw ) ]] && [[ "$CA_REFERENCE_VALUES" != rekor ]]; then
     die "the OpenClaw flows enable A2A, which requires --reference-values rekor"
   fi
   if [[ "$CA_MODE" == "deploy-openclaw-vllm" ]]; then
@@ -475,7 +498,7 @@ normalize_workspace_paths() {
   CA_WORK_DIR="$(realpath -m -- "$CA_WORK_DIR")"
   CA_TOOLS_DIR="$(realpath -m -- "$CA_TOOLS_DIR")"
   local variable
-  for variable in CA_IMAGE_SPEC CA_MODEL_KEY_FILE CA_COSIGN_KEY; do
+  for variable in CA_IMAGE_SPEC CA_MODEL_KEY_FILE CA_COSIGN_KEY CA_IMAGE_RELEASE CA_TRUSTED_KEY; do
     if [[ -n "${!variable:-}" ]]; then printf -v "$variable" '%s' "$(realpath -m -- "${!variable}")"; fi
   done
 }
@@ -493,7 +516,9 @@ print_startup_config() {
     log "vllm_served_model: $CA_OPENCLAW_VLLM_SERVED_MODEL_NAME"
     log "vllm_build_variants: $CA_OPENCLAW_VLLM_BUILD_VARIANTS"
   else
-    log "bailian_model: $CA_BAILIAN_MODEL"
+    log "harness: $CA_HARNESS"
+    log "model: $CA_MODEL"
+    log "api_base_url: $CA_API_BASE_URL"
   fi
   log "reference_values: $CA_REFERENCE_VALUES"
   log "pep: $([[ "$CA_DISABLE_PEP" == "1" ]] && printf disabled || printf enabled)"
@@ -502,6 +527,7 @@ print_startup_config() {
 main() {
   init_defaults
   parse_args "$@"
+  resolve_harness_options
   normalize_workspace_paths
   apply_target_defaults
   validate_options
@@ -509,7 +535,9 @@ main() {
   print_startup_config
 
   case "$CA_MODE" in
-    deploy-openclaw) run_deploy_openclaw ;;
+    deploy-openclaw)
+      if [[ "$CA_HARNESS" == openclaw ]]; then run_deploy_openclaw; else run_deploy_harness; fi
+      ;;
     deploy-openclaw-vllm) run_deploy_openclaw_vllm ;;
     deploy-vllm-inference) run_deploy_vllm_inference ;;
     install-only) run_install_only ;;

@@ -258,7 +258,7 @@ run_case() {
   cosign_key="$(resolve_cosign_key)"
   export DASHSCOPE_KEY="$dashscope_key"
   export DASHSCOPE_BASE_URL="${DASHSCOPE_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}"
-  export DASHSCOPE_MODEL="${DASHSCOPE_MODEL:-qwen3.8-max}"
+  export DASHSCOPE_MODEL="${DASHSCOPE_MODEL:-qwen4-max}"
   export COSIGN_KEY="$cosign_key"
   export INSTANCE_TYPE
 

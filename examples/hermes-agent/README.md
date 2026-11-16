@@ -39,7 +39,7 @@ API_SERVER_KEY=replace-with-openssl-rand-hex-32
 DASHSCOPE_API_KEY=replace-with-dashscope-api-key
 DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 HERMES_HOME=/opt/data
-HERMES_MODEL=qwen3.8-max
+HERMES_MODEL=qwen4-max
 ```
 
 `secrets/config.yaml` should select the provider/model:
@@ -47,8 +47,8 @@ HERMES_MODEL=qwen3.8-max
 ```yaml
 model:
   provider: alibaba
-  default: qwen3.8-max
-  model: qwen3.8-max
+  default: qwen4-max
+  model: qwen4-max
 ```
 
 `hermes_config` is marked `mutable: true` in the AppSpec because the Hermes

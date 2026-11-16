@@ -8,8 +8,8 @@
         "api": "openai-completions",
         "models": [
           {
-            "id": "qwen3.8-max",
-            "name": "qwen3.8-max",
+            "id": "qwen4-max",
+            "name": "qwen4-max",
             "reasoning": false,
             "input": ["text"],
             "contextWindow": 262144,
@@ -30,7 +30,7 @@
   "agents": {
     "defaults": {
       "model": {
-        "primary": "bailian/qwen3.8-max"
+        "primary": "bailian/qwen4-max"
       }
     }
   },

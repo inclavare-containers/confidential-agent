@@ -43,6 +43,11 @@ jobs:
           bash one-click/tests/shelter-cleanup.sh
           bash one-click/tests/shelter-upgrade.sh
           bash one-click/tests/paired-rpm-upgrade.sh
+      - name: Test one-click harness configuration
+        run: |
+          cargo build --locked -p confidential-agent-cli -p cai-pep
+          bash one-click/tests/harness-config.sh
+          cargo test --locked -p confidential-agent-core spec::tests::published_rekor
 
   rpm:
     needs: checks

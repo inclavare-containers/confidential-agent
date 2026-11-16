@@ -7,7 +7,7 @@ export ALICLOUD_ACCESS_KEY='...'
 export ALICLOUD_SECRET_KEY='...'
 export DASHSCOPE_API_KEY='...'              # openclaw-bailian/openclaw-a2a/cmaas/claude-code/codex
 export DASHSCOPE_BASE_URL='https://dashscope.aliyuncs.com/compatible-mode/v1'
-export DASHSCOPE_MODEL='qwen3.8-max'
+export DASHSCOPE_MODEL='qwen4-max'
 
 env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy -u ALL_PROXY -u all_proxy \
   tools/e2e/run.sh openclaw-bailian
@@ -26,8 +26,8 @@ Cases:
 | `cmaas` | CMaaS 是主 MCP E2E：自然语言 agent 经 gateway 调用 memory MCP tools，验证 MCP audit 链、虚拟 MCP audit tools、TEE evidence 绑定、TNG 2.9.2 builtin policy 的 deny/recovery 负例、非 TEE baseline rejection 和 snapshot confidentiality；不通过 host connect 直连 MCP `mcp_ports`。 |
 | `trustee-duo` | 同一 state/Trustee 下部署 OpenClaw Bailian 与 Codex Bailian，覆盖真实对话、同步/状态、无 CLI 重注入的 reboot 恢复、Trustee fail-closed、逐个销毁与最终清理。 |
 | `hermes-agent` | `init hermes` 生成的普通 mkosi 路径：构建期通过官方 installer 从 Hermes 源码安装，运行期通过 `cai-hermes-agent.service` 启动，并覆盖资源注入、deploy、connect、health/chat probe 和失败诊断。 |
-| `claude-code` | Claude Code CLI on Bailian qwen3.8-max through the Anthropic-compatible endpoint, with SSH chat and TDX skill probes. |
-| `codex` | Codex CLI on Bailian qwen3.8-max through Responses API, with SSH chat, TDX skill, and TNG-protected app-server remote probes. |
+| `claude-code` | Claude Code CLI on Bailian qwen4-max through the Anthropic-compatible endpoint, with SSH chat and TDX skill probes. |
+| `codex` | Codex CLI on Bailian qwen4-max through Responses API, with SSH chat, TDX skill, and TNG-protected app-server remote probes. |
 | `cli-command-matrix` | Local CLI branch matrix plus an optional real-cloud publish/deploy lane when `E2E_MATRIX_REAL_CLOUD=1`. |
 
 OpenClaw + Bailian 的主路径必须同时覆盖 PEP 和 no-PEP 两个分支。CMaaS 承担 MCP 端到端主覆盖，probe 通过 agent/gateway 入口触发 MCP 工具调用，不把 MCP 端口作为 host connect 的直接访问目标。
@@ -115,7 +115,7 @@ Common environment:
 | `E2E_MATRIX_REPO_MIRROR` | Optional HTTPS Alinux repository base, e.g. `https://mirrors-ssl.aliyuncs.com/alinux` on ECS; uses existing `build.repos` with GPG verification |
 | `DASHSCOPE_BASE_URL` | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
 | `DASHSCOPE_ANTHROPIC_BASE_URL` | `https://dashscope.aliyuncs.com/apps/anthropic` |
-| `DASHSCOPE_MODEL` | `qwen3.8-max` |
+| `DASHSCOPE_MODEL` | `qwen4-max` |
 | `E2E_CLI_AGENT_NPM_REGISTRY` | `https://registry.npmmirror.com/`; inherits `E2E_NPM_REGISTRY` when set; used by `claude-code` and `codex` CLI package installs |
 | `E2E_CLAUDE_CODE_VERSION` | 固定清单中的 Claude Code 版本 |
 | `E2E_CODEX_VERSION` | 固定清单中的 Codex 版本 |
