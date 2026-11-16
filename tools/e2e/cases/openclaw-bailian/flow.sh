@@ -54,7 +54,7 @@ run_case() {
   init_args+=(
     --dashscope-api-key "$dashscope_key"
     --gateway-token "$token"
-    --model "${DASHSCOPE_MODEL:-qwen3.8-max}"
+    --model "${DASHSCOPE_MODEL:-qwen4-max}"
     --dashscope-base-url "${DASHSCOPE_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}"
     --openclaw-version "${E2E_OPENCLAW_VERSION:-2026.10.3}"
     --node-version "${E2E_OPENCLAW_NODE_VERSION:-24.21.0}"

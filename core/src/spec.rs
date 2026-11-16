@@ -742,8 +742,10 @@ impl AgentSpec {
                 );
             }
         }
+        // Published images carry their authenticated Rekor metadata in the release.
         if self.attestation.reference_values == ReferenceValueMode::Rekor
             && self.attestation.rekor.is_none()
+            && self.deploy.image.is_none()
         {
             bail!("attestation.rekor is required when attestation.reference_values=rekor");
         }
@@ -1268,6 +1270,22 @@ mod tests {
             Path::new("/project"),
         )
         .is_err());
+    }
+
+    #[test]
+    fn published_rekor_image_does_not_need_build_signing_configuration() {
+        let mut value = published_spec();
+        value["attestation"]["reference_values"] = "rekor".into();
+        let spec = AgentSpec::from_yaml(
+            &serde_yaml::to_string(&value).unwrap(),
+            Path::new("/project"),
+        )
+        .unwrap();
+        assert!(spec.attestation.rekor.is_none());
+
+        let yaml = SPEC.replace("reference_values: sample", "reference_values: rekor");
+        let error = AgentSpec::from_yaml(&yaml, Path::new("/project")).unwrap_err();
+        assert!(error.to_string().contains("attestation.rekor is required"));
     }
 
     #[test]

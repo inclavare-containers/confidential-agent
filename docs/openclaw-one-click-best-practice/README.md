@@ -102,6 +102,10 @@ export DINGTALK_BOT_CLIENT_SECRET="<YOUR_DINGTALK_CLIENT_SECRET>"
 
 ### 步骤二：部署 OpenClaw + 百炼 API
 
+`one-click/install.sh` 默认仍部署 OpenClaw，默认模型为 `qwen4-max`。
+交互模式可以选择 harness、模型和推理 API 端点；直接回车采用默认值。
+已有 `--bailian-api-key`、`--bailian-model` 和 `DASHSCOPE_API_KEY` 用法继续有效。
+
 交互式部署：
 
 ```bash
@@ -148,8 +152,49 @@ sh "$INSTALL_SCRIPT" \
   --zone-id cn-beijing-i \
   --instance-type ecs.g9i.xlarge \
   --disk-gb 200 \
-  --bailian-model qwen3.8-max
+  --bailian-model qwen4-max
 ```
+
+#### 选择其他 harness 或推理服务
+
+下载上面的 `INSTALL_SCRIPT` 后，可通过通用参数选择推理服务和模型：
+
+```bash
+export CA_API_KEY="<YOUR_INFERENCE_API_KEY>"
+sh "$INSTALL_SCRIPT" --non-interactive --yes \
+  --harness openclaw \
+  --api-base-url https://your-inference.example/v1 \
+  --model your-model
+```
+
+| `--harness` | one-click 运行方式 | `--api-base-url` 对应协议 |
+| --- | --- | --- |
+| `openclaw`（默认） | Gateway，保留 Web、TUI 和钉钉流程 | OpenAI Chat Completions |
+| `hermes` | SSH CLI | OpenAI 兼容接口 |
+| `codex` | SSH CLI | OpenAI Responses |
+| `claude-code` | SSH CLI | Anthropic Messages；默认百炼 `/apps/anthropic` |
+| `opencode` | SSH CLI | OpenAI Chat Completions |
+| `qodercli` | SSH CLI，进入后登录 Qoder 账户 | 使用 Qoder 自身账户配置，不使用上述模型/API key 参数 |
+
+除 OpenClaw 外的 harness 使用 all-in-one 共享镜像。首次运行会自动构建、发布并导出签名镜像；
+同一 `--work-dir` 后续复用 `allinone-builder/image-release.json`。
+也可传入已有镜像的 `--image-release` 和 `--trusted-key`，跳过镜像构建与发布：
+
+```bash
+sh "$INSTALL_SCRIPT" --non-interactive --yes --harness codex \
+  --image-release /path/to/image-release.json \
+  --trusted-key /path/to/publisher.pem \
+  --api-base-url https://your-inference.example/v1 --model your-model
+```
+
+默认使用 Rekor 参考值，因此复用的镜像应包含 Rekor 元数据；sample 镜像需显式指定
+`--reference-values sample`。部署完成后按输出的 `confidential-agent ssh … --tty -- cai-agent`
+命令进入交互会话。CLI 路径不安装宿主机 OpenClaw，也不启动 OpenClaw Web 探测。
+清理时使用相同的 `--harness`、`--state-dir` 和 `--work-dir`；清理实例保留共享镜像。
+模型、端点和密钥也可分别通过 `CA_MODEL`、`CA_API_BASE_URL`、`CA_API_KEY` 设置，命令行参数优先。
+无鉴权的自建 OpenAI 兼容服务可使用其 SDK 接受的占位 key（例如 `--api-key unused`）。
+
+#### 可选：禁用 OpenClaw PEP
 
 百炼 API 场景默认启用 PEP。如只验证 OpenClaw、百炼、远程证明资源注入、TNG connect 和 Gateway Token 基础链路，可显式禁用 PEP：
 

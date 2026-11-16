@@ -1,7 +1,7 @@
 {
   "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
   "apiKey": "replace-with-bailian-api-key",
-  "model": "qwen3.8-max",
+  "model": "qwen4-max",
   "mcpService": "cmaas",
   "maxToolSteps": 8
 }

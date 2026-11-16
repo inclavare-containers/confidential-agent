@@ -498,7 +498,7 @@ run_case() {
   CODEX_CHAT_MESSAGE="${E2E_CODEX_CHAT_MESSAGE:-Reply with CA_TRUSTEE_CODEX_OK and no other text.}"
   CODEX_CHAT_EXPECT="${E2E_CODEX_CHAT_EXPECT:-CA_TRUSTEE_CODEX_OK}"
   DASHSCOPE_BASE_URL="${DASHSCOPE_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}"
-  DASHSCOPE_MODEL="${DASHSCOPE_MODEL:-qwen3.8-max}"
+  DASHSCOPE_MODEL="${DASHSCOPE_MODEL:-qwen4-max}"
   export CA_DAEMON_STATUS_WAIT_SEC="${CA_DAEMON_STATUS_WAIT_SEC:-1200}"
 
   validate_modes

@@ -18,7 +18,7 @@ def generate(directory, image, mode, region, prefix, *, harnesses=None, ssh=True
     if not key:
         raise RuntimeError("Bailian credential is required")
     url = os.environ.get("DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
-    model = os.environ.get("DASHSCOPE_MODEL", "qwen3.8-max")
+    model = os.environ.get("DASHSCOPE_MODEL", "qwen4-max")
     fixtures = []
     selected_harnesses = list(HARNESSES if harnesses is None else harnesses)
     if not ssh and selected_harnesses != ["hermes"]:

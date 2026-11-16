@@ -432,7 +432,7 @@ pub(super) fn write_allinone(args: &InitArgs, project: &InitProject) -> Result<(
                 }
             }
             "hermes" => {
-                runtime["environment"] = json!({"DASHSCOPE_API_KEY": key, "DASHSCOPE_BASE_URL": project.dashscope_base_url, "HERMES_MODEL": project.model});
+                runtime["environment"] = json!({"HERMES_MODEL": project.model});
                 if mode == "gateway" {
                     runtime["environment"]["API_SERVER_KEY"] = json!(args
                         .hermes_api_server_key
@@ -440,7 +440,8 @@ pub(super) fn write_allinone(args: &InitArgs, project: &InitProject) -> Result<(
                         .unwrap_or_else(|| random_hex(32)));
                 }
                 let config = serde_yaml::to_string(
-                    &json!({"model": {"provider": "alibaba", "default": project.model, "model": project.model}}),
+                    &json!({"model": {"provider": "custom", "base_url": project.dashscope_base_url,
+                        "api_key": key, "default": project.model, "model": project.model}}),
                 )?;
                 resource(
                     project,

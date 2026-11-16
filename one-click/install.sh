@@ -18,6 +18,14 @@ Bootstrap options:
   --source-dir PATH      Local source checkout directory
   --help                 Show this help
 
+Deployment options:
+  --harness NAME         openclaw (default), hermes, codex, claude-code, qodercli, opencode
+  --api-base-url URL     Inference API base URL; defaults to Bailian
+  --api-key KEY          Inference API key (or CA_API_KEY); --bailian-api-key is an alias
+  --model MODEL          Model id; default: qwen4-max; --bailian-model is an alias
+  --image-release PATH   Reuse a signed allinone image for CLI harnesses
+  --trusted-key PATH     Trusted publisher key for --image-release
+
 All other options are handled by the one-click installer after checkout.
 EOF
 }

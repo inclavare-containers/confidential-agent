@@ -60,7 +60,7 @@ append_init_common_args() {
     --npm-registry "$CA_NPM_REGISTRY"
     --slsa-generator "$CA_SLSA_GENERATOR"
   )
-  if [[ "$CA_REFERENCE_VALUES" == "rekor" ]]; then
+  if [[ "$CA_REFERENCE_VALUES" == "rekor" && -n "${CA_COSIGN_KEY:-}" ]]; then
     args_ref+=(--cosign-key "$CA_COSIGN_KEY")
   fi
   if [[ "$CA_ENABLE_DINGTALK" == "1" ]]; then
@@ -76,8 +76,8 @@ append_openclaw_bailian_args() {
   local -n args_ref="$1"
   args_ref+=(
     --dashscope-api-key "$DASHSCOPE_API_KEY"
-    --dashscope-base-url "${DASHSCOPE_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}"
-    --model "$CA_BAILIAN_MODEL"
+    --dashscope-base-url "$CA_API_BASE_URL"
+    --model "$CA_MODEL"
   )
   if [[ "${CA_DISABLE_PEP:-0}" == "1" ]]; then
     args_ref+=(--disable-pep)

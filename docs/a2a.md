@@ -443,7 +443,7 @@ export ALICLOUD_ACCESS_KEY='...'
 export ALICLOUD_SECRET_KEY='...'
 export DASHSCOPE_API_KEY='...'
 export DASHSCOPE_BASE_URL='https://dashscope.aliyuncs.com/compatible-mode/v1'
-export DASHSCOPE_MODEL='qwen3.8-max'
+export DASHSCOPE_MODEL='qwen4-max'
 
 env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy -u ALL_PROXY -u all_proxy \
   tools/e2e/run.sh a2a-data-collab
