@@ -42,7 +42,7 @@ export CA_SLSA_GENERATOR=/bin/true
   [[ "$CA_API_BASE_URL" == https://dashscope.aliyuncs.com/apps/anthropic ]]
 )
 
-for harness in openclaw hermes codex claude-code opencode qodercli; do
+for harness in openclaw hermes codex claude-code opencode qodercli pi dsh; do
   (
     init_defaults
     parse_args --harness "$harness" --api-base-url https://inference.example/v1 \
@@ -102,7 +102,7 @@ claw = json.loads((root / 'openclaw/openclaw/openclaw.json').read_text())
 assert claw['models']['providers']['bailian']['baseUrl'] == 'https://inference.example/v1'
 assert claw['agents']['defaults']['model']['primary'] == 'bailian/custom/model'
 assert claw['models']['providers']['bailian']['apiKey'] == 'test-inference-key'
-for harness in ['hermes', 'codex', 'claude-code', 'opencode', 'qodercli']:
+for harness in ['hermes', 'codex', 'claude-code', 'opencode', 'qodercli', 'pi', 'dsh']:
     secrets = root / harness / f'allinone-{harness}' / 'secrets'
     runtime = json.loads((secrets / 'runtime.json').read_text())
     assert (runtime['harness'], runtime['mode']) == (harness, 'cli')
@@ -126,7 +126,22 @@ for harness in ['hermes', 'codex', 'claude-code', 'opencode', 'qodercli']:
         assert 'base_url: https://inference.example/v1' in config
         assert 'api_key: test-inference-key' in config
         assert 'default: custom/model' in config
+    elif harness == 'pi':
+        models = json.loads((secrets / 'pi-models.json').read_text())
+        provider = models['providers']['inference']
+        assert provider['baseUrl'] == 'https://inference.example/v1'
+        assert provider['models'] == [{'id': 'custom/model'}]
+        assert provider['apiKey'] == '$CA_INFERENCE_API_KEY'
+        settings = json.loads((secrets / 'pi-settings.json').read_text())
+        assert settings['defaultModel'] == 'custom/model'
+        assert runtime['environment']['CA_INFERENCE_API_KEY'] == 'test-inference-key'
+    elif harness == 'dsh':
+        config = (secrets / 'cordis.patch.yml').read_text()
+        assert 'baseURL: https://inference.example/v1' in config
+        assert 'model: custom/model' in config
+        assert 'apiKeyEnv: CA_INFERENCE_API_KEY' in config
+        assert runtime['environment']['CA_INFERENCE_API_KEY'] == 'test-inference-key'
     else:
         assert runtime['environment'] == {}
-print('Default OpenClaw, aliases, interactive choices and six native harness configurations passed')
+print('Default OpenClaw, aliases, interactive choices and eight native harness configurations passed')
 PY

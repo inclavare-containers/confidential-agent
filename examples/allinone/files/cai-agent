@@ -23,6 +23,8 @@ COMMANDS = {
     "opencode": ["opencode"],
     "codex": ["codex"],
     "claude-code": ["claude"],
+    "pi": ["pi"],
+    "dsh": ["dsh"],
 }
 
 
@@ -92,10 +94,12 @@ def main():
     HOME.mkdir(parents=True, exist_ok=True, mode=0o700)
     WORKSPACE.mkdir(parents=True, exist_ok=True, mode=0o700)
     environment = dict(os.environ, **configured)
-    environment.update(HOME=str(HOME), XDG_CONFIG_HOME=str(HOME / ".config"),
+    environment.update(HOME=str(HOME), PWD=str(WORKSPACE), XDG_CONFIG_HOME=str(HOME / ".config"),
                        HERMES_HOME="/opt/data/allinone/hermes",
                        CODEX_HOME=str(HOME / ".codex"),
                        QODER_CONFIG_DIR=str(HOME / ".qoder"),
+                       PI_CODING_AGENT_DIR=str(HOME / ".pi/agent"),
+                       DSH_HOME=str(HOME / ".dsh"),
                        PATH="/usr/local/bin:/usr/bin:/usr/local/sbin:/usr/sbin:/bin:/sbin")
     configure_fixed_release(harness, environment)
     command = COMMANDS[harness].copy()

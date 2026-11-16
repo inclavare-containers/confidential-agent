@@ -249,7 +249,7 @@ tools/e2e/run.sh --case inference-reuse-nlb --gpu-jobs 1
 ```
 
 Groups are `legacy`, `reuse`, `inference`, and `platform`. Full acceptance keeps
-all eleven native entry-point cases, six all-in-one harnesses under Challenge,
+all eleven native entry-point cases, eight all-in-one harnesses under Challenge,
 OpenClaw and Codex under Trustee, and a separate all-in-one full-hardening smoke.
 The Challenge reuse lane also covers concurrent deployment, interrupted
 infrastructure, delivery resume, frozen inputs, application failure, console
@@ -312,7 +312,7 @@ wizard; the fixture preserves those settings and passes `--model` explicitly.
 Record whether the selected model uses BYOK or Qoder's native provider when
 reporting acceptance results. Standard cloud/Bailian credentials are read
 from the environment. Version defaults come from the root
-[`software-versions.json`](../../software-versions.json); the six-harness tests
+[`software-versions.json`](../../software-versions.json); the eight-harness tests
 also inspect the actual guest versions and make real model calls.
 Fresh OpenClaw builds pin the DingTalk plugin commit and its pnpm version in the
 same manifest. The pnpm tarball can come from the configured npm mirror, but its

@@ -238,7 +238,7 @@ pub(crate) struct InitArgs {
     #[arg(long)]
     pub(crate) service_id: Option<String>,
     /// Harness selected per all-in-one instance, never per image build.
-    #[arg(long, value_parser = ["openclaw", "hermes", "codex", "claude-code", "qodercli", "opencode"])]
+    #[arg(long, value_parser = ["openclaw", "hermes", "codex", "claude-code", "qodercli", "opencode", "pi", "dsh"])]
     pub(crate) harness: Option<String>,
     /// cli: use over SSH; gateway: OpenClaw/Hermes; app-server: remote Codex.
     #[arg(long, value_parser = ["cli", "gateway", "app-server"])]

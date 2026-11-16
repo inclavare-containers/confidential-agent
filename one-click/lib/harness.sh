@@ -3,7 +3,7 @@
 resolve_harness_options() {
   if [[ "$CA_ONE_CLICK_TARGET" == openclaw && "$CA_MODE" == deploy-openclaw && "$CA_NON_INTERACTIVE" != 1 ]]; then
     if [[ -z "$CA_HARNESS" ]]; then
-      prompt_value CA_HARNESS "Harness (openclaw/hermes/codex/claude-code/qodercli/opencode)" openclaw
+      prompt_value CA_HARNESS "Harness (openclaw/hermes/codex/claude-code/qodercli/opencode/pi/dsh)" openclaw
     fi
     if [[ "$CA_HARNESS" != qodercli ]]; then
       if [[ -z "$CA_MODEL" ]]; then
@@ -88,12 +88,22 @@ Deployment summary
   service:   $CA_SERVICE_ID
   release:   $CA_IMAGE_RELEASE
 
-Start an interactive session:
-  confidential-agent --tools-dir "$CA_TOOLS_DIR" --state-dir "$CA_STATE_DIR" ssh "$CA_SERVICE_ID" --tty -- cai-agent
-
 Cleanup the instance (the shared image is retained):
   one-click/install.sh cleanup --harness "$CA_HARNESS" --state-dir "$CA_STATE_DIR" --work-dir "$CA_WORK_DIR"
 EOF
+  if [[ "$CA_HARNESS" == dsh ]]; then
+    cat <<EOF
+
+Run a DSH task:
+  confidential-agent --tools-dir "$CA_TOOLS_DIR" --state-dir "$CA_STATE_DIR" ssh "$CA_SERVICE_ID" -- cai-agent headless 'Your task'
+EOF
+  else
+    cat <<EOF
+
+Start an interactive session:
+  confidential-agent --tools-dir "$CA_TOOLS_DIR" --state-dir "$CA_STATE_DIR" ssh "$CA_SERVICE_ID" --tty -- cai-agent
+EOF
+  fi
   if [[ "$CA_HARNESS" == qodercli ]]; then
     log "Sign in to your Qoder account in the interactive session."
   fi

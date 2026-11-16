@@ -33,7 +33,7 @@ pub(super) fn resolve_interactive(args: &mut InitArgs) -> Result<()> {
             if args.harness.is_none() {
                 loop {
                     let harness = prompt_value(
-                        "Harness (openclaw/hermes/codex/claude-code/qodercli/opencode)",
+                        "Harness (openclaw/hermes/codex/claude-code/qodercli/opencode/pi/dsh)",
                     )?;
                     if harness_choices(&harness).is_ok() {
                         args.harness = Some(harness);
@@ -304,7 +304,7 @@ fn harness_choices(harness: &str) -> Result<(&'static [&'static str], &'static s
             "cli",
             "cli: run Codex in the terminal over SSH; app-server: run Codex for remote clients.",
         )),
-        "claude-code" | "qodercli" | "opencode" => Ok((
+        "claude-code" | "qodercli" | "opencode" | "pi" | "dsh" => Ok((
             &["cli"],
             "cli",
             "This harness uses the terminal over SSH (cli).",
@@ -515,6 +515,48 @@ pub(super) fn write_allinone(args: &InitArgs, project: &InitProject) -> Result<(
                     "opencode.json",
                     &format!("{home}/.config/opencode/opencode.json"),
                     &serde_json::to_string_pretty(&config)?,
+                )?;
+            }
+            "pi" => {
+                runtime["environment"]["CA_INFERENCE_API_KEY"] = json!(key);
+                let models = json!({"providers":{"inference":{
+                    "baseUrl":project.dashscope_base_url,"api":"openai-completions",
+                    "apiKey":"$CA_INFERENCE_API_KEY","models":[{"id":project.model}]
+                }}});
+                resource(
+                    project,
+                    &mut spec,
+                    "pi_models",
+                    "pi-models.json",
+                    &format!("{home}/.pi/agent/models.json"),
+                    &serde_json::to_string_pretty(&models)?,
+                )?;
+                let settings = json!({"defaultProvider":"inference","defaultModel":project.model});
+                resource(
+                    project,
+                    &mut spec,
+                    "pi_settings",
+                    "pi-settings.json",
+                    &format!("{home}/.pi/agent/settings.json"),
+                    &serde_json::to_string_pretty(&settings)?,
+                )?;
+            }
+            "dsh" => {
+                runtime["environment"]["CA_INFERENCE_API_KEY"] = json!(key);
+                let patches = json!([
+                    {"id":"llm-pi-ai","config":{"providers":{"inference":{
+                        "api":"openai-completions","baseURL":project.dashscope_base_url,
+                        "apiKeyEnv":"CA_INFERENCE_API_KEY","models":[{"id":project.model}]
+                    }}}},
+                    {"id":"agent-default-model","config":{"provider":"inference","model":project.model}}
+                ]);
+                resource(
+                    project,
+                    &mut spec,
+                    "dsh_config",
+                    "cordis.patch.yml",
+                    &format!("{home}/.dsh/cordis.patch.yml"),
+                    &serde_yaml::to_string(&patches)?,
                 )?;
             }
             "qodercli" => {
@@ -855,6 +897,8 @@ mod tests {
                     "home/.claude",
                     "home/.qoder",
                     "home/.config/opencode",
+                    "home/.pi/agent",
+                    "home/.dsh",
                     "home/.openclaw",
                     "hermes",
                 ] {
@@ -982,6 +1026,8 @@ mod tests {
             ("claude-a", "allinone", "claude-code", "cli", "1"),
             ("qoder-a", "allinone", "qodercli", "cli", "1"),
             ("opencode-a", "allinone", "opencode", "cli", "1"),
+            ("pi-a", "allinone", "pi", "cli", "1"),
+            ("dsh-a", "allinone", "dsh", "cli", "1"),
             ("standalone-openclaw", "openclaw", "", "", "2"),
             ("standalone-gpu", "openclaw-vllm", "", "", "1"),
             ("standalone-hermes", "hermes", "", "", "1"),

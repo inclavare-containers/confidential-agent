@@ -313,7 +313,7 @@ class Consumer:
     def verify_software_versions(self, expected):
         script = """import json, pathlib, subprocess
 root = pathlib.Path(subprocess.check_output(['npm','root','-g'],text=True).strip())
-packages = {'openclaw':'openclaw','codex':'@openai/codex','claude-code':'@anthropic-ai/claude-code','qodercli':'@qoder-ai/qodercli','opencode':'opencode-ai'}
+packages = {'openclaw':'openclaw','codex':'@openai/codex','claude-code':'@anthropic-ai/claude-code','qodercli':'@qoder-ai/qodercli','opencode':'opencode-ai','pi':'@earendil-works/pi-coding-agent','dsh':'@deepseek-ai/dsh'}
 actual = {name: json.loads((root / package / 'package.json').read_text())['version'] for name,package in packages.items()}
 actual['hermes'] = subprocess.check_output(['git','-C','/usr/local/lib/hermes-agent','rev-parse','HEAD'],text=True).strip()
 actual['node'] = subprocess.check_output(['node','--version'],text=True).strip().removeprefix('v')

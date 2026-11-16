@@ -152,7 +152,7 @@ cd ~/cagent-work/hermes-01
 签名和镜像兼容性会在 deploy 创建云资源前验证。
 只有需要额外固定某个版本时才传 `--manifest sha256:<完整摘要>`；省略时仍会验签，并把解析出的摘要固定在部署状态中。
 再次 init 时换 `--service-id`，可复用相同镜像创建同种或不同 harness 的实例。
-allinone 支持 OpenClaw、Hermes、Codex、Claude Code、QoderCLI、OpenCode；
+allinone 支持 OpenClaw、Hermes、Codex、Claude Code、QoderCLI、OpenCode、Pi、DSH；
 Qoder 使用自己的账户登录流程，不把 DashScope key 当成 Qoder 凭证。
 模型、凭证使用生成的私有资源，不写入共享镜像。
 

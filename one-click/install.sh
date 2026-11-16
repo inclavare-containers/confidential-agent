@@ -19,7 +19,7 @@ Bootstrap options:
   --help                 Show this help
 
 Deployment options:
-  --harness NAME         openclaw (default), hermes, codex, claude-code, qodercli, opencode
+  --harness NAME         openclaw (default), hermes, codex, claude-code, qodercli, opencode, pi, dsh
   --api-base-url URL     Inference API base URL; defaults to Bailian
   --api-key KEY          Inference API key (or CA_API_KEY); --bailian-api-key is an alias
   --model MODEL          Model id; default: qwen4-max; --bailian-model is an alias

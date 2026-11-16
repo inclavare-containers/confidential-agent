@@ -38,6 +38,10 @@ build:
     - source: ../cli-agents/files/tdx-remote-attestation.SKILL.md
       target: /opt/data/allinone/home/.config/opencode/skills/tdx-remote-attestation/SKILL.md
     - source: ../cli-agents/files/tdx-remote-attestation.SKILL.md
+      target: /opt/data/allinone/home/.pi/agent/skills/tdx-remote-attestation/SKILL.md
+    - source: ../cli-agents/files/tdx-remote-attestation.SKILL.md
+      target: /opt/data/allinone/home/.dsh/skills/tdx-remote-attestation/SKILL.md
+    - source: ../cli-agents/files/tdx-remote-attestation.SKILL.md
       target: /opt/data/allinone/hermes/skills/tdx-remote-attestation/SKILL.md
     - source: ../openclaw/files/tdx-remote-attestation.SKILL.md
       target: /opt/data/allinone/home/.openclaw/skills/tdx-remote-attestation/SKILL.md

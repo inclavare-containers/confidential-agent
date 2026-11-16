@@ -13,6 +13,8 @@ export HERMES_COMMIT="$(jq -er '.software_versions.hermes' "$contract")"
 OPENCLAW_VERSION="$(jq -er '.software_versions.openclaw' "$contract")"
 QODER_VERSION="$(jq -er '.software_versions.qodercli' "$contract")"
 OPENCODE_VERSION="$(jq -er '.software_versions.opencode' "$contract")"
+PI_VERSION="$(jq -er '.software_versions.pi' "$contract")"
+DSH_VERSION="$(jq -er '.software_versions.dsh' "$contract")"
 
 cli=/usr/local/libexec/confidential-agent/cli-agent/install-cli-agent-runtime.sh
 test -x /usr/local/bin/cai-pep
@@ -28,6 +30,10 @@ npm install -g --no-audit --no-fund \
     "openclaw@$OPENCLAW_VERSION" \
     "@qoder-ai/qodercli@$QODER_VERSION" \
     "opencode-ai@$OPENCODE_VERSION"
+npm install -g --no-audit --no-fund \
+    --allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs \
+    "@earendil-works/pi-coding-agent@$PI_VERSION" \
+    "@deepseek-ai/dsh@$DSH_VERSION"
 
 # Only OpenClaw has the executor patch. Other harnesses use cai-pep's local
 # attestation subcommand directly, without a policy server or execution hooks.
@@ -73,6 +79,6 @@ install -d -m 0755 /usr/local/share/confidential-agent
     git -C /usr/local/lib/hermes-agent rev-parse HEAD
 } > /usr/local/share/confidential-agent/allinone-versions.txt
 python3.11 /usr/local/libexec/confidential-agent/allinone/finalize-runtime.py
-for command in openclaw hermes qoder opencode codex claude; do
+for command in openclaw hermes qoder opencode codex claude pi dsh; do
     "$command" --version
 done
