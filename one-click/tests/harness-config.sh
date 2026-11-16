@@ -29,7 +29,7 @@ export CA_SLSA_GENERATOR=/bin/true
 (
   CA_NON_INTERACTIVE=0
   init_defaults
-  resolve_harness_options <<< $'claude-code\nchosen-model\nhttps://inference.example/anthropic'
+  resolve_harness_options <<< $'claudecode\nclaude-code\nchosen-model\nhttps://inference.example/anthropic'
   [[ "$CA_HARNESS" == claude-code && "$CA_MODEL" == chosen-model ]]
   [[ "$CA_API_BASE_URL" == https://inference.example/anthropic ]]
 )
@@ -42,13 +42,46 @@ export CA_SLSA_GENERATOR=/bin/true
   [[ "$CA_API_BASE_URL" == https://dashscope.aliyuncs.com/apps/anthropic ]]
 )
 
+# Exercise the public entry point without running deployment or host setup.
+(
+  run_deploy_openclaw() { :; }
+  run_deploy_harness() { :; }
+  run_cleanup() { :; }
+  run_install_only() { :; }
+  expect_usage_error() {
+    local expected="$1" output
+    shift
+    if output="$(main "$@" --state-dir "$task_tmp/options-state" --work-dir "$task_tmp/options-work" 2>&1)"; then
+      printf 'expected error: %s\n' "$expected" >&2
+      exit 1
+    fi
+    [[ "$output" == *"$expected"* ]]
+  }
+  expect_usage_error 'unsupported harness' --harness claudecode
+  expect_usage_error 'unsupported harness' cleanup --harness claudecode
+  CA_HARNESS=claudecode expect_usage_error 'unsupported harness'
+  expect_usage_error '--disable-pep applies only to OpenClaw' --harness codex --disable-pep
+  expect_usage_error '--enable-dingtalk applies only to OpenClaw' --harness codex --enable-dingtalk
+  expect_usage_error 'CLI harnesses require --replicas 1' --harness codex --replicas 2
+  expect_usage_error 'must be supplied together' --harness codex --image-release "$task_tmp/release.json"
+  expect_usage_error 'must be supplied together' --harness codex --trusted-key "$task_tmp/publisher.pem"
+  expect_usage_error 'apply only to CLI harnesses' --harness openclaw \
+    --image-release "$task_tmp/release.json" --trusted-key "$task_tmp/publisher.pem"
+  for mode in cleanup install-only; do
+    (main "$mode" --harness codex --disable-pep --enable-dingtalk --replicas 2 \
+      --state-dir "$task_tmp/options-state" --work-dir "$task_tmp/options-work")
+  done
+)
+
 for harness in openclaw hermes codex claude-code opencode qodercli pi dsh; do
   (
     init_defaults
     parse_args --harness "$harness" --api-base-url https://inference.example/v1 \
       --api-key test-inference-key --model 'custom/model' --work-dir "$task_tmp/$harness" \
-      --state-dir "$task_tmp/state" --cosign-key "$task_tmp/cosign.key" \
-      --image-release "$task_tmp/release.json" --trusted-key "$task_tmp/publisher.pem"
+      --state-dir "$task_tmp/state" --cosign-key "$task_tmp/cosign.key"
+    if [[ "$harness" != openclaw ]]; then
+      parse_args --image-release "$task_tmp/release.json" --trusted-key "$task_tmp/publisher.pem"
+    fi
     normalize_workspace_paths
     resolve_harness_options
     apply_target_defaults
@@ -115,6 +148,10 @@ for harness in ['hermes', 'codex', 'claude-code', 'opencode', 'qodercli', 'pi', 
         assert runtime['environment']['ANTHROPIC_BASE_URL'] == 'https://inference.example/v1'
         assert runtime['environment']['ANTHROPIC_MODEL'] == 'custom/model'
         assert runtime['environment']['ANTHROPIC_AUTH_TOKEN'] == 'test-inference-key'
+        for variable in ['ANTHROPIC_DEFAULT_HAIKU_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL',
+                         'ANTHROPIC_DEFAULT_OPUS_MODEL', 'CLAUDE_CODE_SUBAGENT_MODEL']:
+            assert runtime['environment'][variable] == 'custom/model'
+        assert runtime['environment']['DISABLE_AUTOUPDATER'] == '1'
     elif harness == 'opencode':
         config = json.loads((secrets / 'opencode.json').read_text())
         assert config['provider']['bailian']['options'] == {

@@ -496,7 +496,16 @@ pub(super) fn write_allinone(args: &InitArgs, project: &InitProject) -> Result<(
                 )?;
             }
             "claude-code" => {
-                runtime["environment"] = json!({"ANTHROPIC_AUTH_TOKEN": key,"ANTHROPIC_BASE_URL":project.dashscope_anthropic_base_url,"ANTHROPIC_MODEL":project.model});
+                runtime["environment"] = json!({
+                    "ANTHROPIC_AUTH_TOKEN": key,
+                    "ANTHROPIC_BASE_URL": project.dashscope_anthropic_base_url,
+                    "ANTHROPIC_MODEL": project.model,
+                    "ANTHROPIC_DEFAULT_HAIKU_MODEL": project.model,
+                    "ANTHROPIC_DEFAULT_SONNET_MODEL": project.model,
+                    "ANTHROPIC_DEFAULT_OPUS_MODEL": project.model,
+                    "CLAUDE_CODE_SUBAGENT_MODEL": project.model,
+                    "DISABLE_AUTOUPDATER": "1"
+                });
                 resource(
                     project,
                     &mut spec,

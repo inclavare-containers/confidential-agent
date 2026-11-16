@@ -1,9 +1,20 @@
 #!/usr/bin/env bash
 
+is_supported_harness() {
+  case "$1" in
+    openclaw|hermes|codex|claude-code|qodercli|opencode|pi|dsh) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 resolve_harness_options() {
   if [[ "$CA_ONE_CLICK_TARGET" == openclaw && "$CA_MODE" == deploy-openclaw && "$CA_NON_INTERACTIVE" != 1 ]]; then
     if [[ -z "$CA_HARNESS" ]]; then
-      prompt_value CA_HARNESS "Harness (openclaw/hermes/codex/claude-code/qodercli/opencode/pi/dsh)" openclaw
+      while true; do
+        prompt_value CA_HARNESS "Harness (openclaw/hermes/codex/claude-code/qodercli/opencode/pi/dsh)" openclaw
+        if is_supported_harness "$CA_HARNESS"; then break; fi
+        warn "unsupported harness: $CA_HARNESS"
+      done
     fi
     if [[ "$CA_HARNESS" != qodercli ]]; then
       if [[ -z "$CA_MODEL" ]]; then
