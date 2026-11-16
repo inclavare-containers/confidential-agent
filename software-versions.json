@@ -4,6 +4,8 @@
   "hermes_release": "v0.22.0",
   "qodercli": "1.1.70",
   "opencode": "1.19.0",
+  "pi": "1.5.2",
+  "dsh": "0.2.2-rc.1",
   "codex": "0.162.1",
   "claude-code": "2.1.299",
   "node": "24.21.0",

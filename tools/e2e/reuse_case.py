@@ -1,5 +1,5 @@
 #!/usr/bin/env python3.11
-"""Six real harnesses on one signed image, with a clean consumer state."""
+"""Eight real harnesses on one signed image, with a clean consumer state."""
 import json
 import os
 import socket

@@ -6,7 +6,7 @@ import secrets
 import shlex
 import shutil
 
-HARNESSES = ["codex", "claude-code", "opencode", "openclaw", "hermes", "qodercli"]
+HARNESSES = ["codex", "claude-code", "opencode", "openclaw", "hermes", "qodercli", "pi", "dsh"]
 PROMPT = "Reply with ALLINONE_, E2E_, and OK concatenated without spaces or other text."
 
 
@@ -73,6 +73,23 @@ def generate(directory, image, mode, region, prefix, *, harnesses=None, ssh=True
             resource("config.yaml", f"model:\n  provider: alibaba\n  default: {model}\n  model: {model}\n", "/opt/data/allinone/hermes/config.yaml")
             runtime = "python3.11 -c 'import urllib.request; assert urllib.request.urlopen(\"http://127.0.0.1:8642/health\",timeout=20).status == 200'"
             command = "cai-agent chat -q " + shlex.quote(PROMPT)
+        elif harness == "pi":
+            environment["CA_INFERENCE_API_KEY"] = key
+            resource("pi-models.json", {"providers": {"inference": {
+                "baseUrl": url, "api": "openai-completions", "apiKey": "$CA_INFERENCE_API_KEY",
+                "models": [{"id": model}]}}}, "/opt/data/allinone/home/.pi/agent/models.json")
+            resource("pi-settings.json", {"defaultProvider": "inference", "defaultModel": model},
+                     "/opt/data/allinone/home/.pi/agent/settings.json")
+            command = "cai-agent --no-session --print " + shlex.quote(PROMPT)
+        elif harness == "dsh":
+            environment["CA_INFERENCE_API_KEY"] = key
+            resource("cordis.patch.yml", [
+                {"id": "llm-pi-ai", "config": {"providers": {"inference": {
+                    "api": "openai-completions", "baseURL": url, "apiKeyEnv": "CA_INFERENCE_API_KEY",
+                    "models": [{"id": model}]}}}},
+                {"id": "agent-default-model", "config": {"provider": "inference", "model": model}}
+            ], "/opt/data/allinone/home/.dsh/cordis.patch.yml")
+            command = "cai-agent headless --json " + shlex.quote(PROMPT)
         else:
             auth = Path(os.environ.get("E2E_QODER_NATIVE_CONFIG", "/missing"))
             if os.environ.get("QODER_PERSONAL_ACCESS_TOKEN"):

@@ -174,6 +174,8 @@ sh "$INSTALL_SCRIPT" --non-interactive --yes \
 | `codex` | SSH CLI | OpenAI Responses |
 | `claude-code` | SSH CLI | Anthropic Messages；默认百炼 `/apps/anthropic` |
 | `opencode` | SSH CLI | OpenAI Chat Completions |
+| `pi` | SSH TUI 或 `cai-agent --print '任务'` | OpenAI Chat Completions |
+| `dsh` | SSH 单次任务：`cai-agent headless '任务'` | OpenAI Chat Completions |
 | `qodercli` | SSH CLI，进入后登录 Qoder 账户 | 使用 Qoder 自身账户配置，不使用上述模型/API key 参数 |
 
 除 OpenClaw 外的 harness 使用 all-in-one 共享镜像。首次运行会自动构建、发布并导出签名镜像；
@@ -189,7 +191,8 @@ sh "$INSTALL_SCRIPT" --non-interactive --yes --harness codex \
 
 默认使用 Rekor 参考值，因此复用的镜像应包含 Rekor 元数据；sample 镜像需显式指定
 `--reference-values sample`。部署完成后按输出的 `confidential-agent ssh … --tty -- cai-agent`
-命令进入交互会话。CLI 路径不安装宿主机 OpenClaw，也不启动 OpenClaw Web 探测。
+命令进入交互会话；DSH 使用输出中的 `cai-agent headless '任务'` 命令。
+CLI 路径不安装宿主机 OpenClaw，也不启动 OpenClaw Web 探测。
 清理时使用相同的 `--harness`、`--state-dir` 和 `--work-dir`；清理实例保留共享镜像。
 模型、端点和密钥也可分别通过 `CA_MODEL`、`CA_API_BASE_URL`、`CA_API_KEY` 设置，命令行参数优先。
 无鉴权的自建 OpenAI 兼容服务可使用其 SDK 接受的占位 key（例如 `--api-key unused`）。

@@ -1,7 +1,7 @@
 # Shared allinone image
 
 Build one release image containing OpenClaw, Hermes, QoderCLI, OpenCode, Codex,
-and Claude Code. Each deployed VM selects one harness using the image's
+Claude Code, Pi, and DeepSeek Harness (DSH). Each deployed VM selects one harness using the image's
 `runtime.json`. CA accepts ordinary AppSpecs and resources for both this image
 and custom images; it has no allinone harness enum or model flags.
 
@@ -38,6 +38,8 @@ Mode choices depend on the selected harness:
 | OpenClaw / Hermes | `gateway` (default) | Run a persistent network service for clients |
 | OpenClaw / Hermes | `cli` | Run the harness through SSH |
 | Claude Code / QoderCLI / OpenCode | `cli` | Run the harness through SSH; init selects this automatically |
+| Pi | `cli` | Use its terminal UI or `cai-agent --print 'Your task'` through SSH |
+| DSH | `cli` | Run `cai-agent headless 'Your task'`; the headless profile runs one task and exits |
 
 Codex has no `gateway` mode in this project. The separately installed
 `cai-gateway` handles CA mesh traffic and is not a Codex mode.
@@ -53,6 +55,8 @@ The native skill directories are:
 | Claude Code | `/opt/data/allinone/home/.claude/skills/tdx-remote-attestation` |
 | QoderCLI | `/opt/data/allinone/home/.qoder/skills/tdx-remote-attestation` |
 | OpenCode | `/opt/data/allinone/home/.config/opencode/skills/tdx-remote-attestation` |
+| Pi | `/opt/data/allinone/home/.pi/agent/skills/tdx-remote-attestation` |
+| DSH | `/opt/data/allinone/home/.dsh/skills/tdx-remote-attestation` |
 | Hermes | `/opt/data/allinone/hermes/skills/tdx-remote-attestation` |
 | OpenClaw | `/opt/data/allinone/home/.openclaw/skills/tdx-remote-attestation` |
 
@@ -111,7 +115,7 @@ return a nonzero exit status and retain failed entries for retry.
 ## Image configuration
 
 `runtime.json` accepts `harness` (`openclaw`, `hermes`, `qodercli`, `opencode`,
-`codex`, `claude-code`), an optional `mode`, an optional listening `port`,
+`codex`, `claude-code`, `pi`, `dsh`), an optional `mode`, an optional listening `port`,
 and a map of string environment variables. Existing configurations retain their
 default mode: gateway for OpenClaw/Hermes and CLI for the other harnesses.
 Deliver it to `/opt/data/allinone/runtime.json`. API credentials may be included
@@ -126,6 +130,20 @@ provider URLs and authentication use the harness's official configuration:
 | OpenCode | `/opt/data/allinone/home/.config/opencode/opencode.json` |
 | Codex | `/opt/data/allinone/home/.codex/config.toml`; `OPENAI_API_KEY` in environment |
 | Claude Code | `/opt/data/allinone/home/.claude/settings.json` and its supported provider environment |
+| Pi | `/opt/data/allinone/home/.pi/agent/models.json` and `settings.json`; `PI_CODING_AGENT_DIR` points to this directory |
+| DSH | `/opt/data/allinone/home/.dsh/cordis.patch.yml`; `DSH_HOME` points to this directory |
+
+Pi and DSH use the generated `inference` provider with an OpenAI Chat Completions
+endpoint and the selected model. Their API key is delivered in `runtime.json`
+as `CA_INFERENCE_API_KEY`, referenced by the native provider configuration.
+These resources are instance-specific and stay out of the shared image.
+For DSH, use its native `headless` profile for one-shot tasks; the packaged CLI
+does not ship a terminal chat UI. For example:
+
+```bash
+confidential-agent ssh allinone-pi -- cai-agent --print 'Describe this workspace'
+confidential-agent ssh allinone-dsh -- cai-agent headless 'Describe this workspace'
+```
 
 Change the resource entries and application ports in `instance.yaml` to match
 the selected harness. CLI harnesses use SSH and `service.ports: []`; their

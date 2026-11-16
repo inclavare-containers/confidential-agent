@@ -159,7 +159,7 @@ Deploy options:
   --instance-type TYPE           Default: ecs.g9i.xlarge
   --disk-gb GB                   Default: 200
   --allowed-cidr CIDR[,CIDR...]  Operator access CIDR list; may be repeated
-  --harness NAME                 openclaw (default), hermes, codex, claude-code, qodercli, opencode
+  --harness NAME                 openclaw (default), hermes, codex, claude-code, qodercli, opencode, pi, dsh
   --api-base-url URL             Inference API base URL; defaults to Bailian
   --api-key KEY                  Inference API key (or CA_API_KEY)
   --model MODEL                  Model id; default: qwen4-max

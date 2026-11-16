@@ -115,7 +115,7 @@ def main():
              Path('/usr/local/lib/cai-hermes/tools'),
              Path('/usr/local/share/uv/python')]
     commands = ['node', 'npm', 'npx', 'corepack', 'openclaw', 'hermes',
-                'qoder', 'opencode', 'codex', 'claude']
+                'qoder', 'opencode', 'codex', 'claude', 'pi', 'dsh']
     entrypoints = [Path(path) for command in commands if (path := shutil.which(command))]
     cache = Path('/usr/local/n/versions/node') / version[1:]
     node_cache = remove_node_cache(cache, node, entrypoints + roots)

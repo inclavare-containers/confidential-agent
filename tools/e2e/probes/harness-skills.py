@@ -55,11 +55,43 @@ def main():
     homes = {
         "claude-code": "home/.claude", "qodercli": "home/.qoder",
         "opencode": "home/.config/opencode", "hermes": "hermes", "openclaw": "home/.openclaw",
+        "pi": "home/.pi/agent", "dsh": "home/.dsh",
     }
     skill = Path("/opt/data/allinone") / homes[harness] / "skills" / NAME / "SKILL.md"
     assert skill.is_file(), "TDX skill is absent from the selected harness home"
     if harness == "claude-code":
         claude_skills()
+    elif harness == "pi":
+        result = subprocess.run(["cai-agent", "--mode", "rpc", "--no-session"],
+            input=json.dumps({"id": "skills", "type": "get_commands"}) + "\n",
+            capture_output=True, text=True, check=True, timeout=60)
+        response = next(json.loads(line) for line in result.stdout.splitlines()
+                        if json.loads(line).get("id") == "skills")
+        assert response["success"] and str(skill) in json.dumps(response["data"]), \
+            "Pi did not discover its TDX skill"
+    elif harness == "dsh":
+        # Use the filesystem provider shipped with the pinned DSH package.
+        script = """
+import { createRequire } from 'node:module';
+import { execFileSync } from 'node:child_process';
+const root = execFileSync('npm', ['root', '-g'], {encoding:'utf8'}).trim();
+const require = createRequire(root + '/@deepseek-ai/dsh/package.json');
+const {Context} = await import(require.resolve('@deepseek-ai/cordis'));
+const {default: skills} = await import(require.resolve('@deepseek-ai/dsh-skill'));
+const filesystem = await import(require.resolve('@deepseek-ai/dsh-skill-filesystem'));
+const ctx = new Context();
+await ctx.plugin(skills).await();
+await ctx.plugin(filesystem, {
+    dshHome:'/opt/data/allinone/home/.dsh',
+    agentsHome:'/opt/data/allinone/home/.agents'
+}).await();
+console.log(JSON.stringify(await ctx.skills.list({cwd:'/opt/data/allinone/workspace'})));
+await ctx.fiber.dispose();
+"""
+        result = subprocess.run(["node", "--input-type=module", "-e", script],
+                                capture_output=True, text=True, check=True, timeout=60)
+        assert any(row["name"] == NAME and row["path"] == str(skill)
+                   for row in json.loads(result.stdout)), "DSH did not discover its TDX skill"
     else:
         args = {
             "qodercli": ["skills", "list"], "opencode": ["debug", "skill"],
