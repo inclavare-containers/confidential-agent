@@ -48,6 +48,8 @@ jobs:
           cargo build --locked -p confidential-agent-cli -p cai-pep
           bash one-click/tests/harness-config.sh
           cargo test --locked -p confidential-agent-core spec::tests::published_rekor
+      - name: Test E2E orchestration
+        run: CA_BIN="$PWD/target/debug/confidential-agent" python3.11 -m unittest discover -s tools/e2e/tests -v
 
   rpm:
     needs: checks

@@ -180,7 +180,8 @@ sh "$INSTALL_SCRIPT" --non-interactive --yes \
 
 除 OpenClaw 外的 harness 使用 all-in-one 共享镜像。首次运行会自动构建、发布并导出签名镜像；
 同一 `--work-dir` 后续复用 `allinone-builder/image-release.json`。
-也可传入已有镜像的 `--image-release` 和 `--trusted-key`，跳过镜像构建与发布：
+也可成对传入已有镜像的 `--image-release` 和 `--trusted-key`，跳过镜像构建与发布。
+这两个参数仅用于 CLI harness；默认 OpenClaw 流程不接受它们：
 
 ```bash
 sh "$INSTALL_SCRIPT" --non-interactive --yes --harness codex \
@@ -193,6 +194,8 @@ sh "$INSTALL_SCRIPT" --non-interactive --yes --harness codex \
 `--reference-values sample`。部署完成后按输出的 `confidential-agent ssh … --tty -- cai-agent`
 命令进入交互会话；DSH 使用输出中的 `cai-agent headless '任务'` 命令。
 CLI 路径不安装宿主机 OpenClaw，也不启动 OpenClaw Web 探测。
+CLI harness 部署要求 `--replicas 1`，不接受 OpenClaw 的 `--enable-dingtalk` 和 `--disable-pep`；
+共享镜像中的 `cai-pep` 用于本地远程证明，CLI harness 不启动 PEP 策略服务。
 清理时使用相同的 `--harness`、`--state-dir` 和 `--work-dir`；清理实例保留共享镜像。
 模型、端点和密钥也可分别通过 `CA_MODEL`、`CA_API_BASE_URL`、`CA_API_KEY` 设置，命令行参数优先。
 无鉴权的自建 OpenAI 兼容服务可使用其 SDK 接受的占位 key（例如 `--api-key unused`）。

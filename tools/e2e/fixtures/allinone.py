@@ -67,10 +67,11 @@ def generate(directory, image, mode, region, prefix, *, harnesses=None, ssh=True
             runtime = "cai-agent health --json"
             command = "cai-agent agent --agent main --message " + shlex.quote(PROMPT) + " --json"
         elif harness == "hermes":
-            environment = {"DASHSCOPE_API_KEY": key, "DASHSCOPE_BASE_URL": url, "HERMES_MODEL": model,
+            environment = {"HERMES_MODEL": model,
                            "API_SERVER_ENABLED": "true", "API_SERVER_HOST": "0.0.0.0", "API_SERVER_PORT": "8642",
                            "API_SERVER_KEY": secrets.token_hex(32)}
-            resource("config.yaml", f"model:\n  provider: alibaba\n  default: {model}\n  model: {model}\n", "/opt/data/allinone/hermes/config.yaml")
+            resource("config.yaml", {"model": {"provider": "custom", "base_url": url,
+                     "api_key": key, "default": model, "model": model}}, "/opt/data/allinone/hermes/config.yaml")
             runtime = "python3.11 -c 'import urllib.request; assert urllib.request.urlopen(\"http://127.0.0.1:8642/health\",timeout=20).status == 200'"
             command = "cai-agent chat -q " + shlex.quote(PROMPT)
         elif harness == "pi":

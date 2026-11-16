@@ -436,6 +436,20 @@ apply_target_defaults() {
 }
 
 validate_options() {
+  if [[ "$CA_MODE" == deploy-openclaw || "$CA_MODE" == cleanup ]]; then
+    is_supported_harness "$CA_HARNESS" || die "unsupported harness: $CA_HARNESS"
+  fi
+  if [[ "$CA_MODE" == deploy-openclaw ]]; then
+    if [[ -n "$CA_IMAGE_RELEASE" || -n "$CA_TRUSTED_KEY" ]]; then
+      [[ "$CA_HARNESS" != openclaw ]] || die "--image-release and --trusted-key apply only to CLI harnesses"
+      [[ -n "$CA_IMAGE_RELEASE" && -n "$CA_TRUSTED_KEY" ]] || die "--image-release and --trusted-key must be supplied together"
+    fi
+    if [[ "$CA_HARNESS" != openclaw ]]; then
+      [[ "$CA_DISABLE_PEP" != 1 ]] || die "--disable-pep applies only to OpenClaw; the shared image requires cai-pep for local attestation"
+      [[ "$CA_ENABLE_DINGTALK" != 1 ]] || die "--enable-dingtalk applies only to OpenClaw"
+      [[ "$CA_REPLICAS" == 1 ]] || die "CLI harnesses require --replicas 1; use separate service instances"
+    fi
+  fi
   if [[ -n "$CA_IMAGE_SPEC" ]]; then
     [[ "$CA_MODE" == deploy-vllm-inference ]] || die "--image-spec is supported by vllm-inference deploy only"
     [[ -f "$CA_IMAGE_SPEC" ]] || die "--image-spec must be an existing JSON AppSpec"
@@ -511,17 +525,31 @@ print_startup_config() {
   log "work_dir: $CA_WORK_DIR"
   log "region/zone: $CA_REGION / $CA_ZONE_ID"
   log "instance_type: $CA_INSTANCE_TYPE"
-  if [[ "$CA_SERVICE_ID" == "openclaw-vllm" ]]; then
-    log "vllm_model: $CA_OPENCLAW_VLLM_MODEL_ID"
-    log "vllm_served_model: $CA_OPENCLAW_VLLM_SERVED_MODEL_NAME"
-    log "vllm_build_variants: $CA_OPENCLAW_VLLM_BUILD_VARIANTS"
-  else
-    log "harness: $CA_HARNESS"
-    log "model: $CA_MODEL"
-    log "api_base_url: $CA_API_BASE_URL"
-  fi
+  case "$CA_SERVICE_ID" in
+    openclaw-vllm)
+      log "vllm_model: $CA_OPENCLAW_VLLM_MODEL_ID"
+      log "vllm_served_model: $CA_OPENCLAW_VLLM_SERVED_MODEL_NAME"
+      log "vllm_build_variants: $CA_OPENCLAW_VLLM_BUILD_VARIANTS"
+      ;;
+    vllm-inference)
+      log "vllm_served_model: $CA_VLLM_INFERENCE_SERVED_MODEL_NAME"
+      log "vllm_build_variants: $CA_VLLM_INFERENCE_BUILD_VARIANTS"
+      ;;
+    *)
+      log "harness: $CA_HARNESS"
+      if [[ "$CA_HARNESS" != qodercli ]]; then
+        log "model: $CA_MODEL"
+        log "api_base_url: $CA_API_BASE_URL"
+      fi
+      ;;
+  esac
   log "reference_values: $CA_REFERENCE_VALUES"
-  log "pep: $([[ "$CA_DISABLE_PEP" == "1" ]] && printf disabled || printf enabled)"
+  case "$CA_SERVICE_ID" in
+    openclaw|openclaw-vllm)
+      log "pep service: $([[ "$CA_DISABLE_PEP" == "1" ]] && printf disabled || printf enabled)"
+      ;;
+    allinone-*) log "pep: local attestation helper; policy service disabled" ;;
+  esac
 }
 
 main() {

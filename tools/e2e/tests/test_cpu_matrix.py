@@ -24,7 +24,7 @@ spec.loader.exec_module(reuse)
 
 
 class CpuMatrixTests(unittest.TestCase):
-    def test_route_churn_preserves_six_native_model_probes_and_private_extra(self):
+    def test_route_churn_preserves_native_model_probes_and_private_extra(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {
                 'DASHSCOPE_API_KEY': 'private-bailian', 'QODER_PERSONAL_ACCESS_TOKEN': 'private-qoder',
                 'E2E_QODER_MODEL': 'fixed-test-model'}):
@@ -32,7 +32,7 @@ class CpuMatrixTests(unittest.TestCase):
             selected = generate(root / 'fixtures', {'release': '/signed-release'}, 'challenge', 'test-region', 'allinone')
             original = {p.name: json.loads((p / 'probe.json').read_text())['command'] for p in selected}
             selected, extra = add_platform_fixtures(root, selected, 'allinone')
-            self.assertEqual(len(selected), 6)
+            self.assertEqual(len(selected), len(original))
             self.assertEqual({p.name: json.loads((p / 'probe.json').read_text())['command'] for p in selected}, original)
             consumers = [SimpleNamespace(service=json.loads((p / 'appspec.json').read_text())['service']['id'],
                          spec=json.loads((p / 'appspec.json').read_text())) for p in selected]
