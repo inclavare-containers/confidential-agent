@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 import shlex
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -82,7 +83,7 @@ printf '%s:%s\\n' "$1" "$PWD" >> "$TEST_UV_LOG"
             cuda = work / 'cuda/bin'
             # The real 96 GiB GPU exposed 801 Mamba cache blocks; vLLM's
             # default scheduler requested 1024 and failed before serving.
-            executable(venv / 'vllm', '''python3.11 - "$@" <<'PY'
+            executable(venv / 'vllm', f'''{shlex.quote(sys.executable)} - "$@" <<'PY'
 import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument('--max-num-seqs', type=int, default=1024)
