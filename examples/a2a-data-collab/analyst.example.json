@@ -1,0 +1,11 @@
+{
+  "role": "analyst",
+  "listenHost": "0.0.0.0",
+  "listenPort": 18789,
+  "apiKey": "REPLACE_WITH_API_KEY",
+  "dashscopeBaseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+  "model": "qwen4-max",
+  "peerAlias": "data-owner",
+  "serviceDirectoryPath": "/etc/cai/service-directory.json",
+  "auditPath": "/var/log/cai-a2a-data-collab.jsonl"
+}

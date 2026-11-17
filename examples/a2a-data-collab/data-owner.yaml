@@ -1,0 +1,56 @@
+schema: confidential-agent/v1
+service:
+  id: data-owner-agent
+  ports: [18789]
+  connect: [18789]
+  app_service: cai-a2a-llm-agent.service
+build:
+
+  image_name: a2a-data-owner-agent
+  packages: [ca-certificates, curl, jq, nodejs, npm, tar, xz]
+  files:
+    - source: ./files/agent-server.mjs
+      target: /usr/local/share/confidential-agent/a2a-data-collab/agent-server.mjs
+      executable: true
+    - source: ./files/private-risk-data.jsonl
+      target: /usr/local/share/confidential-agent/a2a-data-collab/private-risk-data.jsonl
+  scripts: [./install-agent.sh]
+  variants:
+    release: { enabled: false }
+    debug: { enabled: true }
+deploy:
+  provider: aliyun
+  image_variant: debug
+  instance_type: ecs.g9i.xlarge
+  disk_gb: 60
+  region: cn-beijing
+  zone_id: cn-beijing-i
+attestation:
+  tee: tdx
+  mode: challenge
+  reference_values: rekor
+  rekor:
+    cosign_key: ./cosign.key
+    slsa_generator: /usr/libexec/shelter/slsa/slsa-generator
+    required: true
+secrets: {}
+resources:
+  agent_config:
+    source: ./secrets/data-owner.json
+    target: /etc/cai/a2a-agent.json
+    mode: "0600"
+a2a:
+  id: data-owner-agent
+  name: Data Owner Agent
+  version: "1.0.0"
+  description: "LLM data-owner agent that answers only from aggregate private data artifacts"
+  interfaces:
+    - protocol_binding: JSONRPC
+      port: 18789
+      path: /a2a
+
+  skills:
+    - id: aggregate-risk
+      name: Aggregate Risk Analysis
+      description: "Return aggregate risk evidence without exposing raw private records"
+      tags: [data, aggregate, confidential]

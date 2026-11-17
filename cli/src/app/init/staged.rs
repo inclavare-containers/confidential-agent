@@ -357,11 +357,11 @@ pub(super) fn write_allinone(args: &InitArgs, project: &InitProject) -> Result<(
         }
         for (source, name) in [
             (
-                "examples/cli-agents/files/tdx-remote-attestation.SKILL.md",
+                "common/skills/tdx-remote-attestation.SKILL.md",
                 "tdx-remote-attestation.SKILL.md",
             ),
             (
-                "examples/cli-agents/files/install-cli-agent-runtime.sh",
+                "common/cli-agents/install-cli-agent-runtime.sh",
                 "install-cli-agent-runtime.sh",
             ),
             (

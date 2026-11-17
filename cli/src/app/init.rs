@@ -470,6 +470,10 @@ fn write_openclaw_project(_cli: &Cli, args: &InitArgs, project: &InitProject) ->
             &repo.join("examples/openclaw/files"),
             &project.dir.join("files"),
         )?;
+        fs::copy(
+            repo.join("common/skills/tdx-remote-attestation.SKILL.md"),
+            project.dir.join("files/tdx-remote-attestation.SKILL.md"),
+        )?;
         write_openclaw_install_script(
             &repo.join("examples/openclaw/install-openclaw.sh"),
             &project.dir.join("install-openclaw.sh"),
@@ -503,11 +507,8 @@ fn write_vllm_inference_project(cli: &Cli, args: &InitArgs, project: &InitProjec
             "cai-nvidia-cc-stack-install.sh",
             "nvidia-persistenced.service",
         ] {
-            fs::copy(
-                repo.join("examples/openclaw-vllm").join(file),
-                project.dir.join(file),
-            )
-            .with_context(|| format!("failed to copy vllm-inference support file '{file}'"))?;
+            fs::copy(repo.join("common/gpu").join(file), project.dir.join(file))
+                .with_context(|| format!("failed to copy vllm-inference support file '{file}'"))?;
         }
         set_mode(&project.dir.join("cai-nvidia-cc-stack-install.sh"), 0o755)?;
 
@@ -549,15 +550,16 @@ fn write_openclaw_vllm_project(_cli: &Cli, args: &InitArgs, project: &InitProjec
             &repo.join("examples/openclaw/files"),
             &project.dir.join("files"),
         )?;
+        fs::copy(
+            repo.join("common/skills/tdx-remote-attestation.SKILL.md"),
+            project.dir.join("files/tdx-remote-attestation.SKILL.md"),
+        )?;
         for file in [
             "cai-nvidia-cc-stack-install.sh",
             "nvidia-persistenced.service",
         ] {
-            fs::copy(
-                repo.join("examples/openclaw-vllm").join(file),
-                project.dir.join(file),
-            )
-            .with_context(|| format!("failed to copy OpenClaw vLLM support file '{file}'"))?;
+            fs::copy(repo.join("common/gpu").join(file), project.dir.join(file))
+                .with_context(|| format!("failed to copy OpenClaw vLLM support file '{file}'"))?;
         }
         set_mode(&project.dir.join("cai-nvidia-cc-stack-install.sh"), 0o755)?;
         let vllm_port = project.vllm_port.to_string();
@@ -600,7 +602,7 @@ fn write_hermes_project(project: &InitProject, args: &InitArgs) -> Result<()> {
             &project.dir.join("files"),
         )?;
         fs::copy(
-            repo.join("examples/cli-agents/files/tdx-remote-attestation.SKILL.md"),
+            repo.join("common/skills/tdx-remote-attestation.SKILL.md"),
             project.dir.join("files/tdx-remote-attestation.SKILL.md"),
         )?;
         write_hermes_install_script(
@@ -645,9 +647,10 @@ fn write_hermes_project(project: &InitProject, args: &InitArgs) -> Result<()> {
 fn write_codex_project(args: &InitArgs, project: &InitProject) -> Result<()> {
     if args.stage != Some(InitStage::Deploy) {
         let repo = find_assets_root()?;
-        copy_dir(
-            &repo.join("examples/cli-agents/files"),
-            &project.dir.join("files"),
+        copy_dir(&repo.join("common/cli-agents"), &project.dir.join("files"))?;
+        fs::copy(
+            repo.join("common/skills/tdx-remote-attestation.SKILL.md"),
+            project.dir.join("files/tdx-remote-attestation.SKILL.md"),
         )?;
         let pinned_codex = confidential_agent_core::software::version("codex");
         let codex_version = args.codex_version.as_deref().unwrap_or(&pinned_codex);
@@ -693,9 +696,10 @@ fn write_codex_project(args: &InitArgs, project: &InitProject) -> Result<()> {
 fn write_claude_code_project(args: &InitArgs, project: &InitProject) -> Result<()> {
     if args.stage != Some(InitStage::Deploy) {
         let repo = find_assets_root()?;
-        copy_dir(
-            &repo.join("examples/cli-agents/files"),
-            &project.dir.join("files"),
+        copy_dir(&repo.join("common/cli-agents"), &project.dir.join("files"))?;
+        fs::copy(
+            repo.join("common/skills/tdx-remote-attestation.SKILL.md"),
+            project.dir.join("files/tdx-remote-attestation.SKILL.md"),
         )?;
         let pinned_claude = confidential_agent_core::software::version("claude-code");
         let claude_code_version = args
@@ -1681,7 +1685,7 @@ fn default_disk_gb(target: InitTarget) -> u32 {
         InitTarget::Allinone => 120,
         InitTarget::Openclaw => 200,
         InitTarget::OpenclawVllm | InitTarget::VllmInference => 512,
-        InitTarget::Hermes => 30,
+        InitTarget::Hermes => 60,
         InitTarget::Codex | InitTarget::Claudecode => 60,
     }
 }

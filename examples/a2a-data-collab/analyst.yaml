@@ -1,0 +1,54 @@
+schema: confidential-agent/v1
+service:
+  id: analyst-agent
+  ports: [18789]
+  connect: [18789]
+  app_service: cai-a2a-llm-agent.service
+build:
+
+  image_name: a2a-analyst-agent
+  packages: [ca-certificates, curl, jq, nodejs, npm, tar, xz]
+  files:
+    - source: ./files/agent-server.mjs
+      target: /usr/local/share/confidential-agent/a2a-data-collab/agent-server.mjs
+      executable: true
+  scripts: [./install-agent.sh]
+  variants:
+    release: { enabled: false }
+    debug: { enabled: true }
+deploy:
+  provider: aliyun
+  image_variant: debug
+  instance_type: ecs.g9i.xlarge
+  disk_gb: 60
+  region: cn-beijing
+  zone_id: cn-beijing-i
+attestation:
+  tee: tdx
+  mode: challenge
+  reference_values: rekor
+  rekor:
+    cosign_key: ./cosign.key
+    slsa_generator: /usr/libexec/shelter/slsa/slsa-generator
+    required: true
+secrets: {}
+resources:
+  agent_config:
+    source: ./secrets/analyst.json
+    target: /etc/cai/a2a-agent.json
+    mode: "0600"
+a2a:
+  id: analyst-agent
+  name: Analyst Agent
+  version: "1.0.0"
+  description: "LLM analyst agent that delegates aggregate data questions over A2A"
+  interfaces:
+    - protocol_binding: JSONRPC
+      port: 18789
+      path: /a2a
+
+  skills:
+    - id: supply-chain-risk-analysis
+      name: Supply Chain Risk Analysis
+      description: "Use a peer data owner through A2A to produce privacy-preserving aggregate risk analysis"
+      tags: [analysis, a2a, confidential]
