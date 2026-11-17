@@ -3672,9 +3672,9 @@ fn cleanup_all_destroys_nondefault_instances_and_retains_builders() {
         all: true,
         dry_run: true,
     };
-    lifecycle::cleanup(&cli, &args).unwrap();
+    cleanup::run(&cli, &args).unwrap();
     assert!(!calls.exists());
-    lifecycle::cleanup(
+    cleanup::run(
         &cli,
         &CleanupArgs {
             dry_run: false,

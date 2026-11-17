@@ -206,10 +206,19 @@ def changed_boot(case, service, instance, before, label):
 def oneclick(case, replicas, variant, reuse=False, kind="alb", transport="ohttp", mode="challenge"):
     service = "vllm-inference"
     case.register(service)
-    spec = prepare(case, service, replicas, kind, transport, mode, reuse, variant)
-    case.command("oneclick-deploy", "up", "--spec", spec, "--non-interactive",
-                 "--allowed-cidr", case.operator_cidr, "--deployer-cidr", case.operator_cidr,
-                 "--no-connect", timeout=28800)
+    work = case.work / "oneclick"
+    command = ["bash", ROOT / "one-click/install.sh", "--target", "vllm-inference", "deploy", "--non-interactive", "--yes",
+               "--state-dir", case.state, "--work-dir", work, "--region", case.region,
+               "--zone-id", os.environ.get("E2E_GPU_ZONE_ID", "cn-beijing-l"), "--replicas", str(replicas),
+               "--allowed-cidr", case.operator_cidr, "--model-key-file", os.environ["E2E_MODEL_KEY_FILE"],
+               "--oss-bucket", os.environ["E2E_MODEL_OSS_BUCKET"], "--vllm-served-model-name", MODEL,
+               "--vllm-build-variants", variant, "--no-start-connect", "--skip-cargo-build", "--skip-deps"]
+    spec = work / "vllm-inference/vllm-inference.yaml"
+    if reuse:
+        spec = prepare(case, service, replicas, kind, transport, mode, True, variant)
+        command += ["--image-spec", spec]
+    environment = dict(os.environ, CA_INSTALL_CLI="0", CA_STATUS_TIMEOUT_SEC="7200")
+    run(command, case.work / "oneclick-deploy", timeout=28800, environment=environment)
     case.checks["oneclick_entrypoint"] = True
     return service, spec
 

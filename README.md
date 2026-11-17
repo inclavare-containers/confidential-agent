@@ -79,57 +79,184 @@ flowchart TB
 
 ---
 
-## 快速开始
+## 快速开始 (Quick Start)
 
-在 Alibaba Cloud Linux 3 x86_64 部署机安装已校验的 CA/Shelter RPM 配套包：
+one-click 沿用已有 `init → build → deploy → connect` 调用链；`init` 只生成本地项目，构建和部署由各自的命令完成。安装器统一为 `one-click/install.sh`，使用 `--target openclaw-vllm` 或 `--target vllm-inference` 选择其他场景，默认 OpenClaw。无需 Git LFS。
 
-```bash
-curl -fSL https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install.sh -o /tmp/install-cagent.sh
-sh /tmp/install-cagent.sh
-```
+`examples/allinone` 面向共享/云市场镜像的免构建消费者；独立 `examples/<harness>` 面向自定义构建。参见 [示例索引](examples/README.md)。OpenClaw 的 PEP 执行拦截是可选 PoC，其他 Harness 只使用 `cai-pep attest` 证明工具。
 
-安装脚本只安装软件。`cagent init` 生成项目；`cagent up` 复用同一套初始化、构建、部署和连接逻辑。云凭证读取环境变量或 `~/.aliyun/config.json`，交互模式缺少凭证时隐藏输入并保存到该文件。模型 API key 可通过 `DASHSCOPE_API_KEY` 提供或交互输入，不需要放进命令行。
 
-**免构建使用共享镜像**：从发布者取得 `image-release.json` 和独立认可的 `publisher.pem`。各实例独立选择 Harness、模型和服务 ID。
+只安装原生工具时，推荐从 [v0.2.0 Release](https://github.com/inclavare-containers/confidential-agent/releases/tag/v0.2.0) 下载 `install-rpm.sh`，运行 `sudo bash install-rpm.sh --version 0.2.0`。它安装 cagent 和配套 Shelter RPM，无需编译 CA；支持 Alibaba Cloud Linux 3 x86_64，详见 [RPM 安装说明](docs/rpm.md)。
+
+完整构建部署可使用 one-click installer。它会在本机安装依赖、下载并校验清单固定的 Shelter RPM、构建当前源码、生成 OpenClaw 配置、交互式选择 operator CIDR，然后通过 Shelter 在阿里云上创建一台 TDX/GPU TEE ECS。需要逐步控制每个 CLI 动作时，参考 [OpenClaw CLI 分步部署示例](docs/openclaw-cli-step-by-step.md)；需要百炼 API 与本地 vLLM 双场景文档时，参考 [OpenClaw one-click 最佳实践](docs/openclaw-one-click-best-practice/README.md)。
 
 ```bash
-cagent up allinone --stage deploy --service-id my-codex --harness codex   --image-release ./image-release.json --trusted-key ./publisher.pem   --output-dir ./projects
+set -euo pipefail
+INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install.sh"
+INSTALL_SCRIPT="$(mktemp)"
+PROXY_URL="${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}"
+FIRST_URL="${PROXY_URL:+${PROXY_URL%/}/}${INSTALL_URL}"
+SECOND_URL="$INSTALL_URL"
+if [[ "${CA_GITHUB_PROXY_FIRST:-1}" == 0 ]]; then
+  SECOND_URL="$FIRST_URL"
+  FIRST_URL="$INSTALL_URL"
+fi
+if ! curl -fL --connect-timeout 10 --max-time 90 "$FIRST_URL" -o "$INSTALL_SCRIPT" ||
+   [[ "$(head -c 2 "$INSTALL_SCRIPT")" != '#!' ]]; then
+  curl -fL --connect-timeout 10 --max-time 90 "$SECOND_URL" -o "$INSTALL_SCRIPT"
+fi
+[[ "$(head -c 2 "$INSTALL_SCRIPT")" == '#!' ]]
+sh "$INSTALL_SCRIPT"
 ```
 
-all-in-one 镜像面向共享镜像、云市场和免构建部署。`examples/<harness>` 提供开发者自定义构建模板；镜像发布者可使用 `init allinone --stage build`，详见 [RPM 与镜像发布流程](docs/rpm.md)。
+在 Alibaba Cloud Linux 3 上，脚本会优先通过系统源安装 `cargo`/`rust`，并为 Cargo 写入 Aliyun crates mirror。默认不会走 rustup；只有显式传入 `--allow-rustup` 时，系统源工具链不可用才会 fallback 到 rustup。
 
-**从源码模板构建独立应用**：
+默认值面向 Alibaba Cloud Linux 3 测试环境；OpenClaw full deploy 当前建议从 alinux3 部署机执行。
+
+| 参数 | 默认值 |
+|---|---|
+| Region | `cn-beijing` |
+| Zone | `cn-beijing-i` |
+| Instance Type | `ecs.g9i.xlarge` |
+| Disk | `200G` |
+| Attestation | `rekor` |
+| State Dir | `$HOME/.confidential-agent` |
+
+脚本会交互式询问缺失的阿里云凭证、百炼 API Key、是否启用钉钉，以及 operator access CIDR。启用钉钉时，镜像会安装并构建 `soimy/openclaw-channel-dingtalk`，再写入 `dingtalk` channel 配置。脚本也会在部署机安装同版本 Node.js/OpenClaw CLI，并把 `confidential-agent` 安装到 PATH。CIDR 默认使用当前部署机公网 IP `/32`，仅支持 IPv4；也可以选择自定义 CIDR 列表，或选择 `0.0.0.0/0`。选择 `0.0.0.0/0` 时脚本会先提示这会把控制面、状态、debug SSH 和 connect 入口暴露给所有 IPv4 来源，且默认 OpenClaw 配置禁用 device auth、仅靠 gateway token 鉴权，0.0.0.0/0 模式下务必妥善保管 token。非交互传入的 `--allowed-cidr` 可用于你的浏览器或运维出口，支持逗号分隔、加引号的空格分隔，或重复传入；脚本仍会额外探测部署机出口 IP 并加入 `deployer` peering，避免资源注入和 connect 被安全组挡住。百炼 API 非交互部署示例：
 
 ```bash
-cagent up openclaw --output-dir ./projects
-# GPU TEE 上的本地模型与 OpenClaw：
-cagent up openclaw-vllm --output-dir ./gpu-projects
-# 已有 AppSpec 可直接使用，不再重复初始化：
-cagent up --spec ./projects/openclaw/openclaw.yaml
+export ALICLOUD_ACCESS_KEY="<your-ak>"
+export ALICLOUD_SECRET_KEY="<your-sk>"
+export DASHSCOPE_API_KEY="<your-bailian-key>"
+
+set -euo pipefail
+INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install.sh"
+INSTALL_SCRIPT="$(mktemp)"
+PROXY_URL="${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}"
+FIRST_URL="${PROXY_URL:+${PROXY_URL%/}/}${INSTALL_URL}"
+SECOND_URL="$INSTALL_URL"
+if [[ "${CA_GITHUB_PROXY_FIRST:-1}" == 0 ]]; then
+  SECOND_URL="$FIRST_URL"
+  FIRST_URL="$INSTALL_URL"
+fi
+if ! curl -fL --connect-timeout 10 --max-time 90 "$FIRST_URL" -o "$INSTALL_SCRIPT" ||
+   [[ "$(head -c 2 "$INSTALL_SCRIPT")" != '#!' ]]; then
+  curl -fL --connect-timeout 10 --max-time 90 "$SECOND_URL" -o "$INSTALL_SCRIPT"
+fi
+[[ "$(head -c 2 "$INSTALL_SCRIPT")" == '#!' ]]
+sh "$INSTALL_SCRIPT" \
+  --non-interactive \
+  --region cn-beijing \
+  --zone-id cn-beijing-i \
+  --instance-type ecs.g9i.xlarge
 ```
 
-首次运行会构建本地镜像并部署；已构建镜像直接部署；`deployed`/`activating` 状态继续资源交付；`active` 实例复用既有基础设施。中断的基础设施操作保留原错误和状态，按 `status`/`destroy` 流程处理。指定 `--no-connect` 可只完成部署。
-
-默认放行检测到的部署机出口 `/32`；可用 `--deployer-cidr` 明确指定，`--allowed-cidr` 增加操作员网段。该值在部署记录中保存，后续 `peering apply` 不依赖原 shell 环境。
+本地 vLLM/GPU TEE 部署示例：
 
 ```bash
-cagent status --live
-cagent tui --refresh 5
-cagent cleanup my-codex
-cagent cleanup --all --dry-run
-# 确认要销毁当前 state-dir 中的全部实例时：
-cagent cleanup --all
+export ALICLOUD_ACCESS_KEY="<your-ak>"
+export ALICLOUD_SECRET_KEY="<your-sk>"
+
+set -euo pipefail
+INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install.sh"
+INSTALL_SCRIPT="$(mktemp)"
+PROXY_URL="${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}"
+FIRST_URL="${PROXY_URL:+${PROXY_URL%/}/}${INSTALL_URL}"
+SECOND_URL="$INSTALL_URL"
+if [[ "${CA_GITHUB_PROXY_FIRST:-1}" == 0 ]]; then
+  SECOND_URL="$FIRST_URL"
+  FIRST_URL="$INSTALL_URL"
+fi
+if ! curl -fL --connect-timeout 10 --max-time 90 "$FIRST_URL" -o "$INSTALL_SCRIPT" ||
+   [[ "$(head -c 2 "$INSTALL_SCRIPT")" != '#!' ]]; then
+  curl -fL --connect-timeout 10 --max-time 90 "$SECOND_URL" -o "$INSTALL_SCRIPT"
+fi
+[[ "$(head -c 2 "$INSTALL_SCRIPT")" == '#!' ]]
+sh "$INSTALL_SCRIPT" --target openclaw-vllm \
+  --non-interactive \
+  --yes \
+  --region cn-beijing \
+  --zone-id cn-beijing-l \
+  --instance-type ecs.gn8v-tee.4xlarge \
+  --disk-gb 512
 ```
 
-`cleanup` 按实际状态枚举实例，包括非默认 Harness；停止 `up` 创建的连接，再调用正常的 `destroy`。保留发布镜像和本地记录。`up` 的连接元数据与日志位于 `<state-dir>/services/<service>/connect-ready.json` 和相邻日志文件。
+如果只想安装 host 侧组件，不创建云资源：
 
-`cai-pep` 的 OpenClaw 工具调用拦截是可选 PoC；其他 Harness 使用其 `attest` 证明工具，不安装执行 Hook。详细说明见 [示例索引](examples/README.md)和 [CLI 分步流程](docs/openclaw-cli-step-by-step.md)。
+```bash
+set -euo pipefail
+INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install.sh"
+INSTALL_SCRIPT="$(mktemp)"
+PROXY_URL="${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}"
+FIRST_URL="${PROXY_URL:+${PROXY_URL%/}/}${INSTALL_URL}"
+SECOND_URL="$INSTALL_URL"
+if [[ "${CA_GITHUB_PROXY_FIRST:-1}" == 0 ]]; then
+  SECOND_URL="$FIRST_URL"
+  FIRST_URL="$INSTALL_URL"
+fi
+if ! curl -fL --connect-timeout 10 --max-time 90 "$FIRST_URL" -o "$INSTALL_SCRIPT" ||
+   [[ "$(head -c 2 "$INSTALL_SCRIPT")" != '#!' ]]; then
+  curl -fL --connect-timeout 10 --max-time 90 "$SECOND_URL" -o "$INSTALL_SCRIPT"
+fi
+[[ "$(head -c 2 "$INSTALL_SCRIPT")" == '#!' ]]
+sh "$INSTALL_SCRIPT" install-only
+```
+
+升级 host 组件前，请等待正在运行的构建、部署和连接操作结束，升级期间不要启动新操作。安装器在替换 Shelter RPM 前检查已安装的 Shelter 可执行文件是否仍被进程使用；若存在活动进程，会保留原包并报出对应 PID。相同版本的重复安装会复用已验证的 RPM。
+
+部署完成后，脚本会输出本地 connect 地址：
+
+```text
+web:    http://127.0.0.1:<port>/openclaw
+ws/api: ws://127.0.0.1:<port>
+token:  <generated-or-provided-token>
+```
+
+生成的 gateway token 会保存在 `$HOME/.confidential-agent/one-click/secrets/gateway.token`，后续重跑会复用同一个 token。部署完成后可以直接运行 `confidential-agent status --live`、`confidential-agent connect` 和 `openclaw tui --url ws://127.0.0.1:<port> --token <token>`。
+
+### 实时状态 TUI
+
+Host 控制面的实时总览使用：
+
+```bash
+confidential-agent tui
+# 只看一个服务；daemon 每 5 秒刷新，TEE evidence 每 2 分钟重新校验
+confidential-agent tui --service openclaw --refresh 5 --attestation-refresh 120
+```
+
+TUI 持续刷新本地 service state 与 Guest `:8088/status`，并自动通过 `attestation-challenge-client` 收集新 evidence、校验 EAR。远程认证面板直接展示 TEE、默认 policy 的判定、BOOTX64.EFI 的 UKI SHA-384 实测值与期望值、匹配结果，以及 Rekor URL、artifact 和本地 upload entry；Agents 表展示首选地址、Mesh ports 和 Connect ports，Service Network 面板展示所选服务的公网/私网地址及全部 service、connect、mesh、MCP 端口。`--attestation-refresh 0` 可关闭自动校验，界面内仍可按 `v` 手动校验。常用键为 `j/k` 或方向键选择、`/` 过滤、`:` 命令模式、`r` 刷新、`?` 帮助、`q` 退出。
+
+界面刻意区分这些含义：`Evidence VERIFIED` 表示本次新证据通过默认 appraisal policy；`UKI MATCH` 表示 evidence 中的 UKI 度量与配置的参考值一致；Rekor entry 来自本地构建 upload provenance，不冒充一次新的在线查询；`Mesh/TNG READY` 只表示本信任域 TNG 配置已就绪，不表示已经建立过业务连接。
+
+清理云资源：
+
+```bash
+set -euo pipefail
+INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install.sh"
+INSTALL_SCRIPT="$(mktemp)"
+PROXY_URL="${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}"
+FIRST_URL="${PROXY_URL:+${PROXY_URL%/}/}${INSTALL_URL}"
+SECOND_URL="$INSTALL_URL"
+if [[ "${CA_GITHUB_PROXY_FIRST:-1}" == 0 ]]; then
+  SECOND_URL="$FIRST_URL"
+  FIRST_URL="$INSTALL_URL"
+fi
+if ! curl -fL --connect-timeout 10 --max-time 90 "$FIRST_URL" -o "$INSTALL_SCRIPT" ||
+   [[ "$(head -c 2 "$INSTALL_SCRIPT")" != '#!' ]]; then
+  curl -fL --connect-timeout 10 --max-time 90 "$SECOND_URL" -o "$INSTALL_SCRIPT"
+fi
+[[ "$(head -c 2 "$INSTALL_SCRIPT")" == '#!' ]]
+sh "$INSTALL_SCRIPT" cleanup \
+  --state-dir "$HOME/.confidential-agent"
+```
+
+---
 
 ## 常用扩展场景
 
 | 场景 | 入口 |
 |---|---|
-| **GPU TEE（vLLM + H20）** | CLI: `cagent up openclaw-vllm`；手动路径: `examples/openclaw-vllm/`，用 `ecs.gn8v-tee.4xlarge`，spec 里追加 NVIDIA CC 驱动安装脚本。 |
+| **GPU TEE（vLLM + H20）** | one-click: `one-click/install.sh --target openclaw-vllm`；手动路径: `examples/openclaw-vllm/`，用 `ecs.gn8v-tee.4xlarge`，spec 里追加 NVIDIA CC 驱动安装脚本。 |
 | **最小 MCP Server** | `examples/mcp/mcp-demo.yaml`，最薄的一个 spec，可作为模板。 |
 | **镜像预发布 / 多次部署复用** | build 后运行 `confidential-agent image publish <service> --spec <path>`，把 qcow2 导入为阿里云自定义镜像；匹配时 `deploy` 会复用该 image，清理由 `image unpublish` / `image prune` 管理。 |
 | **多实例 Mesh** | 在不同的 spec 文件里使用相同的 `connect` 端口集合分别 `deploy`，CLI 会自动维护 `mesh-bundle.json` 并把对端公网 CIDR 注入安全组。 |
@@ -146,15 +273,15 @@ confidential-agent/
 ├── shelter/               # 把 AppSpec 渲染成 Shelter build YAML 的纯函数库
 ├── cli/                   # confidential-agent (host 控制面)
 ├── daemon/                # confidential-agentd (guest 控制面 + initrd-fetch)
-├── gateway/               # cai-gateway：mesh 调用身份、MCP 代理和审计
-├── common/                # 共享 Node/GPU 安装库和证明 Skill
+├── gateway/               # cai-gateway：mesh 身份校验、MCP 转发与审计
+├── common/                # 共享 Node/GPU 安装库与证明 Skill
 ├── cai-pep/               # Policy Enforcement Point，运行时 sandbox + attest helper
 ├── tools/
 │   ├── policies/          # Trustee/OPA rego（生产 + dev）
 │   └── e2e/               # 端到端测试 runner、case 模板与探针
 ├── cagent.spec            # 原生工具与 CLI 的 RPM
 ├── packaging/             # 源码准备、固定工具下载与 RPM 打包
-├── hack/                  # Shelter Release RPM 校验清单与下载工具
+├── hack/                  # 当前 CA 兼容补丁版 Shelter RPM
 └── examples/
     ├── openclaw/          # OpenClaw + cai-pep（推荐起步）
     ├── openclaw-vllm/     # OpenClaw + vLLM + NVIDIA TEE

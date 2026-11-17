@@ -62,10 +62,6 @@ impl VllmBuildVariants {
 }
 
 pub(super) fn cmd_init(cli: &Cli, args: &InitArgs) -> Result<()> {
-    create_project(cli, args).map(|_| ())
-}
-
-pub(super) fn create_project(cli: &Cli, args: &InitArgs) -> Result<(PathBuf, Option<InitStage>)> {
     let mut resolved_args = args.clone();
     staged::resolve_interactive(&mut resolved_args)?;
     let args = &resolved_args;
@@ -117,7 +113,7 @@ pub(super) fn create_project(cli: &Cli, args: &InitArgs) -> Result<(PathBuf, Opt
         "[ca] Next steps: {}",
         project.dir.join("NEXT_STEPS.md").display()
     );
-    Ok((project.spec_path, args.stage))
+    Ok(())
 }
 
 fn resolve_project(args: &InitArgs, target: InitTarget) -> Result<InitProject> {
@@ -428,7 +424,7 @@ fn prompt_target() -> Result<InitTarget> {
     }
 }
 
-pub(super) fn prompt_secret(prompt: &str) -> Result<String> {
+fn prompt_secret(prompt: &str) -> Result<String> {
     print!("{prompt}: ");
     std::io::stdout().flush().ok();
     let _ = Command::new("sh")

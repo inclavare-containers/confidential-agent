@@ -4,7 +4,7 @@ use crate::cli::{
     ImageCommands, ImagePruneArgs, ImagePublishArgs, ImageUnpublishArgs, InitArgs,
     InitReferenceValues, InitStage, InitTarget, InjectArgs, KeyArgs, KeyCommands, MeshArgs,
     MeshCommands, MigrateArgs, OutputFormat, PeeringArgs, PeeringCommands, ReportArgs, SpecArgs,
-    SpecCommands, SshArgs, StatusArgs, TrusteeArgs, TrusteeCommands, TuiArgs, UpArgs, UpgradeArgs,
+    SpecCommands, SshArgs, StatusArgs, TrusteeArgs, TrusteeCommands, TuiArgs, UpgradeArgs,
     UpgradeCommands,
 };
 use anyhow::{bail, Context, Result};
@@ -610,7 +610,7 @@ use init::*;
 mod self_describe;
 use self_describe::*;
 
-mod lifecycle;
+mod cleanup;
 mod trustee;
 
 fn prepare(

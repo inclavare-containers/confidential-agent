@@ -349,7 +349,7 @@ Confidential Agent 自己写的部分集中在：**用户视角的 spec、可复
 
 ## 12. 安装、编排和公共模板
 
-`one-click/install.sh` 委托发布包安装器安装 CA/Shelter RPM；不承担部署参数、凭证、进程等待或资源销毁。CLI 的 `up` 直接调用已有 init/build/deploy/connect 流程，`cleanup` 按 state directory 枚举实例并调用 destroy。`common/` 保存 Node、NVIDIA CC、vLLM 安装库与共享证明 Skill；guest 构建资产随 CA 版本一起交付。
+`one-click/install.sh` 统一负责 bootstrap，并沿用现有的 init/build/deploy/connect 编排。`init` 只生成本地项目，`build` 构建镜像，`deploy` 管理实例部署和资源交付，`connect` 管理访问通道；不增加统一启动命令。`cleanup` 按 state directory 枚举实例并调用 destroy。`common/` 保存 Node、NVIDIA CC、vLLM 安装库与共享证明 Skill。
 
 网关只接受与本机配置相同 `mesh_generation` 的已签名 token。完整 `mesh sync` 生成新版本并逐个投递，投递期间不同版本之间的请求会被拒绝；完成全量投递后恢复。`mesh sync --service ID` 重发已保存的 bundle，用于恢复单个节点，不增加 generation，也不改变拓扑。
 

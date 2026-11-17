@@ -38,7 +38,7 @@ jobs:
       - name: Check versions and scripts
         run: |
           python3.11 packaging/check-version.py
-          for script in packaging/*.sh hack/*.sh common/*.sh common/gpu/*.sh common/cli-agents/*.sh; do bash -n "$script"; done
+          for script in packaging/*.sh hack/*.sh one-click/lib/*.sh common/*.sh common/gpu/*.sh common/cli-agents/*.sh; do bash -n "$script"; done
           sh -n one-click/install.sh
           git diff --check
       - name: Test Rust workspace
@@ -62,7 +62,7 @@ jobs:
           tar -xzf "$RUNNER_TEMP/openclaw-fixture/openclaw-$version.tgz" -C "$RUNNER_TEMP/openclaw-fixture"
       - name: Test E2E orchestration
         run: |
-          export CA_BIN="$PWD/target/debug/confidential-agent" CA_TOOLS_DIR="$RUNNER_TEMP/cagent-tools"
+          export CA_BIN="$PWD/target/debug/confidential-agent" CA_PEP_BIN="$PWD/target/debug/cai-pep" CA_TOOLS_DIR="$RUNNER_TEMP/cagent-tools"
           python3.11 -m unittest discover -s tools/e2e/tests -v
           for test in tools/e2e/tests/*.sh; do
             case "$test" in

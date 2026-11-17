@@ -204,8 +204,8 @@ confidential-agent destroy SERVICE
 | `<state>/services/<service-id>/` | 构建/发布记录、构建清单、实例身份、密钥、运行状态 |
 | `<state>/services/<service-id>/shelter/` | CA 管理的 Shelter 构建记录与 Terraform 工作目录，不要另建同名独立 Shelter 工作区替代 |
 | `<state>/services/<service-id>/shelter/cache/` | Shelter 的基础镜像等构建缓存；包解析缓存另在 `shelter/inputs/resolver-cache/` |
-| 源码中的 `one-click/` | RPM 安装入口；部署与清理由 CLI 负责 |
-| `<state>/services/<service-id>/connect-ready.json` | `up` 创建的后台连接记录 |
+| 源码中的 `one-click/` | 统一安装入口，编排已有 init/build/deploy/connect 命令 |
+| `<state>/one-click/` | one-click 默认生成工作目录，`--work-dir` 可指定其他位置 |
 | `/usr/share/cagent/` | RPM 提供的模板资产，由 init 复制到可编辑项目目录 |
 
 NEXT_STEPS 会写入明确的 `cd` 和绝对 `--state-dir`。自定义 state 时所有操作使用同一个绝对路径；
@@ -245,7 +245,7 @@ CLI 覆盖选项会记录到部署快照；使用原 spec 恢复同一部署时�
 
 ## GitHub 下载与大陆网络
 
-RPM、Shelter RPM 和固定原生工具下载支持代理优先及官方回退。one-click 入口不再拉取源码或 Git LFS，远程入口从官方 Release 取得安装器。下载器校验 RPM 的 SHA256 和 payload 摘要；校验失败时尝试下一个下载地址。
+RPM、Shelter RPM 和固定原生工具下载支持代理优先及官方回退。one-click 的统一 bootstrap 可拉取指定源码版本，但不再安装或拉取 Git LFS。下载器校验 RPM 的 SHA256 和 payload 摘要；校验失败时尝试下一个下载地址。
 
 ```bash
 # 默认：代理优先，失败回退官方；可替换为自己可信且支持对应资源类型的代理。
