@@ -18,11 +18,7 @@ command() {
   fi
   builtin command "$@"
 }
-if [[ "$TEST_ENTRY" == one-click ]]; then
-  source "$TEST_REPO/one-click/lib/deploy.sh"
-else
-  source "$TEST_REPO/tools/e2e/lib/common.sh"
-fi
+source "$TEST_REPO/tools/e2e/lib/common.sh"
 log() { :; }
 die() { echo "$*" >&2; exit 1; }
 record_cmd() { :; }
@@ -101,7 +97,7 @@ CHECK
   fi
 }
 
-for entry in one-click e2e; do
+for entry in e2e; do
   run_case "$entry" old none success 1 yes
   run_case "$entry" current none success 0 yes
   run_case "$entry" newer none success 0 yes

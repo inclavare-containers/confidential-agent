@@ -84,7 +84,6 @@ install -m 0644 hack/shelter-rpm.json %{buildroot}%{_datadir}/cagent/shelter-rpm
 %check
 export CARGO_TARGET_DIR=%{cagent_target}
 cargo test --release --locked --offline -p confidential-agent-cli --quiet
-bash one-click/tests/shelter-cleanup.sh
 bash one-click/tests/shelter-upgrade.sh
 bash one-click/tests/paired-rpm-upgrade.sh
 %{cagent_target}/release/confidential-agent --version

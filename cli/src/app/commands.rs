@@ -8,6 +8,8 @@ const DAEMON_STATUS_WAIT_INTERVAL: Duration = Duration::from_secs(5);
 pub(crate) fn run(cli: &Cli) -> Result<()> {
     match &cli.command {
         Commands::Init(args) => cmd_init(cli, args),
+        Commands::Up(args) => lifecycle::up(cli, args),
+        Commands::Cleanup(args) => lifecycle::cleanup(cli, args),
         Commands::Build(args) => cmd_build(cli, args),
         Commands::Deploy(args) => cmd_deploy(cli, args),
         Commands::Docs(args) => cmd_docs(args),
@@ -1093,7 +1095,7 @@ fn tng_launch_config(config: &serde_json::Value) -> serde_json::Value {
     value
 }
 
-fn cmd_connect_start(
+pub(super) fn cmd_connect_start(
     cli: &Cli,
     args: &ConnectStartArgs,
     from_card: Option<&str>,
@@ -1196,7 +1198,7 @@ fn read_connect_ready(path: &Path) -> Result<ConnectReadyFile> {
     Ok(ready)
 }
 
-fn cmd_connect_stop(args: &ConnectStopArgs) -> Result<()> {
+pub(super) fn cmd_connect_stop(args: &ConnectStopArgs) -> Result<()> {
     let _ready_lock = lock_operation_file(&args.ready_json.with_extension("lock"))?;
     let ready = read_connect_ready(&args.ready_json)?;
     ready.process.stop()?;

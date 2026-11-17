@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 
 log() {
-  printf '[one-click] %s\n' "$*"
+  printf '[e2e-host] %s\n' "$*"
 }
 
 warn() {
-  printf '[one-click] warning: %s\n' "$*" >&2
+  printf '[e2e-host] warning: %s\n' "$*" >&2
 }
 
 die() {
-  printf '[one-click] error: %s\n' "$*" >&2
+  printf '[e2e-host] error: %s\n' "$*" >&2
   exit 1
 }
 

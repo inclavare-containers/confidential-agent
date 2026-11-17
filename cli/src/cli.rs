@@ -173,6 +173,10 @@ pub(crate) struct Cli {
 #[derive(Debug, Subcommand)]
 pub(crate) enum Commands {
     Init(InitArgs),
+    /// Initialize, build if needed, deploy and start a protected connection.
+    Up(UpArgs),
+    /// Destroy recorded instances, including non-default harnesses.
+    Cleanup(CleanupArgs),
     Build(BuildArgs),
     Deploy(DeployArgs),
     Docs(DocsArgs),
@@ -340,6 +344,35 @@ pub(crate) struct InitArgs {
     pub(crate) codex_version: Option<String>,
     #[arg(long)]
     pub(crate) claude_code_version: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct UpArgs {
+    #[command(flatten)]
+    pub(crate) init: InitArgs,
+    /// Use an existing project instead of generating one.
+    #[arg(long)]
+    pub(crate) spec: Option<PathBuf>,
+    /// Operator networks allowed to reach the instance; defaults to this host.
+    #[arg(long, value_delimiter = ',')]
+    pub(crate) allowed_cidr: Vec<String>,
+    #[arg(long, env = "CA_DEPLOYER_CIDR")]
+    pub(crate) deployer_cidr: Option<String>,
+    #[arg(long)]
+    pub(crate) no_connect: bool,
+    #[arg(long, default_value_t = 120)]
+    pub(crate) wait_ready: u64,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct CleanupArgs {
+    #[arg(required_unless_present = "all", conflicts_with = "all")]
+    pub(crate) service: Option<String>,
+    /// Destroy every recorded instance in this state directory.
+    #[arg(long)]
+    pub(crate) all: bool,
+    #[arg(long)]
+    pub(crate) dry_run: bool,
 }
 
 #[derive(Debug, Args)]
