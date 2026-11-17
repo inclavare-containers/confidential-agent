@@ -39,6 +39,15 @@ test_normalize_cidr_list() {
   assert_eq "203.0.113.999/32" "$invalid" "normalize_cidr_list should report the invalid token"
 }
 
+test_non_interactive_detected_cidr_reaches_child() (
+  unset CA_ALLOWED_CIDR CA_ALLOWED_CIDRS CA_DEPLOYER_CIDR CA_OPERATOR_EGRESS_IP
+  CA_NON_INTERACTIVE=1
+  detect_public_ip() { printf '203.0.113.10\n'; }
+  resolve_allowed_cidr
+  assert_eq "203.0.113.10/32" "$(bash -c 'printf "%s" "${CA_DEPLOYER_CIDR:-}"')" \
+    "automatically detected deployer CIDR should reach CA child processes"
+)
+
 write_fake_ca() {
   local path="$1"
   cat >"$path" <<'FAKE'
@@ -138,5 +147,6 @@ test_ensure_operator_peering_labels_and_deployer() {
 }
 
 test_normalize_cidr_list
+test_non_interactive_detected_cidr_reaches_child
 test_ensure_operator_peering_labels_and_deployer
 printf 'ok - one-click CIDR list tests passed\n'

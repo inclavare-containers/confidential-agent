@@ -391,7 +391,7 @@ resolve_allowed_cidr() {
   local ip detected
   if ip="$(detect_public_ip)"; then
     detected="$ip/32"
-    CA_DEPLOYER_CIDR="${CA_DEPLOYER_CIDR:-$detected}"
+    export CA_DEPLOYER_CIDR="${CA_DEPLOYER_CIDR:-$detected}"
     export CA_OPERATOR_EGRESS_IP="${CA_OPERATOR_EGRESS_IP:-$ip}"
     if [[ "$CA_NON_INTERACTIVE" == "1" ]]; then
       set_allowed_cidrs "$detected" "detected operator"
