@@ -1,10 +1,11 @@
 use crate::cli::{
-    A2aArgs, A2aCommands, BuildArgs, Cli, Commands, ConnectArgs, ConnectCommands, ConnectStartArgs,
-    ConnectStopArgs, DeployArgs, DestroyArgs, DocsArgs, DocsTopic, ImageArgs, ImageCommands,
-    ImagePruneArgs, ImagePublishArgs, ImageUnpublishArgs, InitArgs, InitReferenceValues, InitStage,
-    InitTarget, InjectArgs, KeyArgs, KeyCommands, MeshArgs, MeshCommands, MigrateArgs,
-    OutputFormat, PeeringArgs, PeeringCommands, ReportArgs, SpecArgs, SpecCommands, SshArgs,
-    StatusArgs, TrusteeArgs, TrusteeCommands, TuiArgs, UpgradeArgs, UpgradeCommands,
+    A2aArgs, A2aCommands, BuildArgs, CleanupArgs, Cli, Commands, ConnectArgs, ConnectCommands,
+    ConnectStartArgs, ConnectStopArgs, DeployArgs, DestroyArgs, DocsArgs, DocsTopic, ImageArgs,
+    ImageCommands, ImagePruneArgs, ImagePublishArgs, ImageUnpublishArgs, InitArgs,
+    InitReferenceValues, InitStage, InitTarget, InjectArgs, KeyArgs, KeyCommands, MeshArgs,
+    MeshCommands, MigrateArgs, OutputFormat, PeeringArgs, PeeringCommands, ReportArgs, SpecArgs,
+    SpecCommands, SshArgs, StatusArgs, TrusteeArgs, TrusteeCommands, TuiArgs, UpArgs, UpgradeArgs,
+    UpgradeCommands,
 };
 use anyhow::{bail, Context, Result};
 use base64::{
@@ -609,6 +610,7 @@ use init::*;
 mod self_describe;
 use self_describe::*;
 
+mod lifecycle;
 mod trustee;
 
 fn prepare(
