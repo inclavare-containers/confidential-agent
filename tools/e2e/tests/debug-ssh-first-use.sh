@@ -54,8 +54,10 @@ PermitRootLogin yes
 UsePAM yes
 LogLevel ERROR
 """)
-        process = subprocess.Popen([sshd, "-D", "-e", "-f", str(config)],
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        # Connection children can retain stderr after the listener exits.
+        with (root / f"{host}-sshd.log").open("wb") as log:
+            process = subprocess.Popen([sshd, "-D", "-e", "-f", str(config)],
+                                       stdout=subprocess.DEVNULL, stderr=log)
         try:
             deadline = time.monotonic() + 5
             while time.monotonic() < deadline:
