@@ -5,3 +5,5 @@ sed -i \
   -e 's|http://mirrors.cloud.aliyuncs.com|https://mirrors.aliyun.com|g' \
   -e 's|http://mirrors.aliyun.com|https://mirrors.aliyun.com|g' \
   /etc/yum.repos.d/*.repo
+# Cold CI runners download the build and installation dependencies over the public mirror.
+printf '\nmax_parallel_downloads=10\n' >> /etc/dnf/dnf.conf
