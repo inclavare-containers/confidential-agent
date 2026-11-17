@@ -27,33 +27,42 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.11'
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
       - name: Install test tools
         run: sudo apt-get update && sudo apt-get install -y rpm
       - name: Check versions and scripts
         run: |
           python3.11 packaging/check-version.py
-          bash -n packaging/*.sh one-click/lib/*.sh hack/*.sh
-          sh -n one-click/install.sh one-click/install-openclaw-vllm.sh one-click/install-vllm-inference.sh
+          for script in packaging/*.sh hack/*.sh common/*.sh common/gpu/*.sh common/cli-agents/*.sh; do bash -n "$script"; done
+          sh -n one-click/install.sh
           git diff --check
+      - name: Test Rust workspace
+        run: cargo test --locked --workspace
       - name: Test verified downloads and package upgrades
         run: |
           python3.11 -m unittest discover -s packaging/tests -v
-          bash one-click/tests/connect-readiness.sh
-          bash one-click/tests/workspace-paths.sh
-          bash one-click/tests/shelter-cleanup.sh
-          bash one-click/tests/shelter-upgrade.sh
-          bash one-click/tests/paired-rpm-upgrade.sh
       - name: Test one-click harness configuration
         run: |
           cargo build --locked -p confidential-agent-cli -p cai-pep
-          bash one-click/tests/harness-config.sh
-          cargo test --locked -p confidential-agent-core spec::tests::published_rekor
+          for test in one-click/tests/*.sh; do bash "$test"; done
       - name: Fetch native tools for E2E tests
         env:
           CA_GITHUB_PROXY_FIRST: "0"
         run: packaging/fetch-native-tools.sh "$RUNNER_TEMP/cagent-tools"
+      - name: Fetch the pinned OpenClaw test fixture
+        run: |
+          mkdir -p "$RUNNER_TEMP/openclaw-fixture"
+          version="$(python3.11 -c 'import json; print(json.load(open("software-versions.json"))["openclaw"])')"
+          npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP/openclaw-fixture" "openclaw@$version"
+          tar -xzf "$RUNNER_TEMP/openclaw-fixture/openclaw-$version.tgz" -C "$RUNNER_TEMP/openclaw-fixture"
       - name: Test E2E orchestration
-        run: CA_BIN="$PWD/target/debug/confidential-agent" CA_TOOLS_DIR="$RUNNER_TEMP/cagent-tools" python3.11 -m unittest discover -s tools/e2e/tests -v
+        run: |
+          export CA_BIN="$PWD/target/debug/confidential-agent" CA_TOOLS_DIR="$RUNNER_TEMP/cagent-tools"
+          python3.11 -m unittest discover -s tools/e2e/tests -v
+          for test in tools/e2e/tests/*.sh; do bash "$test"; done
+          for test in tools/e2e/tests/*.mjs; do node "$test" "$RUNNER_TEMP/openclaw-fixture/package"; done
 
   rpm:
     needs: checks

@@ -216,335 +216,53 @@ export ALICLOUD_SECRET_KEY="<YOUR_SECRET_KEY>"
 | `--oss-endpoint`    | OSS Endpoint，默认 `https://oss-cn-beijing-internal.aliyuncs.com`。 |
 | `--replicas`        | vLLM 副本数，默认 `1`（只创建单节点实例，不创建ALB网关）；`>1` 时部署 N 个副本，前置提供ALB网关将推理请求负载均衡到N个节点）。 |
 
-### 步骤三：执行一键部署
+### 步骤三：安装与部署
 
-在部署机上执行以下命令进入交互式部署：
-
-```bash
-set -euo pipefail
-INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install-vllm-inference.sh"
-INSTALL_SCRIPT="$(mktemp)"
-PROXY_URL="${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}"
-FIRST_URL="${PROXY_URL:+${PROXY_URL%/}/}${INSTALL_URL}"
-SECOND_URL="$INSTALL_URL"
-if [[ "${CA_GITHUB_PROXY_FIRST:-1}" == 0 ]]; then
-  SECOND_URL="$FIRST_URL"
-  FIRST_URL="$INSTALL_URL"
-fi
-if ! curl -fL --connect-timeout 10 --max-time 90 "$FIRST_URL" -o "$INSTALL_SCRIPT" ||
-   [[ "$(head -c 2 "$INSTALL_SCRIPT")" != '#!' ]]; then
-  curl -fL --connect-timeout 10 --max-time 90 "$SECOND_URL" -o "$INSTALL_SCRIPT"
-fi
-[[ "$(head -c 2 "$INSTALL_SCRIPT")" == '#!' ]]
-sh "$INSTALL_SCRIPT"
-```
-
-脚本默认进入交互模式，会自动询问缺失的阿里云凭证、模型密钥文件、OSS 路径等必要参数。常用默认配置如下：
-
-| 配置项               | 默认值                                                 | 说明                                          |
-|----------------------|--------------------------------------------------------|-----------------------------------------------|
-| Region               | `cn-beijing`                                           | 阿里云地域。                                  |
-| Zone                 | `cn-beijing-l`                                         | 支持 gn8v-tee 实例规格的可用区。              |
-| Instance Type        | `ecs.gn8v-tee.4xlarge`                                 | 默认 TDX 异构机密计算实例规格。               |
-| System Disk          | `512G`                                                 | 镜像与运行态所需磁盘空间。                    |
-| Replicas            | `1`                                                    | 运行vLLM的gn8v-tee实例副本数。                                |
-| vLLM Version         | `0.28.0`                                               | vLLM 推理引擎版本。                           |
-| vLLM Port            | `8080`                                                 | vLLM OpenAI 兼容 API 端口。                   |
-| Served Model Name    | `Qwen3.8-27B`                                            | vLLM 对外暴露的模型名称。                     |
-| Reference Value      | `rekor`                                                | 构建后将参考值上传 Rekor，部署时使用 Rekor 验证。 |
-| Attestation Mode     | `challenge`                                            | 远程证明通过后才下发模型密钥。                |
-| State Dir            | `$HOME/.confidential-agent`                            | 本地状态、密钥、Terraform 和构建产物目录。    |
-
-以下示例使用步骤一提供的预加密 Qwen3.8-27B 模型（`conf-ai:/qwen3.8-27b-gocryptfs/`）与演示密钥文件 `~/cachefs-password`；如使用自有模型，请将 `--oss-bucket`、`--model-key-file` 与 `--vllm-served-model-name` 替换为实际值。
-
-非交互部署示例：
+安装脚本只安装 RPM，部署参数、凭证、等待和连接统一由 CLI 处理：
 
 ```bash
-set -euo pipefail
-INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install-vllm-inference.sh"
-INSTALL_SCRIPT="$(mktemp)"
-PROXY_URL="${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}"
-FIRST_URL="${PROXY_URL:+${PROXY_URL%/}/}${INSTALL_URL}"
-SECOND_URL="$INSTALL_URL"
-if [[ "${CA_GITHUB_PROXY_FIRST:-1}" == 0 ]]; then
-  SECOND_URL="$FIRST_URL"
-  FIRST_URL="$INSTALL_URL"
-fi
-if ! curl -fL --connect-timeout 10 --max-time 90 "$FIRST_URL" -o "$INSTALL_SCRIPT" ||
-   [[ "$(head -c 2 "$INSTALL_SCRIPT")" != '#!' ]]; then
-  curl -fL --connect-timeout 10 --max-time 90 "$SECOND_URL" -o "$INSTALL_SCRIPT"
-fi
-[[ "$(head -c 2 "$INSTALL_SCRIPT")" == '#!' ]]
-sh "$INSTALL_SCRIPT" \
-  --non-interactive \
-  --yes \
-  --region cn-beijing \
-  --zone-id cn-beijing-l \
-  --instance-type ecs.gn8v-tee.4xlarge \
-  --disk-gb 512 \
-  --oss-bucket conf-ai:/qwen3.8-27b-gocryptfs/ \
-  --vllm-served-model-name Qwen3.8-27B \
-  --model-key-file ~/cachefs-password
+curl -fSL https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install.sh -o /tmp/install-cagent.sh
+sh /tmp/install-cagent.sh
+cagent up vllm-inference --oss-bucket YOUR_BUCKET \
+  --model-key-file /private/model-decryption-key --output-dir ./projects
 ```
 
-多副本（N 个 运行vLLM的gn8v-tee实例 + 1个ALB）部署示例：
+CLI 读取 `~/.aliyun/config.json` 或云凭证环境变量。未配置时，交互模式隐藏输入并保存凭证。`--oss-endpoint` 控制模型下载端点；镜像发布上传使用独立的 `CA_IMAGE_OSS_ENDPOINT`。
+
+已有签名镜像时跳过构建：
 
 ```bash
-set -euo pipefail
-INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install-vllm-inference.sh"
-INSTALL_SCRIPT="$(mktemp)"
-PROXY_URL="${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}"
-FIRST_URL="${PROXY_URL:+${PROXY_URL%/}/}${INSTALL_URL}"
-SECOND_URL="$INSTALL_URL"
-if [[ "${CA_GITHUB_PROXY_FIRST:-1}" == 0 ]]; then
-  SECOND_URL="$FIRST_URL"
-  FIRST_URL="$INSTALL_URL"
-fi
-if ! curl -fL --connect-timeout 10 --max-time 90 "$FIRST_URL" -o "$INSTALL_SCRIPT" ||
-   [[ "$(head -c 2 "$INSTALL_SCRIPT")" != '#!' ]]; then
-  curl -fL --connect-timeout 10 --max-time 90 "$SECOND_URL" -o "$INSTALL_SCRIPT"
-fi
-[[ "$(head -c 2 "$INSTALL_SCRIPT")" == '#!' ]]
-sh "$INSTALL_SCRIPT" \
-  --non-interactive \
-  --yes \
-  --region cn-beijing \
-  --zone-id cn-beijing-l \
-  --instance-type ecs.gn8v-tee.4xlarge \
-  --disk-gb 512 \
-  --replicas 2 \
-  --oss-bucket conf-ai:/qwen3.8-27b-gocryptfs/ \
-  --vllm-served-model-name Qwen3.8-27B \
-  --model-key-file ~/cachefs-password
+cagent up vllm-inference --stage deploy --service-id inference \
+  --image-release ./image-release.json --trusted-key ./publisher.pem \
+  --oss-bucket YOUR_BUCKET --model-key-file /private/model-decryption-key \
+  --replicas 3 --output-dir ./projects
 ```
 
-### 步骤四：等待部署完成并确认
+分阶段多副本模板使用 ALB + OHTTP。默认放行部署机出口 `/32`；可用 `--deployer-cidr` 指定部署机网段，并用 `--allowed-cidr` 添加客户端网段。重用项目执行 `cagent up --spec ./projects/inference/instance.yaml`，不重新生成密钥和配置。
 
-脚本会自动完成以下动作：
+### 步骤四：状态与访问
 
-1. 构建和安装部署机依赖。
-
-2. 构建gn8v-tee实例使用的系统镜像，内置vLLM推理服务，启用全盘加密和度量能力。
-
-3. 在本地对镜像进行度量，并将镜像参考值上传Rekor的公共透明日志服务。
-
-4. 创建阿里云云资源并启动 gn8v-tee TDX ECS 实例（如果设置`replicas>1`则将创建多个副本，并创建一个额外的ALB负载均网关实例）。
-
-5. 远程证明验证实例通过后注入模型解密密钥和运行时配置。
-
-6. gn8v-tee实例从阿里云OSS挂载模型密文数据，并在实例内按需解密模型密文。
-
-7. gn8v-tee实例启动vLLM进程，并加载解密后的模型，启动推理服务。
-
-8. 部署机启动本地 TNG 隧道。
-
-部署成功后，脚本会输出类似以下信息：
-
-```plaintext
-Deployment summary
-  state_dir: /root/.confidential-agent
-  work_dir:  /root/.confidential-agent/one-click
-  spec:      /root/.confidential-agent/one-click/vllm-inference/vllm-inference.yaml
-  service:   vllm-inference
-  region:    cn-beijing
-  zone_id:   cn-beijing-l
-  instance:  ecs.gn8v-tee.4xlarge
-  cidrs:     203.0.113.10/32
-  deployer:  203.0.113.10/32
-  vllm:      curl http://127.0.0.1:8080/v1/models
-  chat:      curl http://127.0.0.1:8080/v1/chat/completions \
-                 -H 'Content-Type: application/json' \
-                 -d '{"model":"Qwen3.8-27B","messages":[{"role":"user","content":"hi"}]}'
-  connect:   running (pid 12345, log /root/.confidential-agent/one-click/connect-vllm-inference.log)
-```
-
-**说明**
-
-TNG隧道监听在部署机本地 `127.0.0.1:8080`。通过 `curl http://127.0.0.1:8080/v1/models` 可确认 vLLM 推理服务已就绪。
-
-### 步骤五：访问推理服务
-
-* **在部署机上访问**
-
-  部署脚本已在部署机上自动启动TNG隧道，监听本地 `127.0.0.1:8080`。可直接使用下方 `curl` 示例发起请求，所有推理流量均通过TNG隧道进入 TDX 实例。
-
-  查看模型列表：
-
-  ```bash
-  curl http://127.0.0.1:8080/v1/models
-  ```
-
-  发起非流式对话推理请求：
-
-  ```bash
-  curl http://127.0.0.1:8080/v1/chat/completions \
-      -X POST \
-      -H "Content-Type: application/json" \
-      -d '{"model": "Qwen3.8-27B", "messages": [{"role": "user", "content": "你好"}], "temperature": 0.0, "max_tokens": 132, "stream": false}'
-  ```
-
-  发起流式推理请求：
-
-  ```bash
-  curl http://127.0.0.1:8080/v1/chat/completions \
-      -X POST \
-      -H "Content-Type: application/json" \
-      -d '{"model": "Qwen3.8-27B", "messages": [{"role": "user", "content": "你好"}], "temperature": 0.0, "max_tokens": 132, "stream": true}'
-  ```
-
-  隧道在建立时完成TDX远程证明，确认对端为可信的 TDX 实例后，推理 Prompt 与回复经端到端的HPKE信封加密算法传输。
-
-
-* **从其他客户端（如个人电脑/手机端）访问**
-
-客户端需要安装与部署机兼容的 `confidential-agent` 和 TNG 工具。默认安全组只允许部署机的公网出口；在复制状态前，先在部署机上授权客户端的实际公网出口 CIDR：
-
-  ```bash
-  CLIENT_CIDR="198.51.100.23/32"  # 替换为客户端实际公网出口
-  confidential-agent --state-dir "$HOME/.confidential-agent" peering add \
-    --role operator --cidr "$CLIENT_CIDR" --label external-client
-  confidential-agent --state-dir "$HOME/.confidential-agent" peering apply
-  ```
-
-再将部署机的服务状态目录（默认 `$HOME/.confidential-agent`）复制到客户端，并在客户端启动隧道（默认监听 `127.0.0.1:8080`）：
-
-  ```bash
-  confidential-agent connect start --service vllm-inference
-  ```
-
-如果复制到自定义路径，给客户端命令增加 `--state-dir <复制后的路径>`。`connect start` 成功表示本地隧道已启动，还需执行 `curl http://127.0.0.1:8080/v1/models` 确认远端可达，再使用上面的对话请求验证推理。客户端不需要阿里云 AccessKey。
-
-如需集成可信网关客户端到您的业务中来发起推理请求，我们支持如下几种访问方式，您可以结合您的业务场景进行选择不同的集成方式
-
-| 访问方式 | 获取方式 |
-| --- | --- |
-| 代理网关（HTTP代理/socks5代理/透明代理）| 可从[GitHub仓库](https://github.com/inclavare-containers/TNG/releases/tag/v2.9.2)获取二进制/容器，[文档及示例](https://github.com/inclavare-containers/TNG/blob/v2.9.2/docs/configuration_zh.md) |
-| Python SDK | `pip install tng-sdk==2.9.2`，[文档及示例](https://github.com/inclavare-containers/TNG/tree/v2.9.2/tng-python) |
-| Go SDK | 使用 TNG `v2.9.2` 源码中的 `tng-go` 模块，[文档及示例](https://github.com/inclavare-containers/TNG/tree/v2.9.2/tng-go) |
-| JS SDK | `npm i @inclavare-containers/tng@2.9.2`，[文档及示例](https://github.com/inclavare-containers/TNG/tree/v2.9.2/tng-wasm) |
-
-这些集成方式需要配置与部署一致的加密协议、证明策略和参考值。可用 `confidential-agent connect --service vllm-inference --render-only` 查看当前客户端配置；不要使用 SDK 示例中的 `no_ra=True` 替代证明验证。HTTP/SOCKS5 代理按 IP 过滤目标时使用 `ip` 或 `ip_cidr`，`domain` 只匹配域名。
-
-Go SDK 的未指定版本安装命令可能返回 `no matching versions`。取得 TNG `v2.9.2` 源码后，可在已有 Go 项目中使用本地模块：
+`up` 等待部署激活，再调用 `connect start` 创建受保护连接；失败返回错误并保留实际状态。单独检查：
 
 ```bash
-go mod edit -require=github.com/inclavare-containers/tng/tng-go@v0.0.0
-go mod edit -replace=github.com/inclavare-containers/tng/tng-go=/绝对路径/TNG/tng-go
+cagent status --service inference --live --json
+cagent tui --service inference
 ```
 
-浏览器 JS SDK 使用 OHTTP，还需要部署 WASM 所要求的 COOP/COEP 响应头。跨域直连必须配置允许该页面来源的 CORS；本次部署默认配置下，浏览器可能在证明交换成功后仍因业务响应缺少 CORS 头而拒绝请求。也可通过页面同源的代理转发 OHTTP 密文，再由浏览器 SDK 完成解密和验证；仅安装 npm 包并不足以完成浏览器接入。
+连接输出中的 `client_endpoints` 给出实际本地地址，不假设端口一定是 8080。连接记录和日志位于 `<state-dir>/services/inference/connect-ready.json` 及相邻 `.log` 文件。通过该地址访问 `/v1/models` 和 `/v1/chat/completions`。没有 `--service-id` 的独立模板默认服务名为 `vllm-inference`。
 
-### 步骤六（可选）：释放资源
-
-不再需要服务时，在部署机上执行以下命令释放云资源：
+### 步骤五：释放资源
 
 ```bash
-set -euo pipefail
-INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install-vllm-inference.sh"
-INSTALL_SCRIPT="$(mktemp)"
-PROXY_URL="${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}"
-FIRST_URL="${PROXY_URL:+${PROXY_URL%/}/}${INSTALL_URL}"
-SECOND_URL="$INSTALL_URL"
-if [[ "${CA_GITHUB_PROXY_FIRST:-1}" == 0 ]]; then
-  SECOND_URL="$FIRST_URL"
-  FIRST_URL="$INSTALL_URL"
-fi
-if ! curl -fL --connect-timeout 10 --max-time 90 "$FIRST_URL" -o "$INSTALL_SCRIPT" ||
-   [[ "$(head -c 2 "$INSTALL_SCRIPT")" != '#!' ]]; then
-  curl -fL --connect-timeout 10 --max-time 90 "$SECOND_URL" -o "$INSTALL_SCRIPT"
-fi
-[[ "$(head -c 2 "$INSTALL_SCRIPT")" == '#!' ]]
-sh "$INSTALL_SCRIPT" cleanup \
-  --state-dir "$HOME/.confidential-agent"
+cagent cleanup inference
+# 查看当前状态目录中的所有实例：
+cagent cleanup --all --dry-run
+# 销毁上述所有实例：
+cagent cleanup --all
 ```
 
-**警告**
+销毁保留发布镜像与本地状态。镜像发布者使用 `image unpublish` 管理共享镜像生命周期。
 
-销毁操作不可逆，会删除 ECS 实例、自定义镜像、OSS 对象、安全组、VPC、交换机等云资源。请确认不再需要实例中的数据后再执行。
+### 证明与供应链
 
-镜像导入生成的快照可能独立保留。清理后请在对应地域查询快照，按本次镜像 ID、名称和创建时间核对归属，仅删除已不再需要的本次导入快照。双副本部署还需确认 ALB、监听器、服务器组及公网 EIP 已释放；所有资源确认释放后再删除本地状态目录。
-
-安全验证
----------
-
-### 验证供应链完整性
-
-部署流程默认使用 Rekor 透明日志存储镜像参考值，远程证明过程中自动从 Rekor 获取日志条目进行验证。您可以通过以下方式对 Rekor 日志条目进行审计，验证供应链完整性。
-
-构建完成后，可在状态目录下找到 Rekor metadata：
-
-```bash
-find "$HOME/.confidential-agent" -name "*.rekor-meta.json" -print
-```
-
-每个条目对应一份 SLSA provenance，包含 log index 和 entry URL。一键脚本输出的 Rekor 上传日志示例：
-
-```plaintext
-Created entry at index 1205944956, available at: https://rekor.sigstore.dev/api/v1/log/entries/<uuid>
-```
-
-验证包含性（inclusion proof），确认记录镜像参考值的条目确实存在于 Rekor 的默克尔树根中：
-
-```bash
-LOG_INDEX="<本次构建的 log index>" # 从本次上传日志或 Rekor metadata 读取，不能使用上面的示例值
-/usr/libexec/shelter/bin/rekor-cli verify --log-index "$LOG_INDEX" --rekor_server https://rekor.sigstore.dev
-```
-
-如果输出中包含两段相同的 hash 值，则说明验证成功：
-
-```plaintext
-Computed Root Hash: 1291abcee27148a4c00241ba8719f798ce060e8a5ccc8b18249017c25c6d0090
-Expected Root Hash: 1291abcee27148a4c00241ba8719f798ce060e8a5ccc8b18249017c25c6d0090
-```
-
-验证一致性（consistency proof），确保 Rekor 上存储的参考值条目没有被删改：
-
-```bash
-/usr/libexec/shelter/bin/rekor-cli loginfo --rekor_server https://rekor.sigstore.dev
-```
-
-首次运行保存当前日志检查点；保留本地检查点后再次运行，才能验证新旧检查点之间的一致性。首次输出成功不能单独证明跨检查点一致性。
-
-输出中包含以下内容则说明验证成功：
-
-```plaintext
-Verification Successful!
-```
-
-### 验证运行环境可信
-
-本方案采用 challenge 远程证明模式：部署时，实例必须先通过远程证明，验证运行环境（硬件 TDX、UKI 启动链完整性）符合预期参考值后，模型解密密钥才会被注入。未通过证明的实例无法获取模型密钥，因此无法解密模型。
-
-部署完成后，可通过以下命令持续监控实例可信状态：
-
-```bash
-confidential-agent status --live
-```
-
-注意事项与常见问题
----------
-
-- **排查问题不用登录实例**：目标实例不允许 SSH 登录。出了问题在部署机上运行 `confidential-agent status --live` 查看实例内部状态，或查看 `$HOME/.confidential-agent/one-click/` 目录下的部署日志（特别是 `connect-vllm-inference.log`）。
-
-- **安全组规则**：部署脚本会自动配置安全组，开放 8080 端口用于加密推理访问。实例不开放 SSH 端口。默认只允许部署机的公网 IP 访问实例；生产环境请保持这一限制，不要改成允许所有 IP。
-
-- **模型密文可以公开访问**：OSS 里存的是加密后的模型，即使 Bucket 设为公共读，没有解密密钥也无法还原。解密密钥只在实例通过远程证明后才会注入。
-
-- **实例拉不到模型**：确认 OSS Bucket 和实例在同一个地域；`--oss-bucket` 参数格式为 `<bucket>:<path>`，指向加密模型的根目录；`--oss-endpoint` 使用内网域名（默认值即可）。该参数用于实例下载模型；构建机上传系统镜像使用独立的 `CA_IMAGE_OSS_ENDPOINT=auto`，也可设置 `public`、`internal` 或 HTTPS 地址。
-
-- **模型解密失败**：`--model-key-file` 指定的密钥文件必须和加密模型时用的密码完全一致；确认 OSS 里的模型是用 gocryptfs 加密的（目录下应有 `gocryptfs.conf` 文件）。
-
-- **远程证明没通过**：确认使用了 `--reference-values rekor`（默认），并且 Rekor 服务可以访问；查看部署日志中验证相关的输出。
-
-- **vLLM 没启动好**：用 `confidential-agent status --live` 查看实例内服务状态；部署脚本在加密通道建立后会做一次健康检查，结果在日志里。实例没有 SSH，看不了系统日志，vLLM 的启动细节请查看部署日志。
-
-- **实例重启后推理不可用**：默认模式下，模型解密密钥不会在重启后保留，需要重新运行 `confidential-agent inject` 注入。如果需要重启自动恢复，可以改用 Trustee 模式（参见 [docs/trustee.md](trustee.md)）。
-
-- **更换模型密钥**：用新密码重新加密模型、上传到 OSS，然后用新的 `--model-key-file` 重新部署。
-
-
-相关文档
----------
-
-* [基于 gn8v-tee 异构机密计算实例一键构建 OpenClaw 机密 AI Agent](https://help.aliyun.com/zh/egs/use-cases/build-openclaw-confidential-ai-agent-on-heterogeneous-confidential-computing-instances)
-* [基于 gn8v-tee 关联实例构建安全大语言模型推理环境](https://help.aliyun.com/zh/egs/use-cases/build-a-secure-llm-inference-environment-on-gn8v-tee-related-instances)
+`sample` 使用构建或签名发布元数据中的实测参考值，不表示跳过远程证明。`rekor` 使用公开的参考值元数据；当前 challenge 流程注册 Rekor 参考值失败时会尝试本地实测值。`rekor.required` 约束构建发布，不能解读为所有后续连接都必须在线访问 Rekor。字段与恢复语义见 [AppSpec 文档](spec.md)。
