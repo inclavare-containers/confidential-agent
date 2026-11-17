@@ -1480,6 +1480,7 @@ fn resource_apply_supports_numeric_owner_and_group() {
     let target = temp.path().join("target");
     fs::write(&source, "owned").unwrap();
     let digest = sha256_file(&source).unwrap();
+    let (uid, gid) = (unsafe { libc::geteuid() }, unsafe { libc::getegid() });
     let resource = GuestResource {
         id: "config".to_string(),
         resource_path: "default/local-resources/config".to_string(),
@@ -1488,16 +1489,16 @@ fn resource_apply_supports_numeric_owner_and_group() {
         required: true,
         mutable: false,
         sha256: Some(digest.clone()),
-        owner: Some("65534".to_string()),
-        group: Some("65534".to_string()),
+        owner: Some(uid.to_string()),
+        group: Some(gid.to_string()),
     };
 
     let outcome = apply_resource_once(&resource, &source, &digest).unwrap();
 
     assert_eq!(outcome, ApplyOutcome::Updated);
     let metadata = fs::metadata(target).unwrap();
-    assert_eq!(metadata.uid(), 65534);
-    assert_eq!(metadata.gid(), 65534);
+    assert_eq!(metadata.uid(), uid);
+    assert_eq!(metadata.gid(), gid);
 }
 
 #[test]
@@ -1595,6 +1596,7 @@ fn management_credentials_and_runtime_context_use_only_the_selected_provider() {
 #[test]
 fn bootstrap_reapplies_resource_when_target_content_drifted() {
     let temp = tempfile::tempdir().unwrap();
+    let _env = no_tee_test_env(&temp);
     let cdh_root = temp.path().join("cdh");
     let source = cdh_root.join("default/local-resources/config");
     let target = temp.path().join("target");
