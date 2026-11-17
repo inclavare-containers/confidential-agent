@@ -343,6 +343,7 @@ fn handle_server_connection(
         &token,
         &config.trusted_services,
         &audience(&config.service_id, route.upstream_port),
+        config.mesh_generation,
         now_unix(),
         &replay_cache,
     )?;
@@ -436,6 +437,7 @@ fn verify_service_token(
     token: &str,
     trusted: &BTreeMap<String, GatewayTrustedService>,
     expected_aud: &str,
+    expected_generation: u64,
     now: u64,
     replay_cache: &ReplayCache,
 ) -> Result<VerifiedCaller> {
@@ -475,6 +477,13 @@ fn verify_service_token(
     verifying_key
         .verify(message.as_bytes(), &signature)
         .context("gateway token signature verification failed")?;
+    if claims.mesh_generation != expected_generation {
+        bail!(
+            "gateway token mesh generation {} does not match {}",
+            claims.mesh_generation,
+            expected_generation
+        );
+    }
     replay_cache.insert(&claims.jti, claims.exp, now)?;
     Ok(VerifiedCaller {
         service_id: claims.iss,
@@ -1663,11 +1672,30 @@ mod tests {
             &token,
             &config.trusted_services,
             &audience("server", 8001),
+            config.mesh_generation,
             101,
             &ReplayCache::default(),
         )
         .unwrap_err();
         assert!(err.to_string().contains("audience"));
+    }
+
+    #[test]
+    fn token_rejects_different_mesh_generations() {
+        let config = config();
+        let token = sign_service_token(&config, "server", 8000, 100).unwrap();
+        for generation in [0, 2] {
+            let error = verify_service_token(
+                &token,
+                &config.trusted_services,
+                &audience("server", 8000),
+                generation,
+                101,
+                &ReplayCache::default(),
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("mesh generation"));
+        }
     }
 
     #[test]
@@ -1721,6 +1749,7 @@ mod tests {
             &token,
             &config.trusted_services,
             &audience("server", 8000),
+            config.mesh_generation,
             101,
             &cache,
         )
@@ -1729,6 +1758,7 @@ mod tests {
             &token,
             &config.trusted_services,
             &audience("server", 8000),
+            config.mesh_generation,
             102,
             &cache,
         )
@@ -1744,6 +1774,7 @@ mod tests {
             &token,
             &config.trusted_services,
             &audience("server", 8000),
+            config.mesh_generation,
             200,
             &ReplayCache::default(),
         )

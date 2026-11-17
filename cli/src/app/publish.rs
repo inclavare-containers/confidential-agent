@@ -1049,6 +1049,9 @@ pub(super) fn published_image_for_deploy(
     spec: &AgentSpec,
     variant: &BuildManifestVariant,
 ) -> Option<String> {
+    read_shelter_build_result(&variant.build_result, &variant.shelter_build_id).ok()?;
+    // The completed publication binds build, region, variant and source digest.
+    // A deploy of that cloud image never reads the local QCOW2.
     state
         .build
         .published
@@ -1062,29 +1065,8 @@ pub(super) fn published_image_for_deploy(
                 && !entry.retiring
                 && entry.image_id.is_some()
         })
-        .find_map(|entry| {
-            let result =
-                read_shelter_build_result(&variant.build_result, &variant.shelter_build_id).ok()?;
-            if result.image_path.exists() {
-                let source_sha256 = match sha256_file(&result.image_path) {
-                    Ok(value) => value,
-                    Err(err) => {
-                        eprintln!(
-                            "[ca] warning: failed to hash local image '{}': {err:#}; skipping published image",
-                            result.image_path.display()
-                        );
-                        return None;
-                    }
-                };
-                if source_sha256 != entry.source_sha256 {
-                    eprintln!(
-                        "[ca] warning: published image source hash no longer matches local image; skipping published image"
-                    );
-                    return None;
-                }
-            }
-            entry.image_id.clone()
-        })
+        .max_by_key(|entry| &entry.created_at)
+        .and_then(|entry| entry.image_id.clone())
 }
 
 pub(super) fn cmd_image_publish(cli: &Cli, args: &ImagePublishArgs) -> Result<()> {

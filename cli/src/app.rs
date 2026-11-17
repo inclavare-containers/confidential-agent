@@ -123,6 +123,8 @@ struct DeploymentSnapshot {
     spec: AgentSpec,
     user_data: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    deployer_cidr: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     inputs: Option<BTreeMap<String, DeploymentInput>>,
 }
 

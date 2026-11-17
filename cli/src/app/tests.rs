@@ -1284,7 +1284,7 @@ fn managed_shelter_commands_share_cloud_credentials_and_native_tool_path() {
         std::env::set_var(name, value);
     }
     let cli = test_cli();
-    let results: Vec<_> = ["run", "rm", "network", "inspect"]
+    let results: Vec<_> = ["run", "rm", "network", "inspect", "ps"]
         .into_iter()
         .map(|subcommand| {
             let command = shelter_command(&cli, &[subcommand.into()]).unwrap();
@@ -3417,6 +3417,7 @@ fn destroy_only_recovers_unobserved_attempts_with_a_confirmed_empty_inventory() 
                 source: service.spec.clone(),
                 spec,
                 user_data: None,
+                deployer_cidr: None,
                 inputs: None,
             });
             write_json_atomic(&paths.manifest, &manifest).unwrap();
@@ -4103,7 +4104,7 @@ resources: {}
 }
 
 #[test]
-fn published_image_for_deploy_skips_stale_entry_and_uses_valid_one() {
+fn published_image_for_deploy_uses_latest_publication_without_reading_disk() {
     let temp = tempfile::tempdir().unwrap();
     let mut state = local_state(
         "openclaw",
@@ -4129,6 +4130,9 @@ fn published_image_for_deploy_skips_stale_entry_and_uses_valid_one() {
     );
     let mut valid = test_published_image(&state.build.build_id, &source_sha256);
     valid.image_id = Some("m-valid".to_string());
+    valid.created_at = "9999-01-01T00:00:00Z".into();
+    fs::remove_file(&state.build.image_path).unwrap();
+    fs::create_dir(&state.build.image_path).unwrap();
     state.build.published.insert(
         "aliyun/cn-beijing/release/build/999-valid".to_string(),
         valid,
