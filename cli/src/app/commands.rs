@@ -410,6 +410,9 @@ pub(super) fn cmd_deploy(cli: &Cli, args: &DeployArgs) -> Result<()> {
     } else {
         None
     };
+    if !args.resume {
+        snapshot.deployer_cidr = std::env::var("CA_DEPLOYER_CIDR").ok();
+    }
     let options = PrepareOptions {
         preparation_dir: None,
         build_id: Some(build_variant.shelter_build_id.clone()),
@@ -421,7 +424,7 @@ pub(super) fn cmd_deploy(cli: &Cli, args: &DeployArgs) -> Result<()> {
         peerings,
         cloud_image_id: published_image_id.clone(),
         deploy_user_data,
-        deployer_cidr: std::env::var("CA_DEPLOYER_CIDR").ok(),
+        deployer_cidr: snapshot.deployer_cidr.clone(),
     };
     snapshot.user_data = options.deploy_user_data.clone();
     let mut prepared = if args.resume {

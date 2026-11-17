@@ -6,6 +6,9 @@
 %global __requires_exclude_from ^%{_datadir}/cagent/.*$
 %global __brp_mangle_shebangs %{nil}
 %global __brp_python_bytecompile %{nil}
+# Preserve the downloaded native tool bytes and their upstream provenance.
+%global __brp_strip %{nil}
+%global __brp_strip_comment_note %{nil}
 
 Name:           cagent
 Version:        0.2.0

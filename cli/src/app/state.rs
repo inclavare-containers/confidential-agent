@@ -53,6 +53,7 @@ pub(super) fn deployment_snapshot_with_image_options(
             path.parent().context("spec has no parent")?,
         )?,
         user_data: None,
+        deployer_cidr: None,
         inputs: None,
     })
 }
@@ -347,7 +348,7 @@ pub(super) fn committed_deployment(
     state: &LocalServiceState,
     manifest: &BuildManifest,
 ) -> Result<DeploymentSnapshot> {
-    let snapshot = match &manifest.deployment {
+    let mut snapshot = match &manifest.deployment {
         Some(snapshot) => snapshot.clone(),
         None => {
             // Older state can be migrated only from its original, unchanged input.
@@ -376,6 +377,21 @@ pub(super) fn committed_deployment(
             snapshot
         }
     };
+    // Existing deployments recorded this input in their rendered runtime YAML.
+    if snapshot.deployer_cidr.is_none() {
+        let runtime = if manifest.image.is_some() {
+            manifest.shelter_config.clone()
+        } else {
+            shelter_runtime_config_path(&manifest.shelter_config)
+        };
+        if let Ok(raw) = fs::read(runtime) {
+            let config: serde_json::Value = serde_yaml::from_slice(&raw)?;
+            snapshot.deployer_cidr = config
+                .pointer("/targets/deploy/provider_options/deployer_cidr")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned);
+        }
+    }
     anyhow::ensure!(
         snapshot.spec.service.id == state.service_id,
         "saved deployment configuration belongs to a different service"
@@ -623,7 +639,10 @@ pub(super) fn shelter_command(cli: &Cli, args: &[OsString]) -> Result<Command> {
         [command, ..] => command.to_str(),
         [] => None,
     };
-    if matches!(subcommand, Some("run" | "rm" | "network" | "inspect")) {
+    if matches!(
+        subcommand,
+        Some("run" | "rm" | "network" | "inspect" | "ps")
+    ) {
         if let Some(credentials) = cloud_credentials::load_if_configured()? {
             command.envs(credentials.environment());
         }

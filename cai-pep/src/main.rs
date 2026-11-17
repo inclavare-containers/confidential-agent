@@ -976,7 +976,11 @@ fn summarize_command(command: &str) -> String {
     if trimmed.len() <= 120 {
         return trimmed.to_string();
     }
-    format!("{}...", &trimmed[..120])
+    let end = (0..=120)
+        .rev()
+        .find(|&i| trimmed.is_char_boundary(i))
+        .unwrap();
+    format!("{}...", &trimmed[..end])
 }
 
 fn unique_id(prefix: &str) -> String {
@@ -1616,6 +1620,13 @@ mod tests {
         let summary = summarize_command(&long);
         assert!(summary.ends_with("..."));
         assert_eq!(summary.len(), 123); // 120 chars + "..."
+    }
+
+    #[test]
+    fn summarize_command_keeps_utf8_boundaries() {
+        let command = format!("a{}", "中文".repeat(30));
+        let summary = summarize_command(&command);
+        assert_eq!(summary, format!("a{}中...", "中文".repeat(19)));
     }
 
     #[test]

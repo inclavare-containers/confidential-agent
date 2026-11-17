@@ -177,6 +177,7 @@ pub(super) fn prepare(
             mesh_peer_cidrs: options.mesh_peer_cidrs.clone(),
             peerings: options.peerings.clone(),
             deploy_user_data: options.deploy_user_data.clone(),
+            deployer_cidr: options.deployer_cidr.clone(),
             ..ShelterRenderOptions::default()
         },
         image.source.image_id.as_deref(),
@@ -615,7 +616,9 @@ mod tests {
             .unwrap();
             let spec = AgentSpec::from_path(&path).unwrap();
             let paths = context_paths(&cli.state_dir, id);
-            let manifest = read_build_manifest(&paths.manifest).unwrap();
+            let mut manifest = read_build_manifest(&paths.manifest).unwrap();
+            manifest.deployment.as_mut().unwrap().deployer_cidr = Some("192.0.2.10/32".into());
+            write_json_atomic(&paths.manifest, &manifest).unwrap();
             assert!(manifest.ssh.is_some());
             let image = manifest.image.as_ref().unwrap();
             assert_eq!(image.image_id, "m-shared-image");
@@ -634,10 +637,17 @@ mod tests {
                 &manifest,
                 &PrepareOptions {
                     deploy_names: Some(DeployNames::new(&spec)),
+                    deployer_cidr: Some("192.0.2.10/32".into()),
                     ..Default::default()
                 },
             )
             .unwrap();
+            let yaml: serde_json::Value =
+                serde_yaml::from_str(&fs::read_to_string(&paths.rendered_config).unwrap()).unwrap();
+            assert_eq!(
+                yaml["targets"]["deploy"]["provider_options"]["deployer_cidr"],
+                "192.0.2.10/32"
+            );
             let args = commands::deploy_shelter_args(&prepared);
             assert_eq!(args[2], "run");
             assert!(args.iter().any(|arg| arg == "--release"));

@@ -544,6 +544,7 @@ pub(super) fn render_service_config_from_state(
                     image_import_name: state.deploy.image_import_name.clone().unwrap_or_default(),
                 }),
                 deploy_user_data,
+                deployer_cidr: snapshot.deployer_cidr.clone(),
                 mesh_peer_cidrs,
                 peerings: read_peerings_or_empty(state_dir)?,
                 ..PrepareOptions::default()
@@ -570,7 +571,7 @@ pub(super) fn render_service_config_from_state(
             deploy_user_data,
             mesh_peer_cidrs,
             peerings: read_peerings_or_empty(state_dir)?,
-            deployer_cidr: std::env::var("CA_DEPLOYER_CIDR").ok(),
+            deployer_cidr: snapshot.deployer_cidr,
             ..ShelterRenderOptions::default()
         },
     )?;
@@ -654,12 +655,20 @@ fn sync_mesh_for_services_with_delivery(
             })
             .collect(),
     )?;
-    let reference_values = collect_reference_values(&services)?;
-    let generation = next_mesh_generation(state_dir, &services);
-    let mut bundle = render_mesh_bundle(&services, &reference_values, generation);
-    resolve_mesh_mapping_hosts(&mut bundle, resolve_host_to_ipv4)?;
     let bundle_path = state_dir.join("mesh-bundle.json");
-    write_json_atomic(&bundle_path, &bundle)?;
+    let generation = if service_filter.is_some() {
+        // A targeted sync retries delivery of the current topology. Creating a
+        // new generation for just one member would invalidate peer tokens.
+        let bundle: MeshBundle = serde_json::from_slice(&fs::read(&bundle_path)?)?;
+        bundle.generation
+    } else {
+        let reference_values = collect_reference_values(&services)?;
+        let generation = next_mesh_generation(state_dir, &services);
+        let mut bundle = render_mesh_bundle(&services, &reference_values, generation);
+        resolve_mesh_mapping_hosts(&mut bundle, resolve_host_to_ipv4)?;
+        write_json_atomic(&bundle_path, &bundle)?;
+        generation
+    };
 
     let mut delivered = Vec::new();
     for service in services
@@ -1653,6 +1662,47 @@ mod tests {
             .unwrap()
             .iter()
             .all(|state| state.mesh_generation == 1));
+    }
+
+    #[test]
+    fn targeted_mesh_sync_replays_saved_generation() {
+        let root = tempfile::tempdir().unwrap();
+        let services = vec![
+            test_service_state("a", "active", vec![], vec![]),
+            test_service_state("b", "active", vec![], vec![]),
+        ];
+        for service in &services {
+            write_local_service_state(root.path(), service).unwrap();
+        }
+        let bundle = render_mesh_bundle(
+            &services,
+            &ReferenceValueArtifacts {
+                sample: BTreeMap::new(),
+                rekor: BTreeMap::new(),
+            },
+            7,
+        );
+        let path = root.path().join("mesh-bundle.json");
+        write_json_atomic(&path, &bundle).unwrap();
+        let before = fs::read(&path).unwrap();
+        let mut delivered = Vec::new();
+        let generation = sync_mesh_for_services_with_delivery(
+            root.path(),
+            services,
+            Some("a"),
+            |service, path| {
+                delivered.push(service.service_id.clone());
+                assert_eq!(fs::read(path).unwrap(), before);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(generation, 7);
+        assert_eq!(delivered, ["a"]);
+        let states = read_service_states(root.path()).unwrap();
+        assert_eq!(states[0].mesh_generation, 7);
+        assert_eq!(states[1].mesh_generation, 1);
+        assert_eq!(fs::read(path).unwrap(), before);
     }
 
     #[test]
