@@ -53,15 +53,15 @@ build:
     - xz
     - zlib-devel
   files:
-    - source: ../../common/gpu/nvidia-persistenced.service
+    - source: ./nvidia-persistenced.service
       target: /usr/local/share/cai/nvidia-persistenced.service
-    - source: ../../common/gpu/cai-nvidia-cc-stack-install.sh
+    - source: ./cai-nvidia-cc-stack-install.sh
       target: /usr/local/sbin/cai-nvidia-cc-stack-install.sh
       executable: true
     - source: /usr/bin/cai-pep
       target: /usr/local/bin/cai-pep
       executable: true
-    - source: ../../common/skills/tdx-remote-attestation.SKILL.md
+    - source: ../openclaw/files/tdx-remote-attestation.SKILL.md
       target: /home/openclaw/.openclaw/skills/tdx-remote-attestation/SKILL.md
     - source: ../openclaw/files/install-cai-pep.sh
       target: /usr/local/libexec/confidential-agent/openclaw/install-cai-pep.sh

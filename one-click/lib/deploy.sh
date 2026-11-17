@@ -200,8 +200,100 @@ build_openclaw_image() {
     log "skipping $CA_SERVICE_LABEL image build"
     return
   fi
+  local phase
+  phase="$(openclaw_phase || true)"
+  if [[ "$phase" == "deployed" || "$phase" == "active" ]]; then
+    log "$CA_SERVICE_LABEL is $phase; skipping image build (existing deployment detected)"
+    return
+  fi
   log "building $CA_SERVICE_LABEL confidential image"
-  ca_cmd build --spec "$CA_SPEC_PATH"
+  (cd "$CA_PROJECT_DIR" && "$CA_BIN" --tools-dir "$CA_TOOLS_DIR" --state-dir "$CA_STATE_DIR" build --spec "$CA_SPEC_PATH")
+}
+
+openclaw_phase() {
+  local status_json="$CA_WORK_DIR/status-local.json"
+  ca_cmd status --json >"$status_json" 2>/dev/null || return 1
+  python3.11 - "$status_json" "$CA_SERVICE_ID" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as f:
+    data = json.load(f)
+items = data if isinstance(data, list) else data.get("services", [])
+service_id = sys.argv[2]
+for item in items:
+    if item.get("service_id") == service_id:
+        phase = item.get("phase")
+        if phase:
+            print(phase)
+            raise SystemExit(0)
+raise SystemExit(1)
+PY
+}
+
+openclaw_is_active() {
+  local status_json="$CA_WORK_DIR/status-local.json"
+  ca_cmd status --json >"$status_json" 2>/dev/null || return 1
+  python3.11 - "$status_json" "$CA_SERVICE_ID" <<'PY' >/dev/null 2>&1
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as f:
+    data = json.load(f)
+items = data if isinstance(data, list) else data.get("services", [])
+service_id = sys.argv[2]
+for item in items:
+    if item.get("service_id") == service_id and item.get("phase") == "active":
+        cloud = item.get("cloud") if isinstance(item.get("cloud"), dict) else {}
+        if cloud.get("present") is True:
+            raise SystemExit(0)
+raise SystemExit(1)
+PY
+}
+
+openclaw_public_ip() {
+  local status_json="$CA_WORK_DIR/status-local.json"
+  ca_cmd status --json >"$status_json" 2>/dev/null || return 1
+  python3.11 - "$status_json" "$CA_SERVICE_ID" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as f:
+    data = json.load(f)
+items = data if isinstance(data, list) else data.get("services", [])
+service_id = sys.argv[2]
+for item in items:
+    if item.get("service_id") == service_id:
+        cloud = item.get("cloud") if isinstance(item.get("cloud"), dict) else {}
+        public_ip = cloud.get("public_ip")
+        if public_ip:
+            print(public_ip)
+            raise SystemExit(0)
+raise SystemExit(1)
+PY
+}
+
+openclaw_debug_ssh_key() {
+  local status_json="$CA_WORK_DIR/status-local.json"
+  ca_cmd status --json >"$status_json" 2>/dev/null || return 1
+  python3.11 - "$status_json" "$CA_SERVICE_ID" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as f:
+    data = json.load(f)
+items = data if isinstance(data, list) else data.get("services", [])
+service_id = sys.argv[2]
+for item in items:
+    if item.get("service_id") == service_id:
+        build = item.get("build") if isinstance(item.get("build"), dict) else {}
+        debug_ssh = build.get("debug_ssh") if isinstance(build.get("debug_ssh"), dict) else {}
+        private_key = debug_ssh.get("private_key")
+        if private_key:
+            print(private_key)
+            raise SystemExit(0)
+raise SystemExit(1)
+PY
 }
 
 deploy_openclaw_service() {
@@ -209,8 +301,106 @@ deploy_openclaw_service() {
     log "skipping $CA_SERVICE_LABEL deploy"
     return
   fi
+  if openclaw_is_active; then
+    log "$CA_SERVICE_LABEL is already active; skipping cloud deploy"
+    CA_DEPLOY_SKIPPED_ACTIVE=1
+    return
+  fi
+  local phase
+  phase="$(openclaw_phase || true)"
+  if [[ "$phase" == "deployed" ]]; then
+    local public_ip
+    public_ip="$(openclaw_public_ip)" || die "$CA_SERVICE_LABEL is deployed but has no recorded public IP; run 'confidential-agent destroy $CA_SERVICE_ID' and redeploy"
+    log "$CA_SERVICE_LABEL is deployed but not active; resuming from resource injection to $public_ip"
+    (cd "$CA_PROJECT_DIR" && "$CA_BIN" --tools-dir "$CA_TOOLS_DIR" --state-dir "$CA_STATE_DIR" inject --spec "$CA_SPEC_PATH" --target-ip "$public_ip")
+    return
+  fi
   log "deploying $CA_SERVICE_LABEL to Aliyun"
-  ca_cmd deploy --spec "$CA_SPEC_PATH"
+  (cd "$CA_PROJECT_DIR" && "$CA_BIN" --tools-dir "$CA_TOOLS_DIR" --state-dir "$CA_STATE_DIR" deploy --spec "$CA_SPEC_PATH")
+}
+
+sync_active_openclaw_resources() {
+  if [[ "${CA_DEPLOY_SKIPPED_ACTIVE:-0}" != "1" || "$CA_SKIP_DEPLOY" == "1" ]]; then
+    return
+  fi
+  local public_ip
+  public_ip="$(openclaw_public_ip)" || {
+    warn "could not determine active $CA_SERVICE_LABEL public IP; skipping resource sync"
+    return
+  }
+  log "syncing resources to active $CA_SERVICE_LABEL at $public_ip"
+  (cd "$CA_PROJECT_DIR" && "$CA_BIN" --tools-dir "$CA_TOOLS_DIR" --state-dir "$CA_STATE_DIR" inject --spec "$CA_SPEC_PATH" --target-ip "$public_ip")
+  CA_ACTIVE_RESOURCES_SYNCED=1
+}
+
+restart_active_openclaw_app() {
+  if [[ "${CA_ACTIVE_RESOURCES_SYNCED:-0}" != "1" || "$CA_SKIP_DEPLOY" == "1" ]]; then
+    return
+  fi
+  if ! command -v ssh >/dev/null 2>&1; then
+    warn "ssh is not installed; skipping active OpenClaw gateway restart"
+    return
+  fi
+  local public_ip key known_hosts
+  public_ip="$(openclaw_public_ip)" || {
+    warn "could not determine active OpenClaw public IP; skipping gateway restart"
+    return
+  }
+  key="$(openclaw_debug_ssh_key)" || {
+    warn "could not determine debug SSH key; skipping gateway restart"
+    return
+  }
+  [[ -f "$key" ]] || {
+    warn "debug SSH key is missing: $key"
+    return
+  }
+  known_hosts="$CA_WORK_DIR/known_hosts"
+  log "restarting active OpenClaw gateway service"
+  if ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$known_hosts" -i "$key" "root@$public_ip" "systemctl restart cai-openclaw-gateway.service"; then
+    sleep 5
+  else
+    warn "failed to restart cai-openclaw-gateway.service over debug SSH"
+  fi
+}
+
+wait_for_live_status() {
+  if [[ "$CA_SKIP_DEPLOY" == "1" ]]; then
+    return
+  fi
+  local deadline=$((SECONDS + CA_STATUS_TIMEOUT_SEC))
+  local status_json="$CA_WORK_DIR/status-live.json"
+  log "waiting for live guest status"
+  while ((SECONDS < deadline)); do
+    if ca_cmd status --live --json >"$status_json" 2>"$CA_WORK_DIR/status-live.err"; then
+      if python3.11 - "$status_json" "$CA_SERVICE_ID" <<'PY' >/dev/null 2>&1
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as f:
+    data = json.load(f)
+items = data if isinstance(data, list) else data.get("services", [])
+service_id_filter = sys.argv[2]
+for item in items:
+    local = item.get("local") if isinstance(item.get("local"), dict) else {}
+    daemon = item.get("daemon") if isinstance(item.get("daemon"), dict) else {}
+    service_id = item.get("service_id") or item.get("service") or local.get("service_id") or daemon.get("service_id")
+    if service_id == service_id_filter:
+        if daemon.get("app_ready") is True:
+            raise SystemExit(0)
+        if daemon.get("phase") in ("running", "ready", "active"):
+            raise SystemExit(0)
+        if item.get("phase") in ("ready", "active") or local.get("phase") in ("ready", "active"):
+            raise SystemExit(0)
+raise SystemExit(1)
+PY
+      then
+        log "live status is available"
+        return
+      fi
+    fi
+    sleep 10
+  done
+  warn "live status did not become ready within ${CA_STATUS_TIMEOUT_SEC}s; see $CA_WORK_DIR/status-live.err"
 }
 
 parse_connect_port() {
@@ -316,7 +506,7 @@ Deployment summary
   instance:  $CA_INSTANCE_TYPE
   cidrs:     ${CA_ALLOWED_CIDRS:-${CA_ALLOWED_CIDR:-not set}}
   deployer:  ${CA_DEPLOYER_CIDR:-not detected}
-  token:     $CA_WORK_DIR/secrets/gateway.token
+  token:     $CA_GATEWAY_TOKEN
 EOF
   if [[ "$CA_SERVICE_ID" != "vllm-inference" ]]; then
     cat <<EOF
@@ -337,7 +527,7 @@ EOF
       cat <<EOF
   web:       http://127.0.0.1:$CA_CONNECT_PORT/openclaw
   ws/api:    ws://127.0.0.1:$CA_CONNECT_PORT
-  tui:       openclaw tui --url ws://127.0.0.1:$CA_CONNECT_PORT --token <gateway-token>
+  tui:       openclaw tui --url ws://127.0.0.1:$CA_CONNECT_PORT --token "$CA_GATEWAY_TOKEN"
   connect:   running (pid $connect_pid, log $CA_WORK_DIR/${CA_CONNECT_NAME:-connect}.log)
 EOF
     fi
@@ -395,6 +585,9 @@ run_deploy_openclaw() {
   build_openclaw_image
   ensure_operator_peering
   deploy_openclaw_service
+  sync_active_openclaw_resources
+  restart_active_openclaw_app
+  wait_for_live_status
   start_connect
   run_web_smoke
   print_summary
@@ -415,6 +608,9 @@ run_deploy_openclaw_vllm() {
   build_openclaw_image
   ensure_operator_peering
   deploy_openclaw_service
+  sync_active_openclaw_resources
+  restart_active_openclaw_app
+  wait_for_live_status
   start_connect
   run_web_smoke
   print_summary
@@ -433,6 +629,8 @@ run_deploy_vllm_inference() {
   build_openclaw_image
   ensure_operator_peering
   deploy_openclaw_service
+  sync_active_openclaw_resources
+  wait_for_live_status
   start_connect
   print_summary
 }

@@ -27,8 +27,8 @@ class LegacyVllmRuntimeToolsTest(unittest.TestCase):
                 (headers / 'python3.11').mkdir(parents=True)
                 (headers / 'python3.11/Python.h').touch()
                 (headers / 'stdio.h').touch()
-                script = (ROOT / 'common/gpu/install-vllm-deps.sh').read_text()
-                script = 'export VLLM_WITH_MODELSCOPE=' + ('1' if installer == INSTALLER else '0') + '\n' + script
+                script = installer.read_text().split(
+                    "cat >/usr/local/bin/cai-vllm-install-deps.sh <<'EOF'\n", 1)[1].split('\nEOF', 1)[0]
                 script = script.replace('/root', str(home)).replace('/usr/include', str(headers))
                 script = script.replace('/etc/uv', str(work / 'etc/uv'))
                 script = script.replace('export PATH=', 'export PATH=' + shlex.quote(str(work / 'bin')) + ':', 1)
@@ -54,7 +54,7 @@ printf '%s:%s\\n' "$1" "$PWD" >> "$TEST_UV_LOG"
                                  ['venv:' + str(home), 'pip:' + str(home)])
 
     def test_existing_venv_without_ninja_is_not_ready(self):
-        script = (ROOT / 'common/gpu/install-vllm-deps.sh').read_text()
+        script = INSTALLER.read_text()
         start = script.index('vllm_deps_ready() {')
         function = script[start:script.index('\n}\nrestore_vllm_build_headers', start) + 2]
         with tempfile.TemporaryDirectory() as directory:
@@ -63,7 +63,7 @@ printf '%s:%s\\n' "$1" "$PWD" >> "$TEST_UV_LOG"
             for path in [venv / 'bin/python', venv / 'bin/vllm', work / 'bin/python3.11']:
                 executable(path, 'exit 0')
             function = function.replace('/root/.venv', str(venv))
-            environment = dict(os.environ, VLLM_VERSION='0.28.0', VLLM_WITH_MODELSCOPE='1',
+            environment = dict(os.environ, VLLM_VERSION='0.28.0',
                                PATH=str(work / 'bin') + ':' + os.environ['PATH'])
             command = ['bash', '-c', function + '\nvllm_deps_ready\n']
             self.assertNotEqual(subprocess.run(command, env=environment).returncode, 0)

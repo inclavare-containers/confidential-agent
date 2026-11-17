@@ -68,7 +68,7 @@ prepare_harness_specs() {
   args+=(--stage deploy --service-id "$CA_SERVICE_ID" --harness "$CA_HARNESS"
     --harness-mode cli --image-release "$CA_IMAGE_RELEASE" --trusted-key "$CA_TRUSTED_KEY")
   if [[ "$CA_HARNESS" != qodercli ]]; then
-    args+=(--model "$CA_MODEL"
+    args+=(--dashscope-api-key "$DASHSCOPE_API_KEY" --model "$CA_MODEL"
       --dashscope-base-url "$CA_API_BASE_URL" --dashscope-anthropic-base-url "$CA_API_BASE_URL")
   fi
   run_confidential_agent_init allinone "${args[@]}"
@@ -87,6 +87,8 @@ run_deploy_harness() {
   prepare_harness_specs
   ensure_operator_peering
   deploy_openclaw_service
+  sync_active_openclaw_resources
+  wait_for_live_status
   cat <<EOF
 
 Deployment summary

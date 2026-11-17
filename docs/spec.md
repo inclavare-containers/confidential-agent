@@ -1,4 +1,4 @@
-# AppSpec 字段参考（`confidential-agent/v1`）
+# AppSpec Reference (`confidential-agent/v1`)
 
 ## 1. Spec 顶层
 
@@ -44,7 +44,7 @@ service:
 |---|---|:-:|---|
 | `id` | string | ✅ | 仅允许 `[A-Za-z0-9_-]`；不能为空 |
 | `ports` | `[u16]` | ✅ | 可为空；不能含 0、不能重复。空列表表示该 workload 不暴露入站业务端口，但仍作为 mesh identity 可访问其他 active 服务 |
-| `connect` | `[u16 或 {port, encryption}]` | ❌ | 默认 `[]`；每个端口必须出现在 `ports` 中；不能重复 |
+| `connect` | `[u16]` | ❌ | 默认 `[]`；每个端口必须出现在 `ports` 中；不能重复 |
 | `mcp_ports` | `[u16]` | ❌ | 默认 `[]`；每个端口必须属于 `service.ports - service.connect`（即 `mesh_ports`）；不能重复 |
 | `app_service` | string | ❌ | 可选；设置后不能为空；应为 guest 内的 systemd unit 名，例如 `cai-openclaw-gateway.service` |
 | `ssh` | bool | ❌ | 默认 false；使用 release 镜像，镜像必须支持下述 SSH 文件契约 |
@@ -57,7 +57,7 @@ service:
 
 `service.mcp_ports` 不改变端口暴露契约，也不要求应用改监听端口，但它必须是 `mesh_ports` 子集。guest 内的 `cai-gateway` 只覆盖 `mesh_ports`：列入 `mcp_ports` 的端口按 MCP JSON-RPC 解析请求，给 `tools/list` 注入 `tee_attest`、`audit_status`、`audit_verify` 三个虚拟工具，并对 MCP 请求/响应追加哈希链审计记录；未列入 `mcp_ports` 的 mesh 端口按 raw TCP 透传，只做 service identity，不做 MCP tool 注入或 MCP audit 解析。`connect` / A2A / AgentCard 路径不经过 gateway，也不携带 gateway client identity。
 
-**多服务端口**：支持 `mesh-client-ports-v2` 的 guest 可复用其他服务的业务端口，CA 为出向路由分配本地端口。涉及不支持该能力的旧 guest 时，端口冲突会在部署或同步时报告。
+**多服务约束**：跨服务的 `service.ports` 不允许冲突——`deploy/inject` 时 [`validate_mesh_port_conflicts`](../cli/src/app/workflows.rs) 会拒绝掉同 state-dir 下的端口重复。
 
 ---
 
@@ -103,7 +103,6 @@ build:
 | `image_name` | string | ✅ | — | 仅 `[A-Za-z0-9_-]` |
 | `resize` | string | ❌ | `None` | 例如 `30G`，渲染为 Shelter `disk.size` |
 | `kernel_cmdline_append` | string | ❌ | `None` | 透传到 `security.disk.cryptpilot.uki_append_cmdline` |
-| `runtime_contract` | path | ❌ | `None` | 镜像运行时 JSON 契约，在构建时保存并随发布签名，见 §13 |
 | `cleanup.remove_static_libs` | bool | ❌ | Shelter 默认值 | 透传给 Shelter 顶层 `cleanup.remove_static_libs`；vLLM 等需要在运行期编译 Python 扩展的镜像可设为 `false` 保留静态库 |
 | `container` | object | ❌ | `None` | 原样渲染为 Shelter 顶层 `container:`；用于 OCI workload |
 | `repos` | `[object]` | ❌ | `[]` | 透传 Shelter `repos`；每项含唯一 `name`、HTTPS `baseurl` 和 HTTPS `gpgkey`，保持 RPM 签名校验 |
@@ -193,7 +192,9 @@ deploy:
 
 `deploy` 不再包含 `security.allowed_cidr` / `security.a2a_peer_cidrs`。所有入向安全组规则都从 `<state-dir>/peerings.yaml` 派生，由 `confidential-agent peering ...` 管理；旧字段会被严格模式拒绝，可用 `confidential-agent migrate <spec>` 迁移。`build` 阶段只产出镜像和 build artifact，不读取 `peerings.yaml`；operator peering 应在 build 完成后、首次 deploy 前添加。
 
-若先执行 `confidential-agent image publish <service> --spec <path>`，CLI 会在本地 service state 中记录 published image。后续 `deploy` 仅在 provider、region、variant 和 build id 均匹配，且本地发布状态为 `available` 时复用该 `image_id`，并在 Shelter deploy 配置中跳过本地镜像上传和 ImportImage。部署使用最新创建且已完成的发布记录及其已保存摘要，不再读取本地 QCOW2；重新发布和导出仍执行各自的产物校验。Published image 不由 `destroy` 统一删除；使用 `image unpublish` 删除指定服务的发布镜像，或使用 `image prune --dry-run --all` 审计后清理旧 build/failed 发布记录。
+部署时会将 `CA_DEPLOYER_CIDR` 保存到部署快照，并传给本地镜像和发布镜像两条运行配置渲染路径。后续 `deploy --resume` 与 `peering apply` 使用该记录，不依赖新进程仍设置这个环境变量；旧部署可从已保存的运行配置恢复该值。
+
+若先执行 `confidential-agent image publish <service> --spec <path>`，CLI 会在本地 service state 中记录 published image。后续 `deploy` 仅在 provider、region、variant、build id 和镜像内容 hash 均匹配，且本地发布状态为 `available` 时复用该 `image_id`，并在 Shelter deploy 配置中跳过本地镜像上传和 ImportImage。Published image 不由 `destroy` 统一删除；使用 `image unpublish` 删除指定服务的发布镜像，或使用 `image prune --dry-run --all` 审计后清理旧 build/failed 发布记录。
 
 镜像与实例分别管理：`image list` 列出本地构建和云端发布（不包含消费者实例）；`status` / `tui` 展示实例（不包含仅构建的 builder）。镜像状态包括 `built`、`publishing`、`published`、`retiring`、`failed`、`local-missing`；发布状态是带时间戳的本地记录，不宣称实时云端状态。`image list --json` 返回完整 `publications`，包括各地域的状态、错误、所有权和待清理标记。本地文件缺失不会隐藏云镜像；`CURRENT` 按当前构建的所有 variant 判断。
 
@@ -286,27 +287,6 @@ Build 输出使用显式 `version: 1` 的 Shelter 主线构建配置：`build.re
 
 ---
 
-### 4.1 多副本、SLB 与 OHTTP
-
-`deploy.replicas` 默认为 1，必须大于零。多副本要求 `deploy.slb.enabled: true`；启用 SLB 时要求多个副本以及至少一个 connect 端口。`slb_type` 支持 `nlb`（默认，四层）和 `alb`（七层）。ALB 的 connect 端口必须使用 OHTTP；单个多副本服务当前最多配置一个 OHTTP connect 端口。
-
-```yaml
-service:
-  id: inference
-  ports: [8080]
-  connect:
-    - port: 8080
-      encryption: ohttp
-deploy:
-  # provider、region、zone_id、instance_type 等必填字段见上表
-  replicas: 3
-  slb:
-    enabled: true
-    slb_type: alb
-```
-
-`service.connect` 中的整数端口等价于 `{port: PORT, encryption: rats-tls}`。OHTTP 是端口的加密模式，不是顶层 `ohttp` 字段。部署机 CIDR 由 one-click 检测或通过 `CA_DEPLOYER_CIDR` 输入，保存到部署快照并转交 Shelter；它不是 AppSpec 字段，后续网络更新使用部署记录。
-
 ## 5. `attestation` — 远程证明
 
 ```yaml
@@ -329,7 +309,7 @@ attestation:
 |---|---|:-:|---|
 | `tee` | enum | ✅ | `tdx` |
 | `mode` | enum | ✅ | `challenge` 或 `trustee`；Trustee URL 是 CLI 全局运行时配置，不写入 AppSpec 或镜像 |
-| `reference_values` | enum | ❌ | 默认 `sample`；可选 `rekor`。本地构建选 `rekor` 时 `attestation.rekor` 必填；发布镜像从 release 读取元数据 |
+| `reference_values` | enum | ❌ | 默认 `sample`；可选 `rekor`。若选 `rekor` 则 `attestation.rekor` 必填 |
 | `rekor` | object | 条件必填 | `artifact_type` 与 `rekor_url` 非空；`required=true` 时 `cosign_key` 必填 |
 
 可用 CLI 生成本地 Rekor 签名 key，部署机不需要安装 host 版 `cosign`：
@@ -342,8 +322,8 @@ confidential-agent key generate-cosign --output-key-prefix ./cosign
 
 | 模式 | 来源 | 适用场景 | 失败行为 |
 |---|---|---|---|
-| `sample` | Shelter 构建产物的本地实测参考值 | 操作员信任本地构建或已认证 release 中的参考值；不是跳过证明 | 验证不通过则拒绝资源释放或连接 |
-| `rekor` | 构建发布的 SLSA/Rekor 元数据，或签名 release 携带的元数据 | 需要公开可审计的参考值来源 | `rekor.required` 约束构建发布；challenge 注册 Rekor 参考值失败后，当前实现会尝试本地实测参考值 |
+| `sample` | Shelter build 时本地生成的 sample reference value | 开发自验、QEMU 本地、policy=trustee-opa-local-dev | 验证不过，连接失败 |
+| `rekor` | Shelter 产出 in-toto SLSA provenance → 宿主机的 cosign/rekor-cli 签名并推 Rekor → 注册到验证服务 | 生产、对外可证明 | `required=true` 时整链失败；CLI 在 reference-value 阶段会做有限重试 |
 
 Trustee 的全局配置、接管、资源 namespace、重启与销毁语义见 [`docs/trustee.md`](trustee.md)。一个 CLI state directory 对应一个 Trustee，AppSpec 只通过 `mode` 选择 provider。
 部署时，CLI 会把该 mode 作为不可变快照写入本地 service state；后续 mesh/A2A 同步和销毁不重新读取可能被移动或修改的 AppSpec，并会在 Trustee 快照与 Trustee state entry 不一致时 fail closed。
@@ -521,7 +501,7 @@ OpenClaw A2A 插件不再从配置里读取对端 URL/端口，而是从 `/etc/c
 
 ## 10. 路径解析规则
 
-所有路径字段（`build.runtime_contract`, `build.scripts[]`, `build.files[].source`, `build.variants.debug.ssh_public_key`, `secrets.disk_passphrase`, `resources.*.source`, `attestation.rekor.cosign_key`, `attestation.rekor.slsa_generator`）都遵循：
+所有路径字段（`build.scripts[]`, `build.files[].source`, `build.variants.debug.ssh_public_key`, `secrets.disk_passphrase`, `resources.*.source`, `attestation.rekor.cosign_key`, `attestation.rekor.slsa_generator`）都遵循：
 
 1. 如果是绝对路径 → 直接使用。
 2. 如果是相对路径 → 相对于 **spec YAML 所在目录** 解析。
@@ -599,17 +579,51 @@ resources:
 
 如果手动编辑了 state 文件，注意保持 schema 字符串完全匹配——CLI 会显式校验，不一致直接拒绝。
 
-## 13. 发布镜像契约与恢复
+Published CA images carry an authenticated `confidential-agent/image-runtime/v1`
+contract. CA checks guest/bootstrap capabilities, root integrity, encrypted
+writable storage with CA key release, minimum disk size, application service and
+instance SSH support before creating infrastructure. `build.runtime_contract`
+optionally selects an image-owned JSON contract; it is captured at build time.
+The guest binary reports its protocol capabilities through `describe-runtime`.
+Older image exports without this contract require rebuilding before using the
+published-image entry point; ordinary local artifact deployment remains available.
 
-发布镜像携带已认证的 `confidential-agent/image-runtime/v1` 契约。CA 在创建基础设施前检查 guest/bootstrap 能力、根文件系统完整性、由 CA 释放密钥的可写加密存储、最小磁盘容量、应用服务和实例 SSH 能力。`build.runtime_contract` 指向可选的镜像 JSON 契约，在构建时保存并随导出签名；消费者不能修改镜像契约。guest 的 `describe-runtime` 输出自身协议能力。缺少契约的旧镜像需要重新构建后才能走发布镜像入口，本地产物部署入口仍可使用。
+`ca deploy --resume` resumes resource delivery only for confirmed `deployed`
+infrastructure with the original configuration at its canonical path. Deployment
+records canonical resource paths and digests and delivers private snapshots of
+user resources and the disk secret. Resume rejects changed resource contents,
+retargeted paths, or changed instance credentials; restore the original inputs
+before resuming. Run the candidate host CLI's `upgrade check` against the existing
+state directory before upgrading or rebooting; one-click performs this check
+before replacing installed binaries. Legacy deployments without frozen inputs
+require explicit `upgrade bind-inputs --service SERVICE`. This reads unchanged
+committed configuration, verifies disk bytes against historical Trustee disk/data
+digests, verifies recorded gateway and SSH identities, and saves a private input
+snapshot without changing remote resources. A missing or conflicting historical
+binding is not replaced by current files. Legacy challenge deployments without
+disk evidence must retain the previous host toolchain for resource delivery and
+back up/export data before migration; destroying data-bearing instances is not
+an upgrade procedure. Resume does not apply Terraform or
+replay an interrupted infrastructure operation. Same-service build/deploy/inject/
+destroy operations are mutually exclusive; independent services may proceed in
+parallel. `ca ssh --tty SERVICE -- COMMAND` explicitly allocates a terminal;
+script execution retains its existing output and exit-code behavior.
 
-`deploy --resume` 只恢复已确认处于 `deployed`/`activating` 状态的资源交付，不重放 Terraform。它使用原规范路径上的配置，比较资源和磁盘口令的私有快照、摘要及实例身份。资源内容、路径或凭据变更时需恢复原输入。同服务的 build/deploy/inject/destroy 互斥，不同服务可并行。
+Ordinary `inject` permits moving unchanged secret files and project directories.
+It compares secret contents and instance identity, uses saved release/public-key
+authorization and the committed disk copy, and never applies build or infrastructure
+changes. Supplied release/key files that still exist must match saved copies;
+their original download locations need not remain available. `--resume` retains
+its stricter original-path requirement.
 
-升级或重启前，用待升级 CLI 对现有 state directory 执行 `upgrade check`。缺少冻结输入的旧部署使用显式 `upgrade bind-inputs --service SERVICE`，根据未修改的配置、历史磁盘摘要和已记录身份绑定输入。缺失的历史证据不能由当前文件替代；没有磁盘证据的旧 challenge 部署需保留旧工具链完成资源交付，并在迁移前导出业务数据，销毁实例不是数据迁移步骤。
-
-普通 `inject` 允许移动内容不变的资源文件和项目目录，使用已保存的 release/公钥授权及磁盘口令快照，不修改基础设施；仍存在的 release/公钥文件必须与快照一致。`--resume` 保留更严格的原路径要求。
-
-guest 持久状态不可读时进入 `management-recovery`：停止业务和 mesh 服务，保留端点状态，只恢复对应证明 provider 校验过的管理凭据。停止失败会报告错误，但不会阻断经过认证的恢复 SSH。恢复正确状态后，daemon 按保存的端点分配继续运行。
+If persistent guest daemon state is unreadable, the daemon enters
+`management-recovery`: it stops business and mesh services, leaves endpoint state
+untouched, and only installs provider-specific, hash-verified management credentials.
+Failed stop requests are reported without withholding authenticated SSH. The daemon
+does not start or reconfigure business services during recovery. Instance SSH can
+restore the original state after a cold boot.
+Status reports both application and mesh unready. Restoring valid state lets the
+daemon resume with the saved endpoint reservations.
 
 发布元数据不绑定部署账号。`deploy.image.image_id` 可覆盖地域中的镜像位置（共享或云市场镜像），不改变参考值。
 默认校验 release 签名；显式设置 `deploy.image.skip_signature_verification: true` 或传 `deploy --skip-signature-verification` 后可省略 `trusted_key`。

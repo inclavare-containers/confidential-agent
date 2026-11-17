@@ -49,13 +49,14 @@ cosign、aliyun、ossutil，GitHub 下载默认先尝试国内代理再回退官
 打包输出目录同时包含配套 Shelter RPM、`shelter-rpm.json` 和两包的
 `SHA256SUMS`。配套 Shelter 为 `0.3.2-2`，其准确源码提交记录在
 `hack/shelter-rpm.json` 的 `source_commit` 字段中。
-Release 安装器按发布清单安装配套 RPM；E2E 构建入口按 shelter-rpm.json 选择包。
+one-click 和 E2E 安装入口按该记录选择 RPM，避免目录中遗留的其他版本被误选。
 该版本在主线运行时和 VMM 基础上保留可移植镜像发布、可选 manifest 版本固定、
 ext4 稀疏文件提取与副本生命周期功能。CA 使用显式 v1 构建配置和 v2 运行时配置。
 内置 Cryptpilot guest 使用官方 0.9.3，CA 安装预检要求 host 和 guest 均为 0.9.3。
 Cryptpilot 启动配置直接使用最终根设备 `/dev/mapper/rootfs`，避免标签扫描探测内部增量设备。
-`cagent cleanup` 使用已安装的 Shelter 调用正常销毁流程，不安装或替换软件包。
-运行时支持显式 Shelter 路径，RPM 依赖使用最低版本约束；交付清单校验不等于锁定所有运行环境。
+one-click 的 cleanup 使用已安装的 Shelter，只预检实例删除和剩余节点网络更新命令。
+清理不会因 Cryptpilot 构建工具版本不同而被拒绝，也不会在删除前自动替换 Shelter 包；
+构建和部署仍执行配套 RPM 与 Cryptpilot 版本预检。
 Shelter RPM 显式依赖 `zstd`，安装时由 DNF 自动解析，以支持默认的 Zstd initrd 压缩。
 `hack/shelter-rpm.json` 记录固定 Release URL、源码提交、RPM SHA-256 和 payload 摘要。
 `hack/resolve-shelter-rpm.sh` 按该记录解析包，缺少时下载到 `target/dependencies/shelter/`（可用 `CA_SHELTER_RPM_CACHE` 覆盖），并校验两个摘要。Shelter RPM 通过 GitHub Releases 分发。准备 cagent 源码包时也会核对实际 Shelter RPM。
@@ -204,8 +205,8 @@ confidential-agent destroy SERVICE
 | `<state>/services/<service-id>/` | 构建/发布记录、构建清单、实例身份、密钥、运行状态 |
 | `<state>/services/<service-id>/shelter/` | CA 管理的 Shelter 构建记录与 Terraform 工作目录，不要另建同名独立 Shelter 工作区替代 |
 | `<state>/services/<service-id>/shelter/cache/` | Shelter 的基础镜像等构建缓存；包解析缓存另在 `shelter/inputs/resolver-cache/` |
-| 源码中的 `one-click/` | 统一安装入口，编排已有 init/build/deploy/connect 命令 |
-| `<state>/one-click/` | one-click 默认生成工作目录，`--work-dir` 可指定其他位置 |
+| 源码中的 `one-click/` | 另一套安装/操作脚本入口，RPM init 流程不需要进入它 |
+| `<state>/one-click/` | one-click 默认生成工作目录；`--work-dir` 可单独指定 |
 | `/usr/share/cagent/` | RPM 提供的模板资产，由 init 复制到可编辑项目目录 |
 
 NEXT_STEPS 会写入明确的 `cd` 和绝对 `--state-dir`。自定义 state 时所有操作使用同一个绝对路径；
@@ -245,7 +246,7 @@ CLI 覆盖选项会记录到部署快照；使用原 spec 恢复同一部署时�
 
 ## GitHub 下载与大陆网络
 
-RPM、Shelter RPM 和固定原生工具下载支持代理优先及官方回退。one-click 的统一 bootstrap 可拉取指定源码版本，但不再安装或拉取 Git LFS。下载器校验 RPM 的 SHA256 和 payload 摘要；校验失败时尝试下一个下载地址。
+首个安装脚本、one-click 的源码拉取、Shelter RPM 和固定原生工具下载均支持代理优先及官方回退。下载器校验 RPM 的 SHA256 和 payload 摘要；校验失败时尝试下一个下载地址。
 
 ```bash
 # 默认：代理优先，失败回退官方；可替换为自己可信且支持对应资源类型的代理。
@@ -273,5 +274,4 @@ export CA_GITHUB_PROXY_URL=""
 
 发布附件包括 cagent 与 Shelter RPM、cagent SRPM、构建输入归档、安装脚本、版本与依赖清单及 `SHA256SUMS`。`release-manifest.json` 记录源码提交和包摘要，`build-environment.txt` 记录构建环境中的 RPM 版本。
 
-
-`/usr/libexec/cagent/SOURCES.tsv` 记录上游下载物的版本、URL 和 SHA-256；其中 aliyun 的摘要属于下载的 tgz，不是解压后可执行文件的摘要。打包关闭对固定原生工具的 strip 改写，保留下载内容的二进制字节；RPM 自身记录最终安装文件的摘要。
+`/usr/libexec/cagent/SOURCES.tsv` 记录上游下载物的版本、URL 和 SHA-256；其中 aliyun 的摘要属于下载的 tgz，不是解压后可执行文件的摘要。打包关闭 RPM 的 strip 和 comment-note 改写，保留固定原生工具的二进制字节；RPM 自身记录最终安装文件的摘要。

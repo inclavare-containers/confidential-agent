@@ -8,7 +8,8 @@ import threading
 import unittest
 
 ROOT = Path(__file__).resolve().parents[3]
-SCRIPTS = ['common/gpu/build.sh']
+SCRIPTS = ['examples/vllm-inference/install-vllm-inference.sh',
+           'examples/openclaw-vllm/install-openclaw-vllm.sh']
 
 
 class InstallerDownloads(unittest.TestCase):

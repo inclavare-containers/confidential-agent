@@ -11,7 +11,6 @@ Usage:
   sh one-click/install.sh [deploy|install-only|cleanup] [options]
 
 Bootstrap options:
-  --target NAME          openclaw (default), openclaw-vllm, or vllm-inference
   --repo URL             Git repository to clone when running through curl | sh
   --branch NAME          Git branch to checkout when running through curl | sh
   --ref REF              Git branch, tag, or commit to checkout when running through curl | sh
@@ -58,12 +57,25 @@ run_main() {
 }
 
 ensure_git() {
-    if command -v git >/dev/null 2>&1; then return; fi
-    if command -v dnf >/dev/null 2>&1; then
-        dnf install -y git ca-certificates
-    else
-        yum install -y git ca-certificates
+    if command -v git >/dev/null 2>&1 && command -v git-lfs >/dev/null 2>&1; then
+        git lfs install --system >/dev/null 2>&1 || git lfs install >/dev/null 2>&1 || true
+        return 0
     fi
+    if [ "$(id -u)" != "0" ]; then
+        echo "git and git-lfs are required. Re-run as root or install git/git-lfs first." >&2
+        exit 2
+    fi
+    if command -v dnf >/dev/null 2>&1; then
+        dnf install -y git git-lfs ca-certificates
+    elif command -v yum >/dev/null 2>&1; then
+        yum install -y git git-lfs ca-certificates
+    else
+        echo "git and git-lfs are required and no yum/dnf package manager was found." >&2
+        exit 2
+    fi
+    command -v git >/dev/null 2>&1 || { echo "git installation failed" >&2; exit 2; }
+    command -v git-lfs >/dev/null 2>&1 || { echo "git-lfs installation failed" >&2; exit 2; }
+    git lfs install --system >/dev/null 2>&1 || git lfs install >/dev/null 2>&1 || true
 }
 
 github_proxy_repo_url() {
@@ -130,6 +142,52 @@ git_fetch_with_fallback() {
     run_git_with_timeout -C "$dir" fetch --depth 1 origin "$ref_name"
 }
 
+git_lfs_pull_with_fallback() {
+    dir="$1"
+    repo_url="$2"
+    timeout_sec="${CA_GIT_LFS_TIMEOUT_SEC:-300}"
+    proxy_url="$(github_proxy_repo_url "$repo_url" || true)"
+    current_url="$(git -C "$dir" remote get-url origin 2>/dev/null || printf '%s' "$repo_url")"
+
+    git -C "$dir" remote set-url origin "$current_url"
+    if command -v timeout >/dev/null 2>&1; then
+        if GIT_HTTP_LOW_SPEED_LIMIT="${GIT_HTTP_LOW_SPEED_LIMIT:-1024}" \
+           GIT_HTTP_LOW_SPEED_TIME="${GIT_HTTP_LOW_SPEED_TIME:-20}" \
+           timeout "$timeout_sec" git -C "$dir" lfs pull origin; then
+            return 0
+        fi
+    elif GIT_HTTP_LOW_SPEED_LIMIT="${GIT_HTTP_LOW_SPEED_LIMIT:-1024}" \
+         GIT_HTTP_LOW_SPEED_TIME="${GIT_HTTP_LOW_SPEED_TIME:-20}" \
+         git -C "$dir" lfs pull origin; then
+        return 0
+    fi
+
+    if [ "$current_url" = "$proxy_url" ]; then
+        echo "Git LFS proxy pull failed, retrying original URL $repo_url" >&2
+        git -C "$dir" remote set-url origin "$repo_url"
+    elif [ "$current_url" = "$repo_url" ] && [ -n "$proxy_url" ]; then
+        echo "Git LFS pull failed, retrying via $proxy_url" >&2
+        git -C "$dir" remote set-url origin "$proxy_url"
+    elif github_proxy_first && [ -n "$proxy_url" ]; then
+        echo "Git LFS pull failed, retrying via $proxy_url" >&2
+        git -C "$dir" remote set-url origin "$proxy_url"
+    elif [ "$current_url" != "$repo_url" ]; then
+        echo "Git LFS pull failed, retrying original URL $repo_url" >&2
+        git -C "$dir" remote set-url origin "$repo_url"
+    else
+        return 1
+    fi
+    if command -v timeout >/dev/null 2>&1; then
+        GIT_HTTP_LOW_SPEED_LIMIT="${GIT_HTTP_LOW_SPEED_LIMIT:-1024}" \
+        GIT_HTTP_LOW_SPEED_TIME="${GIT_HTTP_LOW_SPEED_TIME:-20}" \
+            timeout "$timeout_sec" git -C "$dir" lfs pull origin
+    else
+        GIT_HTTP_LOW_SPEED_LIMIT="${GIT_HTTP_LOW_SPEED_LIMIT:-1024}" \
+        GIT_HTTP_LOW_SPEED_TIME="${GIT_HTTP_LOW_SPEED_TIME:-20}" \
+            git -C "$dir" lfs pull origin
+    fi
+}
+
 # Wrap the imperative body so `sh` parses the entire script before executing
 # anything. Without this wrapper, `curl ... | sh` would hit `exec </dev/tty`
 # while the rest of the script bytes are still in the curl pipe, then sh would
@@ -148,10 +206,6 @@ main() {
 
     while [ "$#" -gt 0 ]; do
         case "$1" in
-            --target)
-                export CA_ONE_CLICK_TARGET="${2:?missing target}"
-                shift 2
-                ;;
             --repo)
                 [ "$#" -ge 2 ] || { echo "missing value for --repo" >&2; exit 2; }
                 repo="$2"
@@ -204,14 +258,16 @@ main() {
 
     if [ -d "$source_dir/.git" ]; then
         git_fetch_with_fallback "$source_dir" "$repo" "$ref"
-        git -C "$source_dir" checkout --detach "FETCH_HEAD"
+        GIT_LFS_SKIP_SMUDGE=1 git -C "$source_dir" checkout --detach "FETCH_HEAD"
+        git_lfs_pull_with_fallback "$source_dir" "$repo"
     else
         rm -rf "$source_dir"
         mkdir -p "$source_dir"
         git -C "$source_dir" init
         git -C "$source_dir" remote add origin "$repo"
         git_fetch_with_fallback "$source_dir" "$repo" "$ref"
-        git -C "$source_dir" checkout --detach "FETCH_HEAD"
+        GIT_LFS_SKIP_SMUDGE=1 git -C "$source_dir" checkout --detach "FETCH_HEAD"
+        git_lfs_pull_with_fallback "$source_dir" "$repo"
     fi
 
     if [ ! -f "$source_dir/one-click/lib/main.sh" ]; then

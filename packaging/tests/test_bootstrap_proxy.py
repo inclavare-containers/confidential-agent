@@ -8,22 +8,8 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class BootstrapProxyTests(unittest.TestCase):
-    def test_unified_bootstrap_forwards_target_and_arguments(self):
-        for target in ['openclaw', 'openclaw-vllm', 'vllm-inference']:
-            with self.subTest(target=target), tempfile.TemporaryDirectory() as directory:
-                root = Path(directory)
-                (root / 'one-click/lib').mkdir(parents=True)
-                (root / 'Cargo.toml').touch()
-                entry = root / 'one-click/install.sh'
-                entry.write_text((ROOT / 'one-click/install.sh').read_text())
-                (root / 'one-click/lib/main.sh').write_text('printf "%s\\n" "$CA_ONE_CLICK_TARGET" "$@"\n')
-                result = subprocess.run(['sh', str(entry), '--target', target, 'deploy', '--model', 'model with spaces'],
-                                        capture_output=True, text=True)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(result.stdout.splitlines(), [target, 'deploy', '--model', 'model with spaces'])
-
     def test_all_entrypoints_proxy_fallback_and_disable(self):
-        for name in ['install.sh']:
+        for name in ['install.sh','install-openclaw-vllm.sh','install-vllm-inference.sh']:
             source=(ROOT/'one-click'/name).read_text().removesuffix('main "$@"\n')
             for first, proxy, fail, expected in [
                 ('1','https://proxy.invalid/','proxy', ['proxy','direct']),

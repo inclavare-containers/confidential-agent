@@ -13,10 +13,10 @@ build:
     - source: /usr/bin/cai-pep
       target: /usr/local/bin/cai-pep
       executable: true
-    - source: ../../common/cli-agents/install-cli-agent-runtime.sh
+    - source: ../cli-agents/files/install-cli-agent-runtime.sh
       target: /usr/local/libexec/confidential-agent/cli-agent/install-cli-agent-runtime.sh
       executable: true
-    - source: ../../common/skills/tdx-remote-attestation.SKILL.md
+    - source: ../cli-agents/files/tdx-remote-attestation.SKILL.md
       target: /root/.claude/skills/tdx-remote-attestation/SKILL.md
   scripts: [./install-claude-code.sh]
   variants:

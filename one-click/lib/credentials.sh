@@ -145,7 +145,6 @@ ensure_aliyun_cli_region() {
 }
 
 ensure_bailian_credentials() {
-  export DASHSCOPE_API_KEY
   if [[ -n "${CA_API_KEY:-}" ]]; then
     export DASHSCOPE_API_KEY="$CA_API_KEY"
   fi

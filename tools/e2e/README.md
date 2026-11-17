@@ -208,12 +208,12 @@ that URL through `trustee-gateway.service`.
 ### Clean ECS build host
 
 Use a new Alibaba Cloud Linux 3 system image and copy only the CA source tree
-and the companion RPM or its Release download manifest. Do not copy a workstation's Cargo cache,
+and the single Shelter RPM in `hack/`. Do not copy a workstation's Cargo cache,
 package cache, built CA binaries, container images, or prebuilt guest images.
 Run the normal installer, then repeat it to check idempotency:
 
 ```bash
-sh one-click/install.sh install-only --non-interactive --yes --skip-host-openclaw
+one-click/install.sh install-only --non-interactive --yes --skip-host-openclaw
 tools/e2e/prepare-host.sh
 rpm -V shelter cryptpilot-fde-host
 hack/check-shelter.sh /usr/bin/shelter
