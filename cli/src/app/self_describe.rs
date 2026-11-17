@@ -477,13 +477,12 @@ fn spec_schema_json() -> serde_json::Value {
         "service": {
             "id": "stable service name",
             "ports": "guest TCP ports exposed by the workload",
-            "connect": "integer ports (rats-tls), or {port, encryption: rats-tls|ohttp}; ALB requires ohttp",
+            "connect": "ports to proxy with `confidential-agent connect`",
             "app_service": "systemd unit that indicates workload readiness",
             "ssh": "opt in to instance client/host keys delivered through CA; requires an image SSH service using /opt/data/cai-ssh"
         },
         "build": {
             "image_name": "base Shelter image name",
-            "runtime_contract": "optional image-owned JSON contract path, captured during build and signed on export",
             "resize": "optional target disk size; rendered as Shelter disk.size",
             "container": "optional Shelter OCI workload payload; supports image/archive, mode, runtime, name, pull, command, env, working_dir, and network",
             "packages": "minimal OS packages installed by Shelter/mkosi",
@@ -498,9 +497,7 @@ fn spec_schema_json() -> serde_json::Value {
             "region": "Aliyun region",
             "zone_id": "Aliyun zone",
             "instance_type": "TDX-capable ECS instance type",
-            "disk_gb": "root disk size",
-            "replicas": "positive integer, default 1; multiple replicas require an enabled SLB",
-            "slb": {"enabled": "requires replicas > 1 and a connect port", "slb_type": "nlb (default) or alb; alb requires OHTTP connect ports"}
+            "disk_gb": "root disk size"
         },
         "attestation": {
             "tee": "tdx",
@@ -528,11 +525,6 @@ Common optional keys:
 - `build`: required for local builds; omit it when `deploy.image` selects a published image.
 - `secrets`: secret inputs, usually local file paths.
 - `a2a`: optional AgentCard publication settings. Network peerings are managed separately with `peering` commands.
-- `build.runtime_contract`: image-owned runtime JSON, captured during build and signed on export.
-- `deploy.replicas`: positive replica count, default 1; values above 1 require `deploy.slb.enabled`.
-- `deploy.slb`: `{enabled, slb_type: nlb|alb}`; ALB requires OHTTP connect ports.
-- `service.connect`: integer ports (RATS-TLS), or `{port, encryption: rats-tls|ohttp}`.
-- `attestation.mode`: `challenge` or `trustee`; `reference_values`: `sample` or `rekor`. Sample uses measured reference values, not a bypass. Challenge currently falls back to local measured values if Rekor reference registration fails.
 
 Use `confidential-agent spec validate --spec <path> --format json` before build/deploy. Validation checks local file paths, common install-script command/package mismatches, OS package-manager use inside build scripts, and parse error details. If omitted, common commands default to `confidential-agent.yaml` in the current directory.
 
@@ -565,7 +557,7 @@ const WORKFLOW_DOC: &str = r#"
 4. Build a release/debug image. Build does not use peerings or security group inputs.
 5. Optionally run `image publish <service> --spec <path>` to import the built image as a reusable Aliyun custom image.
 6. Add operator peering for the controller CIDR so deploy can render security group ingress.
-7. Deploy the selected image variant to Aliyun TDX ECS. Deploy reuses an available published image only when provider, region, variant and build id match. It uses the saved publication identity and source digest without reading the local QCOW2.
+7. Deploy the selected image variant to Aliyun TDX ECS. Deploy reuses an available published image only when provider, region, variant, build id, and source hash match.
 8. Inject runtime resources and secrets.
 9. Use `peering apply` after later peering changes to refresh active service security groups.
 10. Connect, probe the service with normal tools, and collect logs/status for operations.
@@ -586,7 +578,6 @@ const OPS_DOC: &str = r#"
 
 Core commands:
 
-- `cleanup SERVICE` destroys one recorded instance; `cleanup --all --dry-run` previews all recorded instances.
 - `build --spec <path>` creates the confidential image; `build` defaults to `confidential-agent.yaml`.
 - `key generate-cosign --output-key-prefix ./cosign` creates a Rekor signing key pair using native cosign.
 - `image publish <service> --spec <path> [--region <region>] [--no-wait]` uploads the built image to OSS, imports an Aliyun custom image, and records published state. `--no-wait` returns after the import task is created; rerun without it to wait for the same image to become available.

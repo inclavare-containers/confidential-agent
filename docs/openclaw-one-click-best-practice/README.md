@@ -11,7 +11,7 @@ Confidential Agent 将 OpenClaw 封装在 Intel TDX（Trust Domain Extensions）
 | 场景 | one-click 入口 | 推理后端 | 推荐实例 | 数据边界 |
 | --- | --- | --- | --- | --- |
 | OpenClaw + 百炼 API | `one-click/install.sh` | 阿里云百炼 DashScope API | `ecs.g9i.xlarge` | Agent、记忆、凭据在 TDX 内；Prompt 和回复经 HTTPS 发送到百炼 API。 |
-| OpenClaw + vLLM | `one-click/install.sh --target openclaw-vllm` | 实例内 vLLM + Qwen3.6-35B-A3B | `ecs.gn8v-tee.4xlarge` | Agent、模型权重、推理中间态和回复均在 GPU TEE/TDX 实例内处理。 |
+| OpenClaw + vLLM | `one-click/install-openclaw-vllm.sh` | 实例内 vLLM + Qwen3.6-35B-A3B | `ecs.gn8v-tee.4xlarge` | Agent、模型权重、推理中间态和回复均在 GPU TEE/TDX 实例内处理。 |
 
 > **重要**
 >
@@ -73,9 +73,6 @@ Confidential Agent 的保护范围包括：
 > 如果 `ecs.gn8v-tee.4xlarge` 暂时无库存，请等待库存恢复或尝试同规格族其他 GPU TEE 可用区。
 
 ## 操作步骤
-
-统一入口为 `one-click/install.sh`，GPU 场景通过 `--target openclaw-vllm` 选择。脚本调用现有的 `init`、`build`、`deploy` 和 `connect`；不再读取状态后自动跳过构建或改成注入恢复。首次部署使用一键流程；已有项目的构建、部署、更新和恢复分别使用对应 CLI，`deploy --resume` 仅恢复已确认基础设施的资源交付。
-
 
 ### 步骤一：准备部署机凭证
 
@@ -235,7 +232,7 @@ vLLM 场景在 GPU TEE 实例内启动本地 vLLM OpenAI-compatible API，OpenCl
 
 ```bash
 set -euo pipefail
-INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install.sh"
+INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install-openclaw-vllm.sh"
 INSTALL_SCRIPT="$(mktemp)"
 PROXY_URL="${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}"
 FIRST_URL="${PROXY_URL:+${PROXY_URL%/}/}${INSTALL_URL}"
@@ -249,7 +246,7 @@ if ! curl -fL --connect-timeout 10 --max-time 90 "$FIRST_URL" -o "$INSTALL_SCRIP
   curl -fL --connect-timeout 10 --max-time 90 "$SECOND_URL" -o "$INSTALL_SCRIPT"
 fi
 [[ "$(head -c 2 "$INSTALL_SCRIPT")" == '#!' ]]
-sh "$INSTALL_SCRIPT" --target openclaw-vllm \
+sh "$INSTALL_SCRIPT" \
   --non-interactive \
   --yes \
   --region cn-beijing \
@@ -273,7 +270,7 @@ vLLM 默认配置如下：
 
 ```bash
 set -euo pipefail
-INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install.sh"
+INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install-openclaw-vllm.sh"
 INSTALL_SCRIPT="$(mktemp)"
 PROXY_URL="${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}"
 FIRST_URL="${PROXY_URL:+${PROXY_URL%/}/}${INSTALL_URL}"
@@ -287,7 +284,7 @@ if ! curl -fL --connect-timeout 10 --max-time 90 "$FIRST_URL" -o "$INSTALL_SCRIP
   curl -fL --connect-timeout 10 --max-time 90 "$SECOND_URL" -o "$INSTALL_SCRIPT"
 fi
 [[ "$(head -c 2 "$INSTALL_SCRIPT")" == '#!' ]]
-sh "$INSTALL_SCRIPT" --target openclaw-vllm \
+sh "$INSTALL_SCRIPT" \
   --non-interactive \
   --yes \
   --vllm-model-id Qwen/Qwen3.6-35B-A3B \
@@ -305,7 +302,7 @@ sh "$INSTALL_SCRIPT" --target openclaw-vllm \
 
 ```bash
 set -euo pipefail
-INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install.sh"
+INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install-openclaw-vllm.sh"
 INSTALL_SCRIPT="$(mktemp)"
 PROXY_URL="${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}"
 FIRST_URL="${PROXY_URL:+${PROXY_URL%/}/}${INSTALL_URL}"
@@ -319,7 +316,7 @@ if ! curl -fL --connect-timeout 10 --max-time 90 "$FIRST_URL" -o "$INSTALL_SCRIP
   curl -fL --connect-timeout 10 --max-time 90 "$SECOND_URL" -o "$INSTALL_SCRIPT"
 fi
 [[ "$(head -c 2 "$INSTALL_SCRIPT")" == '#!' ]]
-sh "$INSTALL_SCRIPT" --target openclaw-vllm \
+sh "$INSTALL_SCRIPT" \
   --non-interactive \
   --yes \
   --vllm-build-variants debug
@@ -382,7 +379,7 @@ Deployment summary
   tui:       openclaw tui --url ws://127.0.0.1:18789 --token "<generated-or-provided-token>"
 ```
 
-OpenClaw Gateway Token 保存在 `$HOME/.confidential-agent/one-click/secrets/gateway.token`。后续重跑会复用同一个 Token；如需轮换，修改生成的应用资源并使用 `inject` 交付。该 Token 是 OpenClaw 应用层访问 Token，不是 `cai-gateway` 的客户端凭据。
+OpenClaw Gateway Token 保存在 `$HOME/.confidential-agent/one-click/secrets/gateway.token`。后续重跑会复用同一个 Token；如需轮换，删除该文件后重跑脚本。该 Token 是 OpenClaw 应用层访问 Token，不是 `cai-gateway` 的客户端凭据。
 
 ### 步骤六：访问 OpenClaw
 
@@ -519,7 +516,7 @@ sh "$INSTALL_SCRIPT" cleanup \
 
 ```bash
 set -euo pipefail
-INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install.sh"
+INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install-openclaw-vllm.sh"
 INSTALL_SCRIPT="$(mktemp)"
 PROXY_URL="${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}"
 FIRST_URL="${PROXY_URL:+${PROXY_URL%/}/}${INSTALL_URL}"
@@ -533,7 +530,7 @@ if ! curl -fL --connect-timeout 10 --max-time 90 "$FIRST_URL" -o "$INSTALL_SCRIP
   curl -fL --connect-timeout 10 --max-time 90 "$SECOND_URL" -o "$INSTALL_SCRIPT"
 fi
 [[ "$(head -c 2 "$INSTALL_SCRIPT")" == '#!' ]]
-sh "$INSTALL_SCRIPT" --target openclaw-vllm cleanup \
+sh "$INSTALL_SCRIPT" cleanup \
   --state-dir "$HOME/.confidential-agent"
 ```
 
@@ -623,7 +620,7 @@ tail -F "$HOME/.confidential-agent/one-click/connect-openclaw-vllm.log"
 confidential-agent status --live
 ```
 
-如果部署机公网出口 IP 变化，更新 operator peering 并执行 `peering apply`。
+如果部署机公网出口 IP 变化，重新运行一键脚本或更新 `deployer` peering。
 
 #### Q4：百炼 API 场景 chat 不可用
 
@@ -675,3 +672,14 @@ journalctl -u cai-openclaw-gateway.service -n 200 --no-pager
 ```bash
 journalctl -u cai-pep.service -n 200 --no-pager
 ```
+
+## 结果验证记录
+
+本最佳实践对应的验证范围包括：
+
+| 场景 | 验证项 |
+| --- | --- |
+| one-click OpenClaw + 百炼 API | 依赖安装、Shelter RPM 安装、源码构建、原生工具安装、可信镜像构建、Rekor 上传、TDX ECS 创建、资源注入、TNG connect、Web 可达性、Gateway Token 鉴权、chat probe、TDX skill probe。 |
+| one-click OpenClaw + vLLM | vLLM spec/config 生成、NVIDIA CC bootstrap 文件打包、PEP/TDX skill 打包、GPU TEE spec 校验、Rekor 配置、connect/Web readiness、vLLM `/v1/models` readiness、OpenClaw chat probe。 |
+
+完整云端验证必须在全新的 Alibaba Cloud Linux 3 部署机上执行文档中的 one-click 命令，不复用本地开发机或旧状态目录。

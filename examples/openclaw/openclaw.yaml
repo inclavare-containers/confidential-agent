@@ -28,7 +28,7 @@ build:
     - source: /usr/bin/cai-pep
       target: /usr/local/bin/cai-pep
       executable: true
-    - source: ../../common/skills/tdx-remote-attestation.SKILL.md
+    - source: ./files/tdx-remote-attestation.SKILL.md
       target: /root/.openclaw/skills/tdx-remote-attestation/SKILL.md
     - source: ./files/install-cai-pep.sh
       target: /usr/local/libexec/confidential-agent/openclaw/install-cai-pep.sh

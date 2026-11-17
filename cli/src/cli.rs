@@ -173,8 +173,6 @@ pub(crate) struct Cli {
 #[derive(Debug, Subcommand)]
 pub(crate) enum Commands {
     Init(InitArgs),
-    /// Destroy recorded instances, including non-default harnesses.
-    Cleanup(CleanupArgs),
     Build(BuildArgs),
     Deploy(DeployArgs),
     Docs(DocsArgs),
@@ -296,7 +294,7 @@ pub(crate) struct InitArgs {
         help = format!("Model name (default: {})", confidential_agent_core::software::version("bailian_model"))
     )]
     pub(crate) model: Option<String>,
-    #[arg(long, env = "CA_GATEWAY_TOKEN")]
+    #[arg(long)]
     pub(crate) gateway_token: Option<String>,
     #[arg(long)]
     pub(crate) disable_pep: bool,
@@ -342,17 +340,6 @@ pub(crate) struct InitArgs {
     pub(crate) codex_version: Option<String>,
     #[arg(long)]
     pub(crate) claude_code_version: Option<String>,
-}
-
-#[derive(Debug, Args)]
-pub(crate) struct CleanupArgs {
-    #[arg(required_unless_present = "all", conflicts_with = "all")]
-    pub(crate) service: Option<String>,
-    /// Destroy every recorded instance in this state directory.
-    #[arg(long)]
-    pub(crate) all: bool,
-    #[arg(long)]
-    pub(crate) dry_run: bool,
 }
 
 #[derive(Debug, Args)]

@@ -207,7 +207,7 @@ def oneclick(case, replicas, variant, reuse=False, kind="alb", transport="ohttp"
     service = "vllm-inference"
     case.register(service)
     work = case.work / "oneclick"
-    command = ["bash", ROOT / "one-click/install.sh", "--target", "vllm-inference", "deploy", "--non-interactive", "--yes",
+    command = ["bash", ROOT / "one-click/install-vllm-inference.sh", "deploy", "--non-interactive", "--yes",
                "--state-dir", case.state, "--work-dir", work, "--region", case.region,
                "--zone-id", os.environ.get("E2E_GPU_ZONE_ID", "cn-beijing-l"), "--replicas", str(replicas),
                "--allowed-cidr", case.operator_cidr, "--model-key-file", os.environ["E2E_MODEL_KEY_FILE"],

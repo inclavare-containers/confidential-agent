@@ -4,7 +4,7 @@
 
 ## 1. 工作空间布局
 
-6 个 crate，单一 workspace（[`Cargo.toml`](../Cargo.toml)）。
+5 个 crate，单一 workspace（[`Cargo.toml`](../Cargo.toml)）。
 
 ```mermaid
 flowchart LR
@@ -12,8 +12,7 @@ flowchart LR
     shelter["shelter<br/>(渲染 Shelter cfg)"]
     cli["cli<br/>→ confidential-agent"]
     daemon["daemon<br/>→ confidential-agentd"]
-    pep["cai-pep<br/>(OpenClaw PoC + attest helper)"]
-    gateway["gateway<br/>→ cai-gateway"]
+    pep["cai-pep<br/>(PEP + attest helper)"]
 
     cli --> core
     cli --> shelter
@@ -28,8 +27,7 @@ flowchart LR
 | `shelter` | lib | host | 把 `AgentSpec` + `GuestAssets` 渲染成 Shelter YAML |
 | `cli` | `confidential-agent` 二进制 | host | 控制面：build / deploy / connect / status / destroy |
 | `daemon` | `confidential-agentd` 二进制 | guest | initrd-fetch + 持久 daemon + 状态 HTTP |
-| `cai-pep` | `cai-pep` 二进制 | guest | 通用本地证明工具；OpenClaw 可选 PEP PoC |
-| `gateway` | `cai-gateway` 二进制 | guest | mesh 服务身份 token、MCP 转发和审计 |
+| `cai-pep` | `cai-pep` 二进制 | guest | Unix socket 上的 PEP，沙箱内执行 Agent 工具调用 |
 
 ---
 
@@ -345,12 +343,3 @@ Confidential Agent 自己写的部分集中在：**用户视角的 spec、可复
 镜像清理和实例操作使用 `<state-dir>/operation-locks/<service>` 中的稳定锁文件，删除业务目录不会移除锁本身。发布进度只在短暂的 state 事务中重新读取并更新 publication 字段，不以长时网络操作之前的整份快照覆盖并发 mesh 更新。云镜像操作另持共享/排他 image lease。上传/导入状态、退休意图、资源所有权、导入快照和 OSS 中转对象清理分别记录；跨工作区发现同一镜像不自动授予删除权限。
 
 实例 `activating` 表示已加入待完成的配置拓扑，mesh 协议仍以 `active` 表示成员资格；宿主机应用就绪阶段与该协议字段独立。只有所有副本 readiness 验证通过后，实例管理状态才提交为 `active`。销毁先持久化 `destroying`，失败保留精确的 Terraform 目录和资源标识用于重试。
-
-
-## 12. 安装、编排和公共模板
-
-`one-click/install.sh` 统一负责 bootstrap，并沿用现有的 init/build/deploy/connect 编排。`init` 只生成本地项目，`build` 构建镜像，`deploy` 管理实例部署和资源交付，`connect` 管理访问通道；不增加统一启动命令。`cleanup` 按 state directory 枚举实例并调用 destroy。`common/` 保存 Node、NVIDIA CC、vLLM 安装库与共享证明 Skill。
-
-网关只接受与本机配置相同 `mesh_generation` 的已签名 token。完整 `mesh sync` 生成新版本并逐个投递，投递期间不同版本之间的请求会被拒绝；完成全量投递后恢复。`mesh sync --service ID` 重发已保存的 bundle，用于恢复单个节点，不增加 generation，也不改变拓扑。
-
-官方发布配套清单固定并验证 Shelter RPM 文件和 payload 摘要。RPM 依赖为最低版本约束，且 CLI 允许显式指定 Shelter；配套交付校验不等于任意运行环境都被版本锁定。CA 继续使用 V1 构建配置与 V2 运行配置，不改变 Shelter 接口。

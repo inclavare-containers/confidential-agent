@@ -44,7 +44,6 @@ ensure_cosign_key() {
 
 append_init_common_args() {
   local -n args_ref="$1"
-  export CA_GATEWAY_TOKEN
   args_ref+=(
     --non-interactive
     --force
@@ -55,6 +54,7 @@ append_init_common_args() {
     --disk-gb "$CA_DISK_GB"
     --replicas "$CA_REPLICAS"
     --reference-values "$CA_REFERENCE_VALUES"
+    --gateway-token "$CA_GATEWAY_TOKEN"
     --openclaw-version "$CA_OPENCLAW_VERSION"
     --node-version "$CA_NODE_VERSION"
     --npm-registry "$CA_NPM_REGISTRY"
@@ -66,6 +66,8 @@ append_init_common_args() {
   if [[ "$CA_ENABLE_DINGTALK" == "1" ]]; then
     args_ref+=(
       --enable-dingtalk
+      --dingtalk-client-id "$DINGTALK_BOT_CLIENT_ID"
+      --dingtalk-client-secret "$DINGTALK_BOT_CLIENT_SECRET"
     )
   fi
 }
@@ -73,6 +75,7 @@ append_init_common_args() {
 append_openclaw_bailian_args() {
   local -n args_ref="$1"
   args_ref+=(
+    --dashscope-api-key "$DASHSCOPE_API_KEY"
     --dashscope-base-url "$CA_API_BASE_URL"
     --model "$CA_MODEL"
   )

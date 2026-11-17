@@ -22,7 +22,7 @@ usage() {
   if [[ "${CA_ONE_CLICK_TARGET:-openclaw}" == "openclaw-vllm" ]]; then
     cat <<EOF
 Usage:
-  one-click/install.sh --target openclaw-vllm [deploy|install-only|cleanup] [options]
+  one-click/install-openclaw-vllm.sh [deploy|install-only|cleanup] [options]
 
 Default mode:
   deploy
@@ -69,9 +69,9 @@ Shelter options:
   --shelter-rpm PATH             Shelter RPM to install when missing or incompatible
 
 Examples:
-  one-click/install.sh --target openclaw-vllm
-  one-click/install.sh --target openclaw-vllm --vllm-build-variants debug
-  one-click/install.sh --target openclaw-vllm cleanup --state-dir "\$HOME/.confidential-agent"
+  one-click/install-openclaw-vllm.sh
+  one-click/install-openclaw-vllm.sh --vllm-build-variants debug
+  one-click/install-openclaw-vllm.sh cleanup --state-dir "\$HOME/.confidential-agent"
 EOF
     return
   fi
@@ -79,7 +79,7 @@ EOF
   if [[ "${CA_ONE_CLICK_TARGET:-openclaw}" == "vllm-inference" ]]; then
     cat <<EOF
 Usage:
-  one-click/install.sh --target vllm-inference [deploy|install-only|cleanup] [options]
+  one-click/install-vllm-inference.sh [deploy|install-only|cleanup] [options]
 
 Default mode:
   deploy
@@ -125,9 +125,9 @@ Shelter options:
   --shelter-rpm PATH             Shelter RPM to install when no binary exists
 
 Examples:
-  one-click/install.sh --target vllm-inference --oss-bucket my-bucket --model-key-file /path/key
-  one-click/install.sh --target vllm-inference --vllm-served-model-name Qwen3.8-27B
-  one-click/install.sh --target vllm-inference cleanup --state-dir "\$HOME/.confidential-agent"
+  one-click/install-vllm-inference.sh --oss-bucket my-bucket --model-key-file /path/key
+  one-click/install-vllm-inference.sh --vllm-served-model-name Qwen3.8-27B
+  one-click/install-vllm-inference.sh cleanup --state-dir "\$HOME/.confidential-agent"
 EOF
     return
   fi
@@ -360,7 +360,7 @@ normalize_mode() {
     openclaw:cleanup) CA_MODE="cleanup" ;;
     openclaw:install-only) CA_MODE="install-only" ;;
     openclaw:deploy-openclaw-vllm|openclaw:cleanup-openclaw-vllm)
-      die "use one-click/install.sh --target openclaw-vllm for OpenClaw vLLM"
+      die "use one-click/install-openclaw-vllm.sh for OpenClaw vLLM"
       ;;
     openclaw-vllm:deploy|openclaw-vllm:deploy-openclaw-vllm) CA_MODE="deploy-openclaw-vllm" ;;
     openclaw-vllm:cleanup|openclaw-vllm:cleanup-openclaw-vllm) CA_MODE="cleanup-openclaw-vllm" ;;

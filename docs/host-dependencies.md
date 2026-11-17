@@ -22,7 +22,7 @@ cagent 已使用原生工具。工具容器、`--tools-image`、`CA_TOOLS_IMAGE`
 仍会安装。Rust/Cargo/gcc 只用于从源码打包 CA，RPM 使用者不需要安装。
 
 Node/npm、Python 应用包、CUDA/vLLM 等在 Guest rootfs 内安装；部分
-one-click OpenClaw 场景会安装宿主机 OpenClaw 客户端，可通过 `--skip-host-openclaw` 跳过。
+one-click OpenClaw 场景还会安装宿主机 OpenClaw 客户端用于交互。
 如果 AppSpec 显式使用 build.container.image，需要按该功能安装 Podman
 或 Docker；这不是标准 all-in-one 构建的前置条件。Guest 内 PEP 的容器
 隔离也不要求宿主机安装 Docker。

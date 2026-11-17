@@ -38,8 +38,8 @@ jobs:
       - name: Check versions and scripts
         run: |
           python3.11 packaging/check-version.py
-          for script in packaging/*.sh hack/*.sh one-click/lib/*.sh common/*.sh common/gpu/*.sh common/cli-agents/*.sh; do bash -n "$script"; done
-          sh -n one-click/install.sh
+          for script in packaging/*.sh hack/*.sh one-click/lib/*.sh common/*.sh; do bash -n "$script"; done
+          for script in one-click/install*.sh; do sh -n "$script"; done
           git diff --check
       - name: Test Rust workspace
         run: cargo test --locked --workspace

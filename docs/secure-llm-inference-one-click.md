@@ -222,7 +222,7 @@ export ALICLOUD_SECRET_KEY="<YOUR_SECRET_KEY>"
 
 ```bash
 set -euo pipefail
-INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install.sh"
+INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install-vllm-inference.sh"
 INSTALL_SCRIPT="$(mktemp)"
 PROXY_URL="${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}"
 FIRST_URL="${PROXY_URL:+${PROXY_URL%/}/}${INSTALL_URL}"
@@ -236,7 +236,7 @@ if ! curl -fL --connect-timeout 10 --max-time 90 "$FIRST_URL" -o "$INSTALL_SCRIP
   curl -fL --connect-timeout 10 --max-time 90 "$SECOND_URL" -o "$INSTALL_SCRIPT"
 fi
 [[ "$(head -c 2 "$INSTALL_SCRIPT")" == '#!' ]]
-sh "$INSTALL_SCRIPT" --target vllm-inference
+sh "$INSTALL_SCRIPT"
 ```
 
 脚本默认进入交互模式，会自动询问缺失的阿里云凭证、模型密钥文件、OSS 路径等必要参数。常用默认配置如下：
@@ -261,7 +261,7 @@ sh "$INSTALL_SCRIPT" --target vllm-inference
 
 ```bash
 set -euo pipefail
-INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install.sh"
+INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install-vllm-inference.sh"
 INSTALL_SCRIPT="$(mktemp)"
 PROXY_URL="${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}"
 FIRST_URL="${PROXY_URL:+${PROXY_URL%/}/}${INSTALL_URL}"
@@ -275,7 +275,7 @@ if ! curl -fL --connect-timeout 10 --max-time 90 "$FIRST_URL" -o "$INSTALL_SCRIP
   curl -fL --connect-timeout 10 --max-time 90 "$SECOND_URL" -o "$INSTALL_SCRIPT"
 fi
 [[ "$(head -c 2 "$INSTALL_SCRIPT")" == '#!' ]]
-sh "$INSTALL_SCRIPT" --target vllm-inference \
+sh "$INSTALL_SCRIPT" \
   --non-interactive \
   --yes \
   --region cn-beijing \
@@ -291,7 +291,7 @@ sh "$INSTALL_SCRIPT" --target vllm-inference \
 
 ```bash
 set -euo pipefail
-INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install.sh"
+INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install-vllm-inference.sh"
 INSTALL_SCRIPT="$(mktemp)"
 PROXY_URL="${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}"
 FIRST_URL="${PROXY_URL:+${PROXY_URL%/}/}${INSTALL_URL}"
@@ -305,7 +305,7 @@ if ! curl -fL --connect-timeout 10 --max-time 90 "$FIRST_URL" -o "$INSTALL_SCRIP
   curl -fL --connect-timeout 10 --max-time 90 "$SECOND_URL" -o "$INSTALL_SCRIPT"
 fi
 [[ "$(head -c 2 "$INSTALL_SCRIPT")" == '#!' ]]
-sh "$INSTALL_SCRIPT" --target vllm-inference \
+sh "$INSTALL_SCRIPT" \
   --non-interactive \
   --yes \
   --region cn-beijing \
@@ -440,7 +440,7 @@ go mod edit -replace=github.com/inclavare-containers/tng/tng-go=/绝对路径/TN
 
 ```bash
 set -euo pipefail
-INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install.sh"
+INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install-vllm-inference.sh"
 INSTALL_SCRIPT="$(mktemp)"
 PROXY_URL="${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}"
 FIRST_URL="${PROXY_URL:+${PROXY_URL%/}/}${INSTALL_URL}"
@@ -454,7 +454,7 @@ if ! curl -fL --connect-timeout 10 --max-time 90 "$FIRST_URL" -o "$INSTALL_SCRIP
   curl -fL --connect-timeout 10 --max-time 90 "$SECOND_URL" -o "$INSTALL_SCRIPT"
 fi
 [[ "$(head -c 2 "$INSTALL_SCRIPT")" == '#!' ]]
-sh "$INSTALL_SCRIPT" --target vllm-inference cleanup \
+sh "$INSTALL_SCRIPT" cleanup \
   --state-dir "$HOME/.confidential-agent"
 ```
 

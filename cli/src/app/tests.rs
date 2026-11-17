@@ -3641,64 +3641,6 @@ fn destroy_keeps_local_build_artifacts_after_shelter_destroy_succeeds() {
 }
 
 #[test]
-fn cleanup_all_destroys_nondefault_instances_and_retains_builders() {
-    let root = tempfile::tempdir().unwrap();
-    let calls = root.path().join("calls");
-    let shelter = root.path().join("shelter");
-    write_script(
-        &shelter,
-        &format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\n",
-            calls.display()
-        ),
-    );
-    let mut cli = test_cli();
-    cli.state_dir = root.path().into();
-    cli.shelter_bin = shelter;
-    for (id, phase) in [
-        ("allinone-codex", "deployed"),
-        ("custom-hermes", "deployed"),
-        ("builder", "built"),
-    ] {
-        let mut state = local_state(id, vec![], vec![]);
-        state.phase = phase.into();
-        state.deploy.resource_name = format!("{id}-resource");
-        state.deploy.instance_id = Some(format!("i-{id}"));
-        write_state(root.path(), &state);
-        write_manifest(root.path(), id, &state.build.build_id);
-    }
-    let args = CleanupArgs {
-        service: None,
-        all: true,
-        dry_run: true,
-    };
-    cleanup::run(&cli, &args).unwrap();
-    assert!(!calls.exists());
-    cleanup::run(
-        &cli,
-        &CleanupArgs {
-            dry_run: false,
-            ..args
-        },
-    )
-    .unwrap();
-    let calls = fs::read_to_string(calls).unwrap();
-    assert!(calls.contains("allinone-codex-resource"));
-    assert!(calls.contains("custom-hermes-resource"));
-    assert!(!calls.contains("builder-resource"));
-    for state in read_service_states(root.path()).unwrap() {
-        assert_eq!(
-            state.phase,
-            if state.service_id == "builder" {
-                "built"
-            } else {
-                "deleted"
-            }
-        );
-    }
-}
-
-#[test]
 fn destroy_is_idempotent_for_deleted_service_without_cloud_state() {
     for mode in ["challenge", "trustee"] {
         let temp = tempfile::tempdir().unwrap();
@@ -4162,7 +4104,7 @@ resources: {}
 }
 
 #[test]
-fn published_image_for_deploy_uses_latest_publication_without_reading_disk() {
+fn published_image_for_deploy_skips_stale_entry_and_uses_valid_one() {
     let temp = tempfile::tempdir().unwrap();
     let mut state = local_state(
         "openclaw",
@@ -4188,9 +4130,6 @@ fn published_image_for_deploy_uses_latest_publication_without_reading_disk() {
     );
     let mut valid = test_published_image(&state.build.build_id, &source_sha256);
     valid.image_id = Some("m-valid".to_string());
-    valid.created_at = "9999-01-01T00:00:00Z".into();
-    fs::remove_file(&state.build.image_path).unwrap();
-    fs::create_dir(&state.build.image_path).unwrap();
     state.build.published.insert(
         "aliyun/cn-beijing/release/build/999-valid".to_string(),
         valid,
