@@ -31,7 +31,10 @@ jobs:
         with:
           node-version: '24'
       - name: Install test tools
-        run: sudo apt-get update && sudo apt-get install -y rpm
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm openssh-server
+          sudo install -d -m 0755 /run/sshd
       - name: Check versions and scripts
         run: |
           python3.11 packaging/check-version.py
@@ -61,7 +64,12 @@ jobs:
         run: |
           export CA_BIN="$PWD/target/debug/confidential-agent" CA_TOOLS_DIR="$RUNNER_TEMP/cagent-tools"
           python3.11 -m unittest discover -s tools/e2e/tests -v
-          for test in tools/e2e/tests/*.sh; do bash "$test"; done
+          for test in tools/e2e/tests/*.sh; do
+            case "$test" in
+              */debug-ssh-first-use.sh) sudo env "PATH=$PATH" bash "$test" ;;
+              *) bash "$test" ;;
+            esac
+          done
           for test in tools/e2e/tests/*.mjs; do node "$test" "$RUNNER_TEMP/openclaw-fixture/package"; done
 
   rpm:
