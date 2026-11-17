@@ -83,6 +83,21 @@ pub(super) fn prepare_guest_assets(cli: &Cli, guest_staging_dir: &Path) -> Resul
             include_str!("../../../common/software-versions.sh"),
             "/usr/local/libexec/confidential-agent/software-versions.sh",
         ),
+        (
+            "node.sh",
+            include_str!("../../../common/node.sh"),
+            "/usr/local/libexec/confidential-agent/node.sh",
+        ),
+        (
+            "gpu-build.sh",
+            include_str!("../../../common/gpu/build.sh"),
+            "/usr/local/libexec/confidential-agent/gpu-build.sh",
+        ),
+        (
+            "install-vllm-deps.sh",
+            include_str!("../../../common/gpu/install-vllm-deps.sh"),
+            "/usr/local/libexec/confidential-agent/install-vllm-deps.sh",
+        ),
     ] {
         let source = guest_staging_dir.join(filename);
         fs::write(&source, content)?;

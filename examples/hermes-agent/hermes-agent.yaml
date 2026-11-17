@@ -8,13 +8,13 @@ service:
 
 build:
   image_name: hermes-agent
-  resize: 30G
+  resize: 40G
   packages: [ca-certificates, curl, findutils, git, libatomic, python3.11, shadow-utils, tar, util-linux, xz]
   files:
-    - source: ../../target/debug/cai-pep
+    - source: /usr/bin/cai-pep
       target: /usr/local/bin/cai-pep
       executable: true
-    - source: ../cli-agents/files/tdx-remote-attestation.SKILL.md
+    - source: ../../common/skills/tdx-remote-attestation.SKILL.md
       target: /opt/data/skills/tdx-remote-attestation/SKILL.md
     - source: ./files/install-hermes-agent-runtime.sh
       target: /usr/local/libexec/confidential-agent/hermes/install-hermes-agent-runtime.sh
@@ -37,7 +37,7 @@ deploy:
   instance_type: ecs.g9i.xlarge
   region: cn-beijing
   zone_id: cn-beijing-i
-  disk_gb: 30
+  disk_gb: 60
 
 attestation:
   tee: tdx

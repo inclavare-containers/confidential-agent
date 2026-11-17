@@ -8,8 +8,7 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[3]
-SCRIPTS = [ROOT / 'examples/vllm-inference/install-vllm-inference.sh',
-           ROOT / 'examples/openclaw-vllm/install-openclaw-vllm.sh']
+SCRIPTS = [ROOT / 'common/gpu/build.sh']
 
 
 class InstallerTransportRetries(unittest.TestCase):
