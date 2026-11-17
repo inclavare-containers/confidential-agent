@@ -586,7 +586,6 @@ const OPS_DOC: &str = r#"
 
 Core commands:
 
-- `up --spec <path>` builds if needed, deploys or resumes, and starts a protected connection. Without --spec, it initializes a project first.
 - `cleanup SERVICE` destroys one recorded instance; `cleanup --all --dry-run` previews all recorded instances.
 - `build --spec <path>` creates the confidential image; `build` defaults to `confidential-agent.yaml`.
 - `key generate-cosign --output-key-prefix ./cosign` creates a Rekor signing key pair using native cosign.

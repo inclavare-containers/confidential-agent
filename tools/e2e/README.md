@@ -213,7 +213,7 @@ package cache, built CA binaries, container images, or prebuilt guest images.
 Run the normal installer, then repeat it to check idempotency:
 
 ```bash
-sh one-click/install.sh
+sh one-click/install.sh install-only --non-interactive --yes --skip-host-openclaw
 tools/e2e/prepare-host.sh
 rpm -V shelter cryptpilot-fde-host
 hack/check-shelter.sh /usr/bin/shelter

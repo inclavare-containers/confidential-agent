@@ -6,7 +6,7 @@ detect_os_id() {
     . /etc/os-release
     # The OpenAnolis edition of Alibaba Cloud Linux 3 ships with ID=centos
     # but carries ALINUX_MINOR_ID / VARIANT_ID=openanolis and the same
-    # alinux3-* repos. Treat it as alinux so the E2E host preparation runs on it.
+    # alinux3-* repos. Treat it as alinux so the one-click runs on it.
     if [[ "${ID:-}" != "alinux" && ( "${VARIANT_ID:-}" == "openanolis" || -n "${ALINUX_MINOR_ID:-}" ) ]]; then
       printf 'alinux\n'
     else
@@ -32,7 +32,7 @@ require_alinux3() {
   os_id="$(detect_os_id)"
   os_version="$(detect_os_version_id)"
   if [[ "$os_id" != "alinux" || "$os_version" != "3" ]]; then
-    die "E2E host preparation currently supports Alibaba Cloud Linux 3 only; detected ID='$os_id' VERSION_ID='$os_version'"
+    die "one-click currently supports Alibaba Cloud Linux 3 only; detected ID='$os_id' VERSION_ID='$os_version'"
   fi
 }
 

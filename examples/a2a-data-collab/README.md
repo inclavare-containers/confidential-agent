@@ -6,8 +6,10 @@
 
 ```bash
 cagent key generate-cosign --output-key-prefix ./cosign
-cagent --state-dir .state/analyst up --spec analyst.yaml
-cagent --state-dir .state/owner up --spec data-owner.yaml
+cagent --state-dir .state/analyst build --spec analyst.yaml
+cagent --state-dir .state/analyst deploy --spec analyst.yaml
+cagent --state-dir .state/owner build --spec data-owner.yaml
+cagent --state-dir .state/owner deploy --spec data-owner.yaml
 ```
 
 部署完成后，在 data-owner 的 peerings 中放行 analyst 的 AgentCard/connect 来源，再在 analyst 中执行 `a2a add`，使用 data-owner 的 AgentCard URL 和 `--alias data-owner --service analyst-agent`。完整双向流程及签名示例见 [A2A 文档](../../docs/a2a.md)。

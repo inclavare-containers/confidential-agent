@@ -305,7 +305,7 @@ deploy:
     slb_type: alb
 ```
 
-`service.connect` 中的整数端口等价于 `{port: PORT, encryption: rats-tls}`。OHTTP 是端口的加密模式，不是顶层 `ohttp` 字段。部署机 CIDR 由 `up --deployer-cidr` 或 `CA_DEPLOYER_CIDR` 输入，保存到部署快照并转交 Shelter；它不是 AppSpec 字段，后续网络更新使用部署记录。
+`service.connect` 中的整数端口等价于 `{port: PORT, encryption: rats-tls}`。OHTTP 是端口的加密模式，不是顶层 `ohttp` 字段。部署机 CIDR 由 one-click 检测或通过 `CA_DEPLOYER_CIDR` 输入，保存到部署快照并转交 Shelter；它不是 AppSpec 字段，后续网络更新使用部署记录。
 
 ## 5. `attestation` — 远程证明
 

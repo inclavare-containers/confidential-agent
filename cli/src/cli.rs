@@ -173,8 +173,6 @@ pub(crate) struct Cli {
 #[derive(Debug, Subcommand)]
 pub(crate) enum Commands {
     Init(InitArgs),
-    /// Initialize, build if needed, deploy and start a protected connection.
-    Up(UpArgs),
     /// Destroy recorded instances, including non-default harnesses.
     Cleanup(CleanupArgs),
     Build(BuildArgs),
@@ -298,7 +296,7 @@ pub(crate) struct InitArgs {
         help = format!("Model name (default: {})", confidential_agent_core::software::version("bailian_model"))
     )]
     pub(crate) model: Option<String>,
-    #[arg(long)]
+    #[arg(long, env = "CA_GATEWAY_TOKEN")]
     pub(crate) gateway_token: Option<String>,
     #[arg(long)]
     pub(crate) disable_pep: bool,
@@ -344,24 +342,6 @@ pub(crate) struct InitArgs {
     pub(crate) codex_version: Option<String>,
     #[arg(long)]
     pub(crate) claude_code_version: Option<String>,
-}
-
-#[derive(Debug, Args)]
-pub(crate) struct UpArgs {
-    #[command(flatten)]
-    pub(crate) init: InitArgs,
-    /// Use an existing project instead of generating one.
-    #[arg(long)]
-    pub(crate) spec: Option<PathBuf>,
-    /// Operator networks allowed to reach the instance; defaults to this host.
-    #[arg(long, value_delimiter = ',')]
-    pub(crate) allowed_cidr: Vec<String>,
-    #[arg(long, env = "CA_DEPLOYER_CIDR")]
-    pub(crate) deployer_cidr: Option<String>,
-    #[arg(long)]
-    pub(crate) no_connect: bool,
-    #[arg(long, default_value_t = 120)]
-    pub(crate) wait_ready: u64,
 }
 
 #[derive(Debug, Args)]
