@@ -183,6 +183,8 @@ sh "$INSTALL_SCRIPT" deploy --non-interactive --yes \
 
 传入 `--skip-host-client`（OpenClaw 也可使用 `--skip-host-openclaw`）跳过宿主机客户端安装。
 
+OpenClaw 的对等连接通过 Agent Card 发现对端，再经 TNG 隧道调用对端 Gateway 的 `/v1/responses`。当前 OpenClaw 卡片列出的 `/a2a` 在 Gateway 上没有对应的处理器。标准 A2A JSON-RPC `message/send` 的处理器见[独立的 data-collab 示例](../../examples/a2a-data-collab/files/agent-server.mjs)。
+
 #### 可选：按实例禁用 OpenClaw PEP（保留远程证明）
 
 百炼 API / CPU OpenClaw 场景默认启用 `cai-pep` 策略拦截。传入 `--disable-pep` 会按实例关闭该 OpenClaw 实例的 `exec` 工具策略沙箱控制，**但完整保留实例的 TDX 运行时远程证明资源释放及 Guest 内 `cai-pep attest collect-and-verify` 证明能力**：
