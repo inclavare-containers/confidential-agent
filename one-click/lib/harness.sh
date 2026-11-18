@@ -115,7 +115,7 @@ resolve_cpu_image() {
     CA_IMAGE_RELEASE="$builder/image-release.json"
     if [[ "$CA_SKIP_BUILD" != 1 ]]; then
       local args=(--reference-values "$CA_REFERENCE_VALUES" --slsa-generator "$CA_SLSA_GENERATOR")
-      if [[ -n "$CA_COSIGN_KEY" ]]; then args+=(--cosign-key "$CA_COSIGN_KEY"); fi
+      if [[ -n "${CA_COSIGN_KEY:-}" ]]; then args+=(--cosign-key "$CA_COSIGN_KEY"); fi
       (cd "$ROOT_DIR" && ca_cmd init --stage build --non-interactive --output-dir "$CA_WORK_DIR" --force "${args[@]}")
       (cd "$builder" && ca_cmd build --spec "$builder/build.yaml")
     fi

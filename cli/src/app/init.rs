@@ -925,7 +925,9 @@ fn openclaw_vllm_files_yaml(pep_bin: &Path) -> Result<String> {
 }
 
 fn rekor_block(project: &InitProject) -> Result<String> {
-    if project.reference_values != InitReferenceValues::Rekor {
+    if project.reference_values != InitReferenceValues::Rekor
+        || matches!(project.plan, InitPlan::GpuStaged(_, InitStage::Deploy))
+    {
         return Ok(String::new());
     }
     let cosign = project

@@ -852,7 +852,6 @@ pub(super) fn finish_gpu(args: &InitArgs, project: &InitProject) -> Result<()> {
         if args.replicas > 1 && spec["deploy"]["slb"].is_null() {
             spec["deploy"]["slb"] = json!({"enabled": true, "slb_type": "nlb"});
         }
-        spec["attestation"].as_object_mut().unwrap().remove("rekor");
         fs::copy(
             args.image_release.as_ref().unwrap(),
             project.dir.join("image-release.json"),
@@ -1126,6 +1125,54 @@ mod tests {
             "confidential-agent --state-dir {} deploy --spec instance.yaml",
             shell_path(&state)
         )));
+    }
+
+    #[test]
+    fn gpu_consumers_use_rekor_without_the_build_signing_key() {
+        let temp = tempfile::tempdir().unwrap();
+        let release = temp.path().join("image-release.json");
+        let model_key = temp.path().join("model.key");
+        fs::write(&release, "{}\n").unwrap();
+        fs::write(&model_key, "test-model-key\n").unwrap();
+        let digest = format!("sha256:{}", sha256_file(&release).unwrap());
+
+        for target in ["openclaw-vllm", "vllm-inference"] {
+            let mut argv = vec![
+                "cagent",
+                "init",
+                target,
+                "--stage",
+                "deploy",
+                "--non-interactive",
+                "--output-dir",
+                temp.path().to_str().unwrap(),
+                "--image-release",
+                release.to_str().unwrap(),
+                "--release-digest",
+                &digest,
+            ];
+            if target == "vllm-inference" {
+                argv.extend([
+                    "--oss-bucket",
+                    "test-models:/qwen",
+                    "--model-key-file",
+                    model_key.to_str().unwrap(),
+                ]);
+            }
+            let cli = Cli::try_parse_from(argv).unwrap();
+            let Commands::Init(args) = &cli.command else {
+                unreachable!()
+            };
+            cmd_init(&cli, args).unwrap();
+
+            let project = temp.path().join(target);
+            let spec = AgentSpec::from_path(&project.join("instance.yaml")).unwrap();
+            assert_eq!(spec.attestation.reference_values, ReferenceValueMode::Rekor);
+            assert!(spec.attestation.rekor.is_none());
+            assert!(!project.join("cosign.key").exists());
+            let image = spec.deploy.image.unwrap();
+            assert_eq!(image.release_digest.as_deref(), Some(digest.as_str()));
+        }
     }
 
     #[test]
