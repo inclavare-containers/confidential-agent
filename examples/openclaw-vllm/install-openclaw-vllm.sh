@@ -270,6 +270,11 @@ set -euo pipefail
 export PATH=/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin
 PYPI_INDEX_URL="${OPENCLAW_VLLM_PYPI_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple}"
 VLLM_VERSION="${OPENCLAW_VLLM_VERSION:-0.28.0}"
+vllm_requirements=("vllm==$VLLM_VERSION")
+if [[ "$VLLM_VERSION" == "0.28.0" ]]; then
+  # Keep the multimodal processor compatible with this vLLM release.
+  vllm_requirements+=("transformers==5.22.0")
+fi
 export PIP_CACHE_DIR="${PIP_CACHE_DIR:-/tmp/cai-pip-cache}"
 export UV_CACHE_DIR="${UV_CACHE_DIR:-/tmp/cai-uv-cache}"
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/tmp/cai-cache}"
@@ -291,10 +296,14 @@ restore_vllm_build_headers() {
 }
 vllm_deps_ready() {
   [[ -x /root/.venv/bin/python && -x /root/.venv/bin/vllm && -x /root/.venv/bin/ninja ]] || return 1
-  VLLM_VERSION="$VLLM_VERSION" /root/.venv/bin/python - <<'PY' || return 1
-import importlib.metadata
-import os
-raise SystemExit(0 if importlib.metadata.version("vllm") == os.environ["VLLM_VERSION"] else 1)
+  /root/.venv/bin/python - "${vllm_requirements[@]}" <<'PY' || return 1
+from importlib.metadata import version
+import sys
+
+for requirement in sys.argv[1:]:
+    package, expected = requirement.split("==", 1)
+    if version(package) != expected:
+        raise SystemExit(1)
 PY
   python3.11 - <<'PY' || return 1
 import importlib
@@ -319,7 +328,7 @@ cd /root
 if [[ ! -d .venv ]]; then
   uv venv --python 3.11
 fi
-uv pip install -i "$PYPI_INDEX_URL" --only-binary=:all: "vllm==$VLLM_VERSION" ninja
+uv pip install -i "$PYPI_INDEX_URL" --only-binary=:all: "${vllm_requirements[@]}" ninja
 cleanup_package_caches
 EOF
 chmod 0755 /usr/local/bin/cai-vllm-install-deps.sh
