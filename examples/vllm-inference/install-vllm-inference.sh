@@ -315,7 +315,6 @@ cat >/usr/local/bin/cai-vllm-setup.sh <<'EOF'
 #!/bin/bash
 set -euo pipefail
 export PATH=/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin
-VLLM_VERSION="${OPENCLAW_VLLM_VERSION:-0.28.0}"
 restore_vllm_build_headers() {
   local src=/opt/confidential-agent/openclaw-vllm/usr-include
   if [[ -f /usr/include/python3.11/Python.h && -f /usr/include/stdio.h ]]; then
@@ -332,15 +331,6 @@ restore_vllm_build_headers
 cd /root
 command -v uv >/dev/null 2>&1 || { echo "uv is missing; image build must preinstall vLLM dependencies" >&2; exit 1; }
 [[ -x /root/.venv/bin/python && -x /root/.venv/bin/vllm ]] || { echo "vLLM virtualenv is missing; image build must preinstall vLLM dependencies" >&2; exit 1; }
-if ! VLLM_VERSION="$VLLM_VERSION" /root/.venv/bin/python - <<'PY'
-import importlib.metadata
-import os
-raise SystemExit(0 if importlib.metadata.version("vllm") == os.environ["VLLM_VERSION"] else 1)
-PY
-then
-  echo "vLLM version mismatch; image build must preinstall the requested version" >&2
-  exit 1
-fi
 test -x /root/.venv/bin/python
 test -x /root/.venv/bin/vllm
 EOF
