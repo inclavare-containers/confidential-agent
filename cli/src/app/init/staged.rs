@@ -825,8 +825,42 @@ fn resource(
     Ok(())
 }
 
-pub(super) fn finish_gpu(args: &InitArgs, project: &InitProject) -> Result<()> {
-    let InitPlan::GpuStaged(_, stage) = project.plan else {
+pub(super) struct GpuRelease {
+    bytes: Vec<u8>,
+    mode: u32,
+    ssh: bool,
+}
+
+pub(super) fn read_gpu_release(args: &InitArgs) -> Result<GpuRelease> {
+    let release_digest = args.release_digest.as_ref().unwrap();
+    let mut file = File::open(args.image_release.as_ref().unwrap())?;
+    let mode = file.metadata()?.permissions().mode() & 0o777;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    let actual_digest = format!("sha256:{}", hex_encode(&Sha256::digest(&bytes)));
+    anyhow::ensure!(
+        actual_digest.eq_ignore_ascii_case(release_digest),
+        "release digest mismatch: expected {release_digest}, found {actual_digest}"
+    );
+    let mut release: Value = serde_json::from_slice(&bytes)?;
+    if release["payloadType"] == "application/vnd.shelter.cloud-image-release.v1+json" {
+        let payload = release["payload"]
+            .as_str()
+            .context("missing release payload")?;
+        release = serde_json::from_slice(&BASE64_STANDARD.decode(payload)?)?;
+    }
+    let ssh = release["runtime_metadata"]["capabilities"]
+        .as_array()
+        .is_some_and(|values| values.iter().any(|value| value == "instance-ssh-v1"));
+    Ok(GpuRelease { bytes, mode, ssh })
+}
+
+pub(super) fn finish_gpu(
+    args: &InitArgs,
+    project: &InitProject,
+    release: Option<&GpuRelease>,
+) -> Result<()> {
+    let InitPlan::GpuStaged(_, _) = project.plan else {
         return Ok(());
     };
     let mut spec: Value = serde_yaml::from_str(&fs::read_to_string(&project.spec_path)?)?;
@@ -839,22 +873,17 @@ pub(super) fn finish_gpu(args: &InitArgs, project: &InitProject) -> Result<()> {
         }
     }
     spec["deploy"]["image_variant"] = json!("release");
-    spec["service"]["ssh"] = json!(true);
-    if stage == InitStage::Build {
-        add_management_ssh(project, &mut spec)?;
-        spec["build"]["variants"] = json!({"release": {"enabled": true}});
-        spec["resources"] = json!({});
-        spec["deploy"].as_object_mut().unwrap().remove("replicas");
-        spec["deploy"].as_object_mut().unwrap().remove("slb");
-    } else {
+    if let Some(release) = release {
         spec.as_object_mut().unwrap().remove("build");
         spec["deploy"]["replicas"] = json!(args.replicas);
         if args.replicas > 1 && spec["deploy"]["slb"].is_null() {
             spec["deploy"]["slb"] = json!({"enabled": true, "slb_type": "nlb"});
         }
-        fs::copy(
-            args.image_release.as_ref().unwrap(),
-            project.dir.join("image-release.json"),
+        spec["service"]["ssh"] = json!(release.ssh);
+        write_private_file(
+            &project.dir.join("image-release.json"),
+            &release.bytes,
+            release.mode,
         )?;
         let mut image = json!({
             "release": "./image-release.json",
@@ -867,6 +896,13 @@ pub(super) fn finish_gpu(args: &InitArgs, project: &InitProject) -> Result<()> {
             image["image_id"] = json!(id);
         }
         spec["deploy"]["image"] = image;
+    } else {
+        spec["service"]["ssh"] = json!(true);
+        add_management_ssh(project, &mut spec)?;
+        spec["build"]["variants"] = json!({"release": {"enabled": true}});
+        spec["resources"] = json!({});
+        spec["deploy"].as_object_mut().unwrap().remove("replicas");
+        spec["deploy"].as_object_mut().unwrap().remove("slb");
     }
     write_file(&project.spec_path, &serde_yaml::to_string(&spec)?, 0o644)
 }
@@ -921,20 +957,26 @@ systemctl enable cai-ssh.path
     Ok(())
 }
 
-pub(super) fn write_next_steps(cli: &Cli, args: &InitArgs, project: &InitProject) -> Result<()> {
+pub(super) fn write_next_steps(
+    cli: &Cli,
+    args: &InitArgs,
+    project: &InitProject,
+    ssh: bool,
+) -> Result<()> {
     let name = &project.service_id;
     let steps = if matches!(
         project.plan,
         InitPlan::SharedCpuBuild | InitPlan::GpuStaged(_, InitStage::Build)
     ) {
-        let consumer_example = match project.plan {
-            InitPlan::GpuStaged(target, _) => {
-                format!(
-                    "confidential-agent init {} --stage deploy",
-                    target.command_name()
-                )
-            }
-            _ => "confidential-agent init openclaw".to_string(),
+        let (consumer_example, reuse_note) = match project.plan {
+            InitPlan::GpuStaged(target, _) => (
+                format!("confidential-agent init {} --stage deploy", target.command_name()),
+                format!("Use this dedicated GPU release for `{}` instances.", target.command_name()),
+            ),
+            _ => (
+                "confidential-agent init openclaw".into(),
+                "Reuse this same shared CPU release across openclaw, hermes, codex, claude-code, qodercli, opencode, pi, and dsh without rebuilding.".into(),
+            ),
         };
         format!(
             r#"# Build and publish {name}
@@ -953,7 +995,7 @@ confidential-agent image export {name} --output image-release.json
 For an already available shared/marketplace image, add --region REGION --image-id IMAGE_ID to image export; no upload or import is performed.
 Initialize instances with `{consumer_example} --image-release ./image-release.json --release-digest sha256:...` (or a digest from the versioned official Release index).
 Optional --manifest pins a specific manifest digest; --service-id sets a distinct instance name when running multiple instances.
-Reuse this same shared CPU release across openclaw, hermes, codex, claude-code, qodercli, opencode, pi, and dsh without rebuilding.
+{reuse_note}
 Changing software versions requires a new build and release. Changing model/provider configuration does not require rebuilding.
 Destroying a consumer preserves the shared image.
 "#
@@ -961,14 +1003,47 @@ Destroying a consumer preserves the shared image.
     } else {
         let access = match project.plan {
             InitPlan::SharedCpuDeploy(target) => cpu_access_steps(args, target, name)?,
-            _ => format!(
-                "```bash\nconfidential-agent ssh {name} --tty\nconfidential-agent connect start --service {name}\n```\n"
-            ),
+            _ => {
+                let mut access = format!(
+                    r#"Start the TNG tunnel and read the mapped local port.
+
+```bash
+confidential-agent connect start --service {name} --ready-json connect-ready.json
+LOCAL_PORT="$(jq -r '.client_endpoints[0].local_port' connect-ready.json)"
+```
+"#
+                );
+                if let InitPlan::GpuStaged(InitTarget::OpenclawVllm, _) = project.plan {
+                    access.push_str(
+                        r#"
+Open the displayed URL and use the gateway token in `openclaw-vllm.json`.
+
+```bash
+printf '%s\n' "http://127.0.0.1:$LOCAL_PORT/openclaw"
+openclaw tui --url "ws://127.0.0.1:$LOCAL_PORT" --token "$(jq -r '.gateway.auth.token' openclaw-vllm.json)"
+```
+"#,
+                    );
+                } else {
+                    access.push_str("\nQuery the vLLM model list through the OHTTP tunnel.\n\n```bash\ncurl -fsS \"http://127.0.0.1:$LOCAL_PORT/v1/models\"\n```\n");
+                }
+                if ssh {
+                    access.push_str(&format!(
+                        "\n```bash\nconfidential-agent ssh {name} --tty\n```\n"
+                    ));
+                }
+                access
+            }
+        };
+        let ssh_note = if ssh {
+            "Management SSH uses credentials delivered after attestation.\n\n"
+        } else {
+            ""
         };
         format!(
             r#"# Deploy {name} from a published image
 
-Run these commands from this directory. Review instance.yaml and private files in secrets/.
+Run these commands from this directory. Review instance.yaml and the local resource files it lists.
 CA authenticates image-release.json against deploy.image.release_digest and verifies runtime TDX attestation.
 Use the published image to deploy this project.
 
@@ -980,9 +1055,7 @@ confidential-agent status --live
 confidential-agent report --json
 ```
 
-Management SSH uses credentials delivered after attestation.
-
-{access}
+{ssh_note}{access}
 Send a model request to check the configured provider after the application is ready.
 Run init again with a different --service-id to create an independent instance from the same release.
 Network services support --replicas N for load-balanced replicas; CLI applications use distinct --service-id values instead.
@@ -1128,15 +1201,30 @@ mod tests {
     }
 
     #[test]
-    fn gpu_consumers_use_rekor_without_the_build_signing_key() {
+    fn gpu_consumers_use_rekor_and_only_request_advertised_instance_ssh() {
         let temp = tempfile::tempdir().unwrap();
         let release = temp.path().join("image-release.json");
         let model_key = temp.path().join("model.key");
-        fs::write(&release, "{}\n").unwrap();
         fs::write(&model_key, "test-model-key\n").unwrap();
-        let digest = format!("sha256:{}", sha256_file(&release).unwrap());
 
-        for target in ["openclaw-vllm", "vllm-inference"] {
+        for (target, access, ssh) in [
+            ("openclaw-vllm", "/openclaw", false),
+            ("vllm-inference", "/v1/models", false),
+            ("openclaw-vllm", "/openclaw", true),
+            ("vllm-inference", "/v1/models", true),
+        ] {
+            let capabilities = if ssh { vec!["instance-ssh-v1"] } else { vec![] };
+            let mut document = json!({"runtime_metadata": {"capabilities": capabilities}});
+            if ssh {
+                document = json!({
+                    "payloadType": "application/vnd.shelter.cloud-image-release.v1+json",
+                    "payload": BASE64_STANDARD.encode(serde_json::to_vec(&document).unwrap()),
+                    "signatures": []
+                });
+            }
+            fs::write(&release, serde_json::to_vec(&document).unwrap()).unwrap();
+            let digest = format!("sha256:{}", sha256_file(&release).unwrap());
+            let output = temp.path().join(if ssh { "managed" } else { "direct" });
             let mut argv = vec![
                 "cagent",
                 "init",
@@ -1145,7 +1233,7 @@ mod tests {
                 "deploy",
                 "--non-interactive",
                 "--output-dir",
-                temp.path().to_str().unwrap(),
+                output.to_str().unwrap(),
                 "--image-release",
                 release.to_str().unwrap(),
                 "--release-digest",
@@ -1165,13 +1253,37 @@ mod tests {
             };
             cmd_init(&cli, args).unwrap();
 
-            let project = temp.path().join(target);
+            let project = output.join(target);
             let spec = AgentSpec::from_path(&project.join("instance.yaml")).unwrap();
             assert_eq!(spec.attestation.reference_values, ReferenceValueMode::Rekor);
             assert!(spec.attestation.rekor.is_none());
             assert!(!project.join("cosign.key").exists());
+            assert_eq!(spec.service.ssh, ssh, "{target}");
             let image = spec.deploy.image.unwrap();
             assert_eq!(image.release_digest.as_deref(), Some(digest.as_str()));
+            assert_eq!(
+                format!("sha256:{}", sha256_file(&image.release).unwrap()),
+                digest
+            );
+            let steps = fs::read_to_string(project.join("NEXT_STEPS.md")).unwrap();
+            assert!(steps.contains("connect start"));
+            assert!(steps.contains(".client_endpoints[0].local_port"));
+            assert!(steps.contains(access));
+            assert_eq!(steps.contains("--tty"), ssh, "{target}");
+
+            if target == "openclaw-vllm" && !ssh {
+                let marker = project.join("operator-notes.txt");
+                fs::write(&marker, "retain me").unwrap();
+                let mut invalid = args.clone();
+                invalid.force = true;
+                invalid.release_digest = Some(format!("sha256:{}", "0".repeat(64)));
+                let error = cmd_init(&cli, &invalid).unwrap_err();
+                assert!(error.to_string().contains("release digest mismatch"));
+                assert_eq!(fs::read_to_string(marker).unwrap(), "retain me");
+                invalid.service_id = Some("invalid-release".into());
+                assert!(cmd_init(&cli, &invalid).is_err());
+                assert!(!output.join("invalid-release").exists());
+            }
         }
     }
 
@@ -1194,6 +1306,8 @@ mod tests {
         assert!(!untargeted.join("secrets").exists());
         assert_eq!(spec.image_variant(), "release");
         assert!(spec.build.variants.debug.is_none());
+        let steps = fs::read_to_string(untargeted.join("NEXT_STEPS.md")).unwrap();
+        assert!(steps.contains("shared CPU release across openclaw, hermes, codex, claude-code, qodercli, opencode, pi, and dsh"));
         for home in [
             "home/.agents",
             "home/.claude",
@@ -1249,6 +1363,8 @@ mod tests {
             let gpu_spec = AgentSpec::from_path(&gpu_dir.join("build.yaml")).unwrap();
             assert_ne!(gpu_spec.build.image_name, "allinone");
             assert!(gpu_spec.resources.is_empty());
+            let steps = fs::read_to_string(gpu_dir.join("NEXT_STEPS.md")).unwrap();
+            assert!(steps.contains(&format!("dedicated GPU release for `{gpu}` instances")));
         }
 
         assert!(run_args(temp.path(), &["--stage", "build", "--disk-gb", "80"]).is_err());

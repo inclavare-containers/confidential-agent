@@ -75,6 +75,11 @@ pub(super) fn cmd_init(cli: &Cli, args: &InitArgs) -> Result<()> {
     let args = &resolved_args;
 
     staged::validate_args(args, plan)?;
+    let gpu_release = if matches!(plan, InitPlan::GpuStaged(_, InitStage::Deploy)) {
+        Some(staged::read_gpu_release(args)?)
+    } else {
+        None
+    };
     let mut project = resolve_project(args, plan)?;
     guard_output_dir(&project.dir, args.force)?;
     fs::create_dir_all(&project.dir)
@@ -98,17 +103,17 @@ pub(super) fn cmd_init(cli: &Cli, args: &InitArgs) -> Result<()> {
         InitPlan::GpuDirect(InitTarget::OpenclawVllm)
         | InitPlan::GpuStaged(InitTarget::OpenclawVllm, _) => {
             write_openclaw_vllm_project(cli, args, &project)?;
-            staged::finish_gpu(args, &project)?;
+            staged::finish_gpu(args, &project, gpu_release.as_ref())?;
         }
         InitPlan::GpuDirect(InitTarget::VllmInference)
         | InitPlan::GpuStaged(InitTarget::VllmInference, _) => {
             write_vllm_inference_project(cli, args, &project)?;
-            staged::finish_gpu(args, &project)?;
+            staged::finish_gpu(args, &project, gpu_release.as_ref())?;
         }
         _ => unreachable!("unexpected GPU target in plan"),
     }
 
-    AgentSpec::from_path(&project.spec_path).with_context(|| {
+    let spec = AgentSpec::from_path(&project.spec_path).with_context(|| {
         format!(
             "generated AppSpec '{}' did not parse",
             project.spec_path.display()
@@ -116,7 +121,7 @@ pub(super) fn cmd_init(cli: &Cli, args: &InitArgs) -> Result<()> {
     })?;
     match plan {
         InitPlan::GpuDirect(_) => write_next_steps(cli, &project)?,
-        _ => staged::write_next_steps(cli, args, &project)?,
+        _ => staged::write_next_steps(cli, args, &project, spec.service.ssh)?,
     }
     println!("[ca] init generated {}", project.dir.display());
     println!("[ca] AppSpec: {}", project.spec_path.display());
