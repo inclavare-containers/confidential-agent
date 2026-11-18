@@ -29,6 +29,7 @@ docker run --rm -v "$release_dir:/release:ro" \
   /usr/libexec/cagent/bin/cosign version >/dev/null
   /usr/libexec/cagent/bin/aliyun version >/dev/null
   /usr/libexec/cagent/bin/ossutil64 --version >/dev/null
+  /usr/libexec/cagent/bin/oras version >/dev/null
   /usr/libexec/cagent/bin/rekor-cli version >/dev/null
   mkdir /consumer
   cd /consumer
