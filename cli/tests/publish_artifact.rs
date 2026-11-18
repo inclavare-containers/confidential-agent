@@ -12,7 +12,7 @@ const MANIFEST: &str = concat!(
     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 );
 const OCI: &str = concat!(
-    "ghcr.io/example/shelter-artifact@sha256:",
+    "registry.example/example/shelter-artifact@sha256:",
     "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 );
 
@@ -52,6 +52,14 @@ impl Fixture {
         fixture
     }
 
+    fn install_registry_tools(&self) {
+        for tool in ["curl", "oras"] {
+            let path = self.temp.path().join(tool);
+            fs::write(&path, TOOLS).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+
     fn write_artifact(&self, manifest: &str, disk: &[u8]) {
         let path = self.temp.path().join("artifact");
         fs::write(path.join("disk.qcow2"), disk).unwrap();
@@ -82,6 +90,14 @@ impl Fixture {
             .arg(root)
             .arg("--shelter-bin")
             .arg(root.join("shelter"))
+            .env(
+                "PATH",
+                std::env::join_paths(
+                    std::iter::once(root.to_owned())
+                        .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+                )
+                .unwrap(),
+            )
             .env("ALICLOUD_ACCESS_KEY", account)
             .env("ALICLOUD_SECRET_KEY", "fixture-secret")
             .env("CA_IMAGE_IMPORT_TIMEOUT_SEC", "5")
@@ -162,6 +178,7 @@ fn assert_failure(output: Output, message: &str) {
 #[test]
 fn portable_artifact_reuses_publication_and_retires_only_selected_scope() {
     let fixture = Fixture::new();
+    fixture.install_registry_tools();
     let first = fixture.publish_image(OCI, ACCOUNT, REGION);
     assert_eq!(first["status"], "available");
     assert_eq!(first["account_id"], ACCOUNT);
@@ -172,7 +189,9 @@ fn portable_artifact_reuses_publication_and_retires_only_selected_scope() {
         fixture.publish_image(OCI, ACCOUNT, REGION)["image_id"],
         first["image_id"]
     );
-    assert_eq!(fixture.calls("pull"), [OCI]);
+    assert_eq!(fixture.calls("oras-default"), [OCI]);
+    assert_eq!(fixture.calls("pull-layout"), [OCI]);
+    assert!(fixture.calls("blob-offset").is_empty());
     assert_eq!(fixture.calls("cp"), ["disk.qcow2"]);
     assert_eq!(fixture.calls("ImportImage"), ["m-123456-cn-beijing"]);
 
@@ -286,6 +305,43 @@ fn portable_artifact_requires_release_authentication_and_existing_source() {
     assert!(fixture.calls("ImportImage").is_empty());
 }
 
+const PUBLIC_OCI: &str = concat!(
+    "ghcr.io/example/shelter-artifact:candidate@sha256:",
+    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+);
+
+#[test]
+fn public_artifact_resumes_interrupted_disk_and_passes_layout_to_shelter() {
+    let fixture = Fixture::new();
+    fixture.install_registry_tools();
+    let output = fixture.publish_image(PUBLIC_OCI, ACCOUNT, REGION);
+    assert_eq!(output["status"], "available");
+    assert_eq!(fixture.calls("blob-offset"), ["0", "8"]);
+    assert_eq!(fixture.calls("oras-layout"), [PUBLIC_OCI]);
+    assert_eq!(fixture.calls("pull-layout"), [PUBLIC_OCI]);
+    assert_eq!(fixture.calls("ImportImage"), ["m-123456-cn-beijing"]);
+}
+
+#[test]
+fn anonymous_registry_refusal_uses_default_oras_credentials() {
+    for step in ["token", "manifest"] {
+        let fixture = Fixture::new();
+        fixture.install_registry_tools();
+        let output = fixture
+            .publish(PUBLIC_OCI, ACCOUNT, REGION)
+            .env("FIXTURE_REFUSE_ANONYMOUS", step)
+            .args(["--release-digest", &fixture.release_digest])
+            .output()
+            .unwrap();
+        assert_success(output);
+        assert_eq!(fixture.calls("anonymous-denied"), [step]);
+        assert_eq!(fixture.calls("oras-default"), [PUBLIC_OCI]);
+        assert_eq!(fixture.calls("pull-layout"), [PUBLIC_OCI]);
+        assert!(fixture.calls("blob-offset").is_empty());
+        assert!(fixture.calls("oras-layout").is_empty());
+    }
+}
+
 const TOOLS: &str = r#"#!/usr/bin/env python3.11
 import hashlib
 import json
@@ -314,7 +370,13 @@ def shel():
             sys.exit("release digest mismatch")
         return json.loads(data)
     if operation == "pull":
-        log(operation, source)
+        if "--oci-layout" in args:
+            layout = Path(arg("--oci-layout"))
+            assert (layout / "index.json").is_file()
+            assert Path(arg("--oras")).resolve() == Path("oras").resolve()
+            log("pull-layout", source)
+        else:
+            log(operation, source)
         return {"record_path": "artifact"}
     if operation == "verify":
         path = Path(source)
@@ -360,10 +422,78 @@ def ecs():
         return {}
     sys.exit("unexpected Aliyun command: " + repr(args))
 
+def curl():
+    url = next(a for a in args if a.startswith("https://"))
+    disk = Path("artifact/disk.qcow2").read_bytes()
+    if url.endswith("/token"):
+        assert arg("--data-urlencode") == "service=ghcr.io"
+        assert "scope=repository:example/shelter-artifact:pull" in args
+        if os.environ.get("FIXTURE_REFUSE_ANONYMOUS") == "token":
+            log("anonymous-denied", "token")
+            sys.stdout.write("\n403")
+        else:
+            sys.stdout.write(json.dumps({"token":"test-token"}) + "\n200")
+        return
+    if "--header" not in args or "@-" not in args:
+        assert "/v2/example/shelter-artifact/manifests/sha256:" in url
+        print('www-authenticate: Bearer realm="https://ghcr.io/token",service="ghcr.io"', file=sys.stderr)
+        sys.stdout.write("\n401")
+        return
+    assert sys.stdin.read() == "Authorization: Bearer test-token\n"
+    if "/manifests/" in url:
+        if os.environ.get("FIXTURE_REFUSE_ANONYMOUS") == "manifest":
+            log("anonymous-denied", "manifest")
+            sys.stdout.write("\n403")
+            return
+        manifest = {
+            "artifactType":"application/vnd.shelter.artifact.v1",
+            "layers":[{"digest":digest(disk),"size":len(disk)}],
+        }
+        sys.stdout.write(json.dumps(manifest) + "\n200")
+        return
+    assert url.endswith("/blobs/" + digest(disk))
+    assert arg("--continue-at") == "-"
+    part = Path(arg("--output"))
+    offset = part.stat().st_size if part.exists() else 0
+    log("blob-offset", offset)
+    with part.open("ab") as out:
+        out.write(disk[offset:] if offset else disk[:8])
+    if not offset:
+        sys.stdout.write("\n200")
+        sys.exit(18)
+    sys.stdout.write("\n206")
+
+def oras():
+    assert args[:3] == ["cp", "--recursive", "--to-oci-layout"]
+    flags = args[3:-2]
+    source, destination = args[-2:]
+    path, tag = destination.rsplit(":", 1)
+    assert tag == "release"
+    layout = Path(path)
+    disk = Path("artifact/disk.qcow2").read_bytes()
+    oci_digest = source.rsplit("@sha256:", 1)[1]
+    assert layout.parent.name == oci_digest
+    seeded_disk = layout / "blobs/sha256" / digest(disk).split(":")[1]
+    if flags:
+        assert flags[0] == "--from-registry-config" and len(flags) == 2
+        assert json.loads(Path(flags[1]).read_text()) == {"auths":{}}
+        assert seeded_disk.read_bytes() == disk
+        assert not (layout.parent / "disk.part").exists()
+        log("oras-layout", source)
+    else:
+        assert not seeded_disk.exists()
+        log("oras-default", source)
+    layout.mkdir(parents=True, exist_ok=True)
+    (layout / "index.json").write_text("{}")
+
 if tool == "shelter":
     print(json.dumps(shel()))
 elif tool == "aliyun":
     print(json.dumps(ecs()))
+elif tool == "curl":
+    curl()
+elif tool == "oras":
+    oras()
 elif tool == "ossutil64":
     operation, source = args[4:6]
     if operation == "cp":

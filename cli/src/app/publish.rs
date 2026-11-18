@@ -1,4 +1,5 @@
 mod artifact;
+mod download;
 use super::*;
 pub(super) use artifact::{imported_image_entries, published_override};
 use std::os::unix::fs::OpenOptionsExt;

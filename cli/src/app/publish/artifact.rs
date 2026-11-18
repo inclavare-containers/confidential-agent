@@ -317,6 +317,7 @@ pub(super) fn publish_artifact(
         struct Pull {
             record_path: PathBuf,
         }
+        let layout = download::prepare(cli, input, &release.disk_digest, release.disk_size)?;
         let pulled: Pull = shelter_json(
             cli,
             &[
@@ -325,6 +326,10 @@ pub(super) fn publish_artifact(
                 input.into(),
                 "--format".into(),
                 "json".into(),
+                "--oci-layout".into(),
+                layout.path.as_os_str().into(),
+                "--oras".into(),
+                layout.oras.as_os_str().into(),
             ],
         )?;
         verify_disk(cli, &pulled.record_path, &release)

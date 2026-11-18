@@ -92,7 +92,7 @@ confidential-agent image publish allinone-builder \
 
 ### 3. 按不可变 OCI 引用下载并导入 ECS（使用官方预构建镜像）
 
-本机未构建、也未预先下载大体积镜像文件时，从官方 Release 获取 `image-index.json` 与 `image-release.json`，按 `@sha256` 固定的 `oci_reference` 直接拉取、校验并导入本账号目标地域 ECS：
+从官方 Release 获取 `image-index.json` 与 `image-release.json`，将固定到 `@sha256` 的 `oci_reference` 传给 `image publish`。导入官方公开产物时，cagent 负责磁盘下载和续传，并调用 ORAS 补齐本地 OCI layout。Shelter 从该 layout 校验并导入产物，随后由 cagent 发布到当前账号的目标地域 ECS。
 
 ```bash
 /usr/share/cagent/hack/resolve-release-image.sh --output-dir ./prebuilt
@@ -123,7 +123,7 @@ confidential-agent image publish \
   --output ./published.json
 ```
 
-`--artifact` 既可指向 Shelter 产物目录，也可直接指向其中的 `artifact-manifest.json`。
+`--artifact` 可指向本地 Shelter 产物目录或其中的 `artifact-manifest.json`，直接校验本地文件，省去从 OCI 仓库下载。
 
 ### 5. 当前地域已有可用 ECS 自定义镜像 ID（直接初始化并部署）
 
