@@ -70,6 +70,29 @@ export CA_SLSA_GENERATOR=/bin/true
   done
 )
 
+(
+  unset CA_COSIGN_KEY
+  init_defaults
+  parse_args --image-source build --reference-values sample --skip-deploy \
+    --work-dir "$task_tmp/sample-build"
+  builder="$CA_WORK_DIR/allinone-builder"
+  ca_cmd() {
+    case "$1" in
+      init)
+        [[ " $* " == *' --reference-values sample '* && " $* " != *' --cosign-key '* ]]
+        mkdir -p "$builder"
+        touch "$builder/build.yaml"
+        ;;
+      build) [[ -f "$3" ]] ;;
+      image) cp "$task_tmp/release.json" "$5" ;;
+    esac
+    printf '%s\n' "$1" >> "$task_tmp/sample-build-commands"
+  }
+  resolve_cpu_image
+  [[ "$(cat "$task_tmp/sample-build-commands")" == $'init\nbuild\nimage' ]]
+  [[ "$CA_RELEASE_DIGEST" == "$digest" ]]
+)
+
 for harness in openclaw hermes codex claude-code opencode qodercli pi dsh; do
   (
     init_defaults
