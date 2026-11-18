@@ -1,0 +1,4 @@
+{
+  "version": "0.3.0",
+  "oci_repository": "ghcr.io/inclavare-containers/confidential-agent/allinone"
+}

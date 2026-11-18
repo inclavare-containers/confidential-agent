@@ -83,7 +83,7 @@ sequenceDiagram
 
 关键点：
 - **镜像构建**：CA 统一通过 Shelter 原生构建器构建 rootfs，使用 UKI、cryptpilot FDE 和加密持久 delta。原生 initramfs 通过 `initrd.binaries` 从 rootfs 收集 `/usr/local/bin/confidential-agentd`、`/usr/bin/confidential-data-hub` 及其 ELF 依赖；不再生成 dracut module。构建前检查 `shelter builder plan -f shelter.yaml` 确认这些程序进入 early-boot plan。
-- **TNG 严格 pin**：cagent RPM 依赖 Alinux3 仓库的 `trusted-network-gateway-2.9.2-1.al8`；Guest 显式安装相同版本的官方 RPM，并设置 `security.tng: false` 避免 Shelter 自动加入其他版本，随后 [`guest_setup_script`](../cli/src/app.rs) 同时校验 RPM NEVRA 与 `tng --version`，版本不符时 build 直接失败。仓库不再携带或覆盖 TNG 二进制；从旧版升级时必须重新 build Guest 镜像，不能用 `E2E_SKIP_BUILD=1` 复用 2.6 产物验证升级。
+- **TNG 严格 pin**：cagent RPM 依赖 Alinux3 仓库的 `trusted-network-gateway-2.9.2-1.al8`；Guest 显式安装相同版本的官方 RPM，并设置 `security.tng: false` 避免 Shelter 自动加入其他版本，随后 [`guest_setup_script`](../cli/src/app.rs) 同时校验 RPM NEVRA 与 `tng --version`，版本不符时 build 直接失败。仓库不再携带或覆盖 TNG 二进制。
 - **多 variant 构建**：一次 `build` 会构建所有 enabled variants；当前 state 的 `build_id` 指向 `deploy.image_variant`，完整结果保存在 manifest 的 `variants` map。
 - **build_id 时间戳化**：`<image_name>-<variant>-<run_id>`，run_id 精确到毫秒，防止重复 build 互相覆盖。
 
@@ -107,9 +107,9 @@ sequenceDiagram
     CLI->>CLI: 检查 phase 必须是 built/deleted
     CLI->>CLI: 二次 render（含 mesh_peer_cidrs）
     CLI->>FS: 保存部署名称，phase=deploying（失败后可 destroy）
-    alt AppSpec 指定签名 release
-        CLI->>SHB: shelter run -d --release release.json --trusted-key publisher.pub -c shelter-runtime.yaml --target deploy --name resource_name
-        SHB->>TF: 使用已验证的共享镜像创建 ECS / 配置安全组
+    alt AppSpec 指定预构建镜像 (deploy.image)
+        CLI->>SHB: shelter run -d --release release.json --release-digest sha256:… -c shelter-runtime.yaml --target deploy --name resource_name
+        SHB->>TF: 使用已验证的云端自定义镜像创建 ECS / 配置安全组
     else 匹配的 published image 已 available
         CLI->>SHB: shelter run image_tag -d -c shelter-runtime.yaml --target deploy --name resource_name
         SHB->>TF: 创建 ECS / 配置安全组
@@ -149,11 +149,11 @@ sequenceDiagram
 
 Shelter 构建使用主线支持的显式 `version: 1` 配置，保留 V2 尚不能完整表达的 `initrd.binaries`、Rekor 和容器挂载配置。构建命令为 `build -f shelter.yaml --tag <image-tag>`；部署不改写这份构建快照，而是单独生成 `version: 2` 的 `shelter-runtime.yaml`，只包含运行目标。
 
-部署目标使用 `trust: verified`、`attestation: disabled`，并在 provider options 中明确设置 `cc_mode: tdx`、`attestation_authority: external`。Shelter 负责创建 TDX 实例，证据验证与密钥释放由下面的 CA challenge/Trustee 流程负责。CLI 通过 `run <image-tag> -d -c shelter-runtime.yaml --target deploy --name <resource_name>` 复用已构建镜像；共享签名镜像通过同一 `run -d --release … -c …` 接口部署。`inspect <name> --format json` 读取实际 instance ID 和 Terraform 目录，`network update <name> -c … --target deploy` 只更新受管实例网络，`rm -f <name>` 删除实例；部署身份与 build ID 分开保存。
+部署目标使用 `trust: verified`、`attestation: disabled`，并在 provider options 中明确设置 `cc_mode: tdx`、`attestation_authority: external`。Shelter 负责创建 TDX 实例，证据验证与密钥释放由下面的 CA challenge/Trustee 流程负责。CLI 通过 `run <image-tag> -d -c shelter-runtime.yaml --target deploy --name <resource_name>` 复用已构建镜像；预构建共享镜像通过同一 `run -d --release … --release-digest … -c …`（或 `--trusted-key`）接口部署。`inspect <name> --format json` 读取实际 instance ID 和 Terraform 目录，`network update <name> -c … --target deploy` 只更新受管实例网络，`rm -f <name>` 删除实例；部署身份与 build ID 分开保存。
 
 challenge 注入采用 `inject-resource` over `http://<ip>:8006`，对应代码 [`cli/src/app/tools.rs::challenge_inject`](../cli/src/app/tools.rs)。每个资源会先尝试 direct 网络，失败后 fallback 走 host 的代理环境变量。Trustee mode 不依赖 operator 到 Guest `:8006` 的入站连通性。
 
-`image publish` 会把 build 产物预先导入为阿里云自定义镜像，并把 provider、region、variant、build id、镜像 hash 与 image id 记录在本地 state。`deploy` 只在这些字段匹配且发布状态为 `available` 时复用该 image；`destroy` 负责运行资源，published image 的删除由 `image unpublish` 或 `image prune` 管理。
+`image publish` 显式完成阿里云自定义镜像导入（没有单独的 `import` 子命令）：既可从本地构建记录执行 `image publish <service> --spec <path>`，也可直接传入本地 Shelter 产物目录/`artifact-manifest.json` 或不可变 `@sha256` OCI 引用执行 `image publish --artifact <input> --image-release <file> --release-digest sha256:... --region <region> [--output <json>]`。导入完成后按 `manifest_digest`、阿里云账号与地域记录 `image_id`；`deploy` 会自动匹配或按显式 `--image-id` 复用该镜像。`destroy` 只删除实例运行资源，已发布云镜像由 `image unpublish` 或 `image prune` 管理。
 
 ---
 
@@ -298,7 +298,7 @@ sequenceDiagram
 
 | 端口 | 监听者 | 用途 | 安全组规则名 |
 |---|---|---|---|
-| 22  | sshd（仅 debug） | Debug SSH | `ssh_22_peer_<cidr>` |
+| 22  | sshd（debug 变体或 `service.ssh=true`） | Debug / 实例管理 SSH | `ssh_22_peer_<cidr>` |
 | 8006 | trustiflux-api-server | 远程证明 + 资源注入 API | `control_8006_peer_<cidr>` |
 | 8088 | confidential-agentd | 只读 daemon status HTTP | `status_8088_peer_<cidr>` |
 | 8089 | confidential-agentd | A2A AgentCard discovery HTTP | `agent_card_8089_peer_<cidr>` |

@@ -107,7 +107,7 @@ def prepare(case, service, replicas, kind, transport, mode, reuse, variant):
             case.command("cosign-key", "key", "generate-cosign", "--output-key-prefix", cosign.with_suffix(""))
         reference = ["--reference-values", "rekor", "--cosign-key", cosign]
     # Init supplies model delivery files only for consumers. Their actual JSON
-    # spec below requires Rekor authenticated by the producer's signed release.
+    # spec below uses the authenticated Rekor references from the producer.
     case.command("init", "init", "vllm-inference", "--non-interactive", "--output-dir", init,
                  "--region", case.region, "--zone-id", os.environ.get("E2E_GPU_ZONE_ID", "cn-beijing-l"),
                  "--replicas", replicas, "--vllm-build-variants", variant, "--model-key-file", key,

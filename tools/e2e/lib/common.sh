@@ -456,6 +456,17 @@ redacted_cmd_string() {
   printf '%s' "${out% }"
 }
 
+stage_cpu_example() {
+  local example="$1" target="$2" disk_gb="$3" key="$4" token="${5:-}"
+  REGION="$REGION" ZONE_ID="$ZONE_ID" INSTANCE_TYPE="$INSTANCE_TYPE" DISK_GB="$disk_gb" \
+    REFERENCE_VALUES="$REFERENCE_VALUES" SLSA_GENERATOR="$SLSA_GENERATOR" \
+    DASHSCOPE_API_KEY="$key" E2E_SERVICE_TOKEN="$token" E2E_OPENCLAW_DISABLE_PEP="${E2E_OPENCLAW_DISABLE_PEP:-0}" \
+    DASHSCOPE_MODEL="${DASHSCOPE_MODEL:-$(ca_software_version bailian_model)}" \
+    DASHSCOPE_BASE_URL="${DASHSCOPE_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}" \
+    CA_PEP_BIN="${CA_PEP_BIN:-$ROOT_DIR/target/debug/cai-pep}" \
+    python3.11 "$ROOT_DIR/tools/e2e/independent_example.py" "$example" "$target"
+}
+
 ca_init_capture() {
   local state_dir="$1"
   local stdout_path="$2"

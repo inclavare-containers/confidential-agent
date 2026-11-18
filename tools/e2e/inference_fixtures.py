@@ -4,9 +4,8 @@ import argparse
 import json
 import os
 from pathlib import Path
-import shutil
 
-from cloud_case import Case, release_selection, run, write_json
+from cloud_case import Case, copy_release_fixture, run, write_json
 from publish_fixtures import cleanup as cleanup_publications, publish_variant, resume_producer, verify_resumable_build
 from render_case import configure_repositories
 
@@ -67,7 +66,7 @@ def main():
     external = external_fixtures()
     if args.resume:
         if external:
-            raise RuntimeError("external signed fixtures cannot resume a producer build")
+            raise RuntimeError("external fixtures cannot resume a producer build")
         resume_producer(case)
     if args.cleanup:
         if external:
@@ -77,12 +76,8 @@ def main():
     if external:
         with case:
             source = Path(external) / "inference-debug"
-            release_selection(source, case.region)
-            destination = case.work / "inference-debug"
-            destination.mkdir(mode=0o700)
-            for filename in ["image-release.json", "publisher.pem"]:
-                shutil.copyfile(source / filename, destination / filename)
-            case.checks.update(external_signed_fixtures=True, producer_artifacts_copied=False)
+            copy_release_fixture(source, case.work / "inference-debug", case.region)
+            case.checks.update(external_release_fixtures=True, producer_artifacts_copied=False)
         return
     case.defer_cleanup = True
     try:

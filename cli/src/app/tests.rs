@@ -538,7 +538,7 @@ fn image_list_includes_published_image_status() {
     assert_eq!(entries.len(), 1);
     assert_eq!(
         entries[0].published.as_deref(),
-        Some("cn-beijing:m-2ze123abc(avl)")
+        Some("123456/cn-beijing:m-2ze123abc(avl)")
     );
 }
 
@@ -559,7 +559,7 @@ fn image_publish_unpublish_and_prune_args_parse() {
         Commands::Image(ImageArgs {
             command: ImageCommands::Publish(args),
         }) => {
-            assert_eq!(args.service, "openclaw");
+            assert_eq!(args.service.as_deref(), Some("openclaw"));
             assert_eq!(args.region.as_deref(), Some("cn-beijing"));
             assert_eq!(args.variant.as_deref(), Some("release"));
             assert!(args.no_wait);
@@ -774,6 +774,8 @@ fn write_manifest(state_dir: &Path, service_id: &str, build_id: &str) {
 
 fn test_published_image(build_id: &str, source_sha256: &str) -> PublishedImage {
     PublishedImage {
+        account_id: "123456".into(),
+        manifest_digest: String::new(),
         provider: "aliyun".to_string(),
         region: "cn-beijing".to_string(),
         variant: "release".to_string(),
@@ -2481,6 +2483,7 @@ resources: {}
     let id = "a".repeat(64);
     prepared.image = Some(images::ImageDeployment {
         source: confidential_agent_core::spec::PublishedImageSpec {
+            release_digest: None,
             release: temp.path().join("release.json"),
             trusted_key: temp.path().join("publisher.pem"),
             manifest: Some(format!("sha256:{}", "0".repeat(64))),
@@ -4024,6 +4027,16 @@ resources: {}
     let mut cli = test_cli();
     cli.state_dir = temp.path().to_path_buf();
 
+    cli.tools_dir = fake_bin.clone();
+    write_script(
+        &fake_bin.join("aliyun"),
+        "#!/bin/sh\nprintf '%s\\n' '{\"AccountId\":\"123456\"}'\n",
+    );
+    let credential_names = ["ALICLOUD_ACCESS_KEY", "ALICLOUD_SECRET_KEY"];
+    let previous: Vec<_> = credential_names.iter().map(std::env::var_os).collect();
+    for name in credential_names {
+        std::env::set_var(name, "test");
+    }
     let deploy_result = cmd_deploy(
         &cli,
         &DeployArgs {
@@ -4037,6 +4050,12 @@ resources: {}
         },
     );
     std::env::set_var("PATH", old_path);
+    for (name, old) in credential_names.iter().zip(previous) {
+        match old {
+            Some(value) => std::env::set_var(name, value),
+            None => std::env::remove_var(name),
+        }
+    }
     deploy_result.unwrap();
 
     let rendered = fs::read_to_string(shelter_runtime_config_path(
@@ -4098,7 +4117,11 @@ resources: {}
         debug_ssh: None,
     };
 
-    let image_id = publish::published_image_for_deploy(&state, &spec, &variant);
+    let image_id =
+        publish::published_image_for_deploy(&test_cli(), &state, &spec, &variant, || {
+            Ok("123456".into())
+        })
+        .unwrap();
 
     assert!(image_id.is_none());
 }
@@ -4166,9 +4189,19 @@ resources: {}
         debug_ssh: None,
     };
 
-    let image_id = publish::published_image_for_deploy(&state, &spec, &variant);
+    let image_id =
+        publish::published_image_for_deploy(&test_cli(), &state, &spec, &variant, || {
+            Ok("123456".into())
+        })
+        .unwrap();
 
     assert_eq!(image_id.as_deref(), Some("m-valid"));
+    let switched =
+        publish::published_image_for_deploy(&test_cli(), &state, &spec, &variant, || {
+            Ok("other-account".into())
+        })
+        .unwrap();
+    assert!(switched.is_none());
 }
 
 #[test]

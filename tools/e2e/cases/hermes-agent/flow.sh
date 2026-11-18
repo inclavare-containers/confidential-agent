@@ -337,24 +337,7 @@ run_case() {
   export COSIGN_KEY="$cosign_key"
   export COSIGN_KEY INSTANCE_TYPE DISK_GB HERMES_BRANCH HERMES_COMMIT HERMES_API_SERVER_KEY DASHSCOPE_BASE_URL HERMES_MODEL HERMES_HOME
 
-  mapfile -d '' init_args < <(init_common_args "$INIT_OUTPUT_DIR" "$DISK_GB")
-  init_args+=(
-    --dashscope-api-key "$dashscope_key"
-    --dashscope-base-url "$DASHSCOPE_BASE_URL"
-    --model "$HERMES_MODEL"
-    --hermes-branch "$HERMES_BRANCH"
-    --hermes-api-server-key "$HERMES_API_SERVER_KEY"
-  )
-  if [[ -n "$HERMES_COMMIT" ]]; then
-    init_args+=(--hermes-commit "$HERMES_COMMIT")
-  fi
-  if ! ca_init_capture "$STATE_DIR" "$WORK_DIR/init.out" "$WORK_DIR/init.err" hermes "${init_args[@]}"; then
-    record_file_as_block "init stdout:" "$WORK_DIR/init.out" text
-    record_file_as_block "init stderr:" "$WORK_DIR/init.err" text
-    return 1
-  fi
-  record_file_as_block "init stdout:" "$WORK_DIR/init.out" text
-  record_file_as_block "init stderr:" "$WORK_DIR/init.err" text
+  stage_cpu_example hermes-agent "$HERMES_DIR" "$DISK_GB" "$dashscope_key" "$HERMES_API_SERVER_KEY"
   assert_hermes_secret_rendering "$dashscope_key"
   record "- allowed_cidr: \`$allowed_cidr\`"
   record "- Hermes source branch: \`$HERMES_BRANCH\`."

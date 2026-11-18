@@ -48,6 +48,9 @@ build:
     - source: ../openclaw/files/install-cai-pep.sh
       target: /usr/local/libexec/confidential-agent/openclaw/install-cai-pep.sh
       executable: true
+    - source: ../openclaw/files/install-openclaw-runtime.sh
+      target: /usr/local/libexec/confidential-agent/openclaw/install-openclaw-runtime.sh
+      executable: true
     - source: ../openclaw/files/cai-pep-default-policy.json
       target: /usr/local/share/confidential-agent/openclaw/cai-pep-default-policy.json
     - source: ../openclaw/files/cai-pep-plugin

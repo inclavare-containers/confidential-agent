@@ -29,6 +29,7 @@ def add_platform_fixtures(work, selected, prefix):
         probe = fixture / 'probe.json'
         configuration = json.loads(probe.read_text())
         configuration['connect_http_path'] = None
+        configuration.pop('native_service')
         write_json(probe, configuration)
     extra = work / 'extra-fixture'
     shutil.copytree(next(fixture for fixture in peers if fixture.name == 'hermes'), extra)
@@ -40,7 +41,7 @@ def add_platform_fixtures(work, selected, prefix):
 
 def prepare_fixtures(work, image, region):
     selected = generate(work / 'fixtures', image, 'challenge', region, 'platform',
-                        harnesses=['codex', 'openclaw', 'hermes'])
+                        harnesses=['claude-code', 'openclaw', 'hermes'])
     return add_platform_fixtures(work, selected, 'platform')
 
 

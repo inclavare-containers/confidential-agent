@@ -191,10 +191,11 @@ class InferenceFixturesTest(unittest.TestCase):
     def test_export_failure_still_has_durable_publication_and_snapshot_inventory(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            case = SimpleNamespace(work=root, region='cn-beijing', command=Mock(),
-                local_state=lambda _: {'build': {'published': {'release': {
-                    'region': 'cn-beijing', 'variant': 'release', 'image_id': 'm-owned'}}}})
-            def command(label, *_args, **_kwargs):
+            case = SimpleNamespace(work=root, region='cn-beijing', command=Mock())
+            def command(label, *arguments, **_kwargs):
+                if label.startswith('publish-'):
+                    receipt = Path(arguments[arguments.index('--output') + 1])
+                    receipt.write_text(json.dumps({'image_id': 'm-owned'}))
                 if label.startswith('export-'):
                     self.assertEqual(json.loads((root / 'published-images.json').read_text())[0]['image_id'], 'm-owned')
                     raise RuntimeError('export failed')

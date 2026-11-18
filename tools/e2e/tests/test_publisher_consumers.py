@@ -1,5 +1,6 @@
 """The shared producer only builds fixtures that the matrix consumes."""
 import base64
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -49,9 +50,12 @@ class PublisherConsumersTest(unittest.TestCase):
                 fixture.mkdir(parents=True)
                 payload = {'images': [{'region': 'cn-beijing', 'image_id': 'm-published'}],
                            'manifest': {'manifest_digest': 'sha256:' + 'a' * 64}}
-                (fixture / 'image-release.json').write_text(json.dumps({
-                    'payload': base64.b64encode(json.dumps(payload).encode()).decode()}))
-                (fixture / 'publisher.pem').write_text('public test fixture')
+                if name == 'allinone':
+                    payload = {'payload': base64.b64encode(json.dumps(payload).encode()).decode()}
+                    (fixture / 'publisher.pem').write_text('public test fixture')
+                else:
+                    (fixture / 'image-release.sha256').write_text('sha256:' + hashlib.sha256(json.dumps(payload).encode()).hexdigest())
+                (fixture / 'image-release.json').write_text(json.dumps(payload))
             (source / 'allinone-publisher-state.json').write_text('{}')
             with patch.dict(os.environ, E2E_PUBLISHED_FIXTURES=str(source), E2E_WORK_DIR=str(work)), \
                     patch.object(sys, 'argv', ['publish_fixtures.py']):
@@ -59,7 +63,7 @@ class PublisherConsumersTest(unittest.TestCase):
             self.assertFalse((work / 'inference-debug').exists())
             result = json.loads((work / 'case-result.json').read_text())
             self.assertTrue(result['passed'])
-            self.assertTrue(result['checks']['external_signed_fixtures'])
+            self.assertTrue(result['checks']['external_release_fixtures'])
 
     def test_new_producer_builds_and_publishes_release_only(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -68,7 +72,7 @@ class PublisherConsumersTest(unittest.TestCase):
             work.mkdir()
             state = work / 'state'
             state.mkdir()
-            commands, published = [], {}
+            commands = []
 
             class FakeCase:
                 def __init__(self):
@@ -83,7 +87,7 @@ class PublisherConsumersTest(unittest.TestCase):
 
                 def command(self, label, *arguments, **_):
                     commands.append((label, arguments))
-                    if arguments[:2] == ('init', 'allinone'):
+                    if arguments[0] == 'init':
                         service = arguments[arguments.index('--service-id') + 1]
                         output = Path(arguments[arguments.index('--output-dir') + 1]) / service
                         output.mkdir(parents=True)
@@ -105,16 +109,13 @@ class PublisherConsumersTest(unittest.TestCase):
                     elif arguments[:2] == ('image', 'publish'):
                         service = arguments[2]
                         variant = arguments[arguments.index('--variant') + 1]
-                        published[service] = {'build': {'published': {variant: {
-                            'region': 'cn-beijing', 'variant': variant, 'image_id': 'm-test-' + service,
-                        }}}}
+                        receipt = Path(arguments[arguments.index('--output') + 1])
+                        receipt.write_text(json.dumps({'region': 'cn-beijing', 'variant': variant,
+                                                       'image_id': 'm-test-' + service}))
                     elif arguments[:2] == ('image', 'export'):
                         if '--account-id' in arguments:
                             raise AssertionError('image export no longer accepts --account-id')
                         Path(arguments[arguments.index('--output') + 1]).write_text('{}')
-
-                def local_state(self, service):
-                    return published[service]
 
             case = FakeCase()
 
@@ -131,7 +132,7 @@ class PublisherConsumersTest(unittest.TestCase):
                     patch.object(publish_fixtures, 'run', side_effect=fake_run):
                 publish_fixtures.main()
             init = next(args for _, args in commands if args[0] == 'init')
-            self.assertEqual(init[:2], ('init', 'allinone'))
+            self.assertEqual(init[:2], ('init', '--stage'))
             self.assertEqual(init[init.index('--stage') + 1], 'build')
             self.assertEqual(init[init.index('--reference-values') + 1], 'rekor')
             self.assertEqual(init[init.index('--cosign-key') + 1], work / 'cosign.key')
@@ -142,7 +143,11 @@ class PublisherConsumersTest(unittest.TestCase):
             self.assertEqual(len(publications), 2)
             self.assertEqual({args[2] for args in publications}, {'allinone-builder', 'allinone-hardened-builder'})
             self.assertTrue(all(args[args.index('--variant') + 1] == 'release' for args in publications))
-            self.assertTrue(case.checks['signed_images_published'])
+            exports = [args for _, args in commands if args[:2] == ('image', 'export')]
+            for args in exports:
+                self.assertEqual(args[args.index('--image-id') + 1], 'm-test-' + args[2])
+                self.assertEqual('--signing-key' in args, args[2] == 'allinone-builder')
+            self.assertTrue(case.checks['images_published'])
             self.assertTrue(case.checks['full_hardening_release_built'])
             strict = work / 'init/allinone-hardened-builder/build.yaml'
             self.assertIn('  ssh: false', strict.read_text())

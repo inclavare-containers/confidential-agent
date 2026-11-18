@@ -2,3 +2,4 @@
 cosign 3.0.6 c956e5dfcac53d52bcf058360d579472f0c1d2d9b69f55209e256fe7783f4c74 https://github.com/sigstore/cosign/releases/download/v3.0.6/cosign-linux-amd64
 aliyun 3.0.232 f6dca50b17e745881c5bb5d2e02ea7382bf1cf2a6d3ec76488b071a04a06c0e4 https://aliyuncli.alicdn.com/aliyun-cli-linux-3.0.232-amd64.tgz
 ossutil64 1.7.18 c0d1c40cb406ae2295a4d1e6a8a0aef8b4319d609c6b8acd742348c88734b697 https://gosspublic.alicdn.com/ossutil/1.7.18/ossutil64
+oras 1.3.0 6cdc692f929100feb08aa8de584d02f7bcc30ec7d88bc2adc2054d782db57c64 https://github.com/oras-project/oras/releases/download/v1.3.0/oras_1.3.0_linux_amd64.tar.gz

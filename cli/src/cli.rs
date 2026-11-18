@@ -202,15 +202,17 @@ pub(crate) enum Commands {
 
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
 pub(crate) enum InitTarget {
-    #[value(name = "allinone", alias = "all-in-one")]
-    Allinone,
     Openclaw,
     #[value(name = "openclaw-vllm")]
     OpenclawVllm,
     Hermes,
     Codex,
-    #[value(name = "claudecode", alias = "claude-code")]
+    #[value(name = "claude-code", alias = "claudecode")]
     Claudecode,
+    Qodercli,
+    Opencode,
+    Pi,
+    Dsh,
     #[value(name = "vllm-inference")]
     VllmInference,
 }
@@ -231,30 +233,27 @@ pub(crate) enum InitStage {
 pub(crate) struct InitArgs {
     #[arg(value_enum)]
     pub(crate) target: Option<InitTarget>,
-    /// Generate a shared-image builder or an instance that reuses a published image.
+    /// Omit the target with `--stage build` for the shared CPU image. CPU targets default to `deploy`.
     #[arg(long, value_enum)]
     pub(crate) stage: Option<InitStage>,
-    /// Unique builder/instance ID and output subdirectory name.
+    /// Instance or builder ID and output subdirectory (defaults to the application or allinone-builder).
     #[arg(long)]
     pub(crate) service_id: Option<String>,
-    /// Harness selected per all-in-one instance, never per image build.
-    #[arg(long, value_parser = ["openclaw", "hermes", "codex", "claude-code", "qodercli", "opencode", "pi", "dsh"])]
-    pub(crate) harness: Option<String>,
-    /// cli: use over SSH; gateway: OpenClaw/Hermes; app-server: remote Codex.
-    #[arg(long, value_parser = ["cli", "gateway", "app-server"])]
+    /// Override standard mode (gateway: OpenClaw/Hermes; app-server: Codex; web: OpenCode/DSH; cli: SSH).
+    #[arg(long, value_parser = ["cli", "gateway", "app-server", "web"])]
     pub(crate) harness_mode: Option<String>,
+    /// Path to image-release.json for the published image.
     #[arg(long)]
     pub(crate) image_release: Option<PathBuf>,
+    /// Trusted full sha256:... digest of the image-release.json document.
     #[arg(long)]
-    pub(crate) trusted_key: Option<PathBuf>,
+    pub(crate) release_digest: Option<String>,
     /// Optional full sha256: version pin; default: read from the authenticated release.
     #[arg(long)]
     pub(crate) manifest: Option<String>,
+    /// Use an existing cloud image in the deployment region.
     #[arg(long)]
     pub(crate) image_id: Option<String>,
-    /// Explicitly skip publisher signature verification; runtime attestation remains enabled.
-    #[arg(long)]
-    pub(crate) skip_signature_verification: bool,
     #[arg(long, default_value = "./confidential-agent-init")]
     pub(crate) output_dir: PathBuf,
     #[arg(long)]
@@ -298,8 +297,10 @@ pub(crate) struct InitArgs {
     pub(crate) gateway_token: Option<String>,
     #[arg(long)]
     pub(crate) disable_pep: bool,
+    /// OpenClaw version for the dedicated OpenClaw+vLLM image.
     #[arg(long, default_value_t = confidential_agent_core::software::version("openclaw"))]
     pub(crate) openclaw_version: String,
+    /// Node.js version for the dedicated OpenClaw+vLLM image.
     #[arg(long, default_value_t = confidential_agent_core::software::version("node"))]
     pub(crate) node_version: String,
     #[arg(long, default_value = "https://registry.npmmirror.com/")]
@@ -328,18 +329,10 @@ pub(crate) struct InitArgs {
     pub(crate) dingtalk_client_id: Option<String>,
     #[arg(long, env = "DINGTALK_BOT_CLIENT_SECRET")]
     pub(crate) dingtalk_client_secret: Option<String>,
-    #[arg(long, default_value = "main")]
-    pub(crate) hermes_branch: String,
-    #[arg(long)]
-    pub(crate) hermes_commit: Option<String>,
     #[arg(long)]
     pub(crate) hermes_api_server_key: Option<String>,
     #[arg(long)]
     pub(crate) codex_app_server_token: Option<String>,
-    #[arg(long)]
-    pub(crate) codex_version: Option<String>,
-    #[arg(long)]
-    pub(crate) claude_code_version: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -668,10 +661,10 @@ pub(crate) enum ImageCommands {
     Export {
         service: String,
         #[arg(long)]
-        /// Existing shared/marketplace image; omit to export the recorded publication.
+        /// Existing shared or marketplace image. Omit to export a portable release with no cloud mapping.
         image_id: Option<String>,
         #[arg(long)]
-        signing_key: PathBuf,
+        signing_key: Option<PathBuf>,
         #[arg(long)]
         output: PathBuf,
         #[arg(long)]
@@ -685,9 +678,23 @@ pub(crate) enum ImageCommands {
 
 #[derive(Debug, Args)]
 pub(crate) struct ImagePublishArgs {
-    pub(crate) service: String,
-    #[arg(long, default_value = "confidential-agent.yaml")]
-    pub(crate) spec: PathBuf,
+    /// Service whose local build is to be published.
+    #[arg(required_unless_present = "artifact", conflicts_with = "artifact")]
+    pub(crate) service: Option<String>,
+    #[arg(long, conflicts_with = "artifact")]
+    pub(crate) spec: Option<PathBuf>,
+    /// Shelter artifact directory, artifact-manifest.json or immutable OCI reference.
+    #[arg(long, requires_all = ["image_release", "region"], conflicts_with = "variant")]
+    pub(crate) artifact: Option<String>,
+    #[arg(long, requires = "artifact")]
+    pub(crate) image_release: Option<PathBuf>,
+    #[arg(long, requires = "artifact", conflicts_with = "trusted_key")]
+    pub(crate) release_digest: Option<String>,
+    #[arg(long, requires = "artifact")]
+    pub(crate) trusted_key: Option<PathBuf>,
+    /// Write the resulting cloud image information as JSON.
+    #[arg(long)]
+    pub(crate) output: Option<PathBuf>,
     #[arg(long, help = "Target region; defaults to deploy.region in the spec")]
     pub(crate) region: Option<String>,
     #[arg(long, help = "Image variant; defaults to deploy.image_variant")]
@@ -698,6 +705,7 @@ pub(crate) struct ImagePublishArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct ImageUnpublishArgs {
+    /// Local builder service or Shelter manifest digest of an imported artifact.
     pub(crate) service: String,
     #[arg(long)]
     pub(crate) region: Option<String>,

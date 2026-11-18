@@ -1,4 +1,6 @@
+mod artifact;
 use super::*;
+pub(super) use artifact::{imported_image_entries, published_override};
 use std::os::unix::fs::OpenOptionsExt;
 
 const PROVIDER_ALIYUN: &str = "aliyun";
@@ -15,7 +17,7 @@ fn publish_key(region: &str, variant: &str, build_id: &str, source_sha256: &str)
     )
 }
 
-fn publish_bucket_name(region: &str, state_dir: &Path) -> Result<String> {
+fn publish_bucket_name(region: &str, state_dir: &Path, account: &str) -> Result<String> {
     let root = absolute_path_for_state(state_dir);
     let _lock = lock_operation_file(&root.join("publication-namespace.lock"))?;
     let path = root.join("publication-namespace.json");
@@ -35,7 +37,7 @@ fn publish_bucket_name(region: &str, state_dir: &Path) -> Result<String> {
         namespace.len() == 32 && namespace.bytes().all(|b| b.is_ascii_hexdigit()),
         "invalid publication namespace; restore the workspace metadata"
     );
-    let hash = hex_encode(&Sha256::digest(namespace.as_bytes()));
+    let hash = hex_encode(&Sha256::digest(format!("{account}/{namespace}").as_bytes()));
     Ok(format!("ca-images-{region}-{}", &hash[..20]))
 }
 
@@ -220,19 +222,16 @@ fn run_ossutil_capture(cli: &Cli, args: Vec<String>, region: &str) -> Result<Str
     )
 }
 
-fn validate_cloud_credentials(cli: &Cli, region: &str) -> Result<()> {
-    println!("[ca] validating cloud credentials...");
-    run_aliyun_cli(
-        cli,
-        vec![
-            "ecs".to_string(),
-            "DescribeRegions".to_string(),
-            "--RegionId".to_string(),
-            region.to_string(),
-        ],
-        region,
-    )?;
-    Ok(())
+pub(super) fn caller_account(cli: &Cli, region: &str) -> Result<String> {
+    #[derive(Deserialize)]
+    struct Identity {
+        #[serde(rename = "AccountId")]
+        account: String,
+    }
+    let output = run_aliyun_cli(cli, vec!["sts".into(), "GetCallerIdentity".into()], region)?;
+    let identity: Identity = serde_json::from_str(&output)?;
+    validate_service_id(&identity.account)?;
+    Ok(identity.account)
 }
 
 fn ensure_publish_bucket(cli: &Cli, bucket: &str, region: &str) -> Result<()> {
@@ -427,6 +426,10 @@ struct ImportImageResponse {
 }
 
 trait PublishCloudOps {
+    fn caller_account(&self, cli: &Cli, region: &str) -> Result<String> {
+        caller_account(cli, region)
+    }
+
     fn image_import_timeout(&self) -> Duration {
         Duration::from_secs(
             std::env::var("CA_IMAGE_IMPORT_TIMEOUT_SEC")
@@ -439,8 +442,6 @@ trait PublishCloudOps {
     fn image_import_poll_interval(&self) -> Duration {
         Duration::from_secs(30)
     }
-
-    fn validate_credentials(&self, cli: &Cli, region: &str) -> Result<()>;
 
     fn find_existing_published_image(
         &self,
@@ -498,10 +499,6 @@ trait PublishCloudOps {
 struct RealPublishCloudOps;
 
 impl PublishCloudOps for RealPublishCloudOps {
-    fn validate_credentials(&self, cli: &Cli, region: &str) -> Result<()> {
-        validate_cloud_credentials(cli, region)
-    }
-
     fn find_existing_published_image(
         &self,
         cli: &Cli,
@@ -594,6 +591,8 @@ impl PublishCloudOps for RealPublishCloudOps {
 }
 
 struct PublishEntrySeed<'a> {
+    account: &'a str,
+    manifest_digest: &'a str,
     region: &'a str,
     variant: &'a str,
     build_id: &'a str,
@@ -607,6 +606,8 @@ struct PublishEntrySeed<'a> {
 fn published_base_entry(seed: PublishEntrySeed<'_>) -> PublishedImage {
     let now = current_utc_timestamp();
     PublishedImage {
+        account_id: seed.account.into(),
+        manifest_digest: seed.manifest_digest.into(),
         provider: PROVIDER_ALIYUN.to_string(),
         region: seed.region.to_string(),
         variant: seed.variant.to_string(),
@@ -641,7 +642,7 @@ fn persist_published(
     cli: &Cli,
     state: &mut LocalServiceState,
     key: &str,
-    entry: PublishedImage,
+    mut entry: PublishedImage,
 ) -> Result<()> {
     with_state_dir_lock(&cli.state_dir, || {
         let mut latest = read_service_state_file(
@@ -661,17 +662,16 @@ fn persist_published(
         {
             latest.deploy.published_image_id = None;
         }
+        entry.exported |= latest
+            .build
+            .published
+            .get(key)
+            .is_some_and(|row| row.exported);
         latest.build.published.insert(key.to_string(), entry);
         write_local_service_state(&cli.state_dir, &latest)?;
         *state = latest;
         Ok(())
     })
-}
-
-pub(super) fn mark_exported(cli: &Cli, state: &mut LocalServiceState, key: &str) -> Result<()> {
-    let mut entry = state.build.published[key].clone();
-    entry.exported = true;
-    persist_published(cli, state, key, entry)
 }
 
 fn remove_publication(cli: &Cli, state: &mut LocalServiceState, key: &str) -> Result<()> {
@@ -795,36 +795,6 @@ fn import_image_args(request: ImportImageRequest<'_>) -> Vec<String> {
     ]
 }
 
-#[allow(clippy::too_many_arguments)]
-fn publish_variant_image(
-    cli: &Cli,
-    state: &mut LocalServiceState,
-    key: &str,
-    image_path: &Path,
-    region: &str,
-    service_id: &str,
-    variant: &str,
-    build_id: &str,
-    source_sha256: &str,
-    source_size: u64,
-    wait: bool,
-) -> Result<PublishedImage> {
-    publish_variant_image_with_ops(
-        cli,
-        &RealPublishCloudOps,
-        state,
-        key,
-        image_path,
-        region,
-        service_id,
-        variant,
-        build_id,
-        source_sha256,
-        source_size,
-        wait,
-    )
-}
-
 fn wait_for_image_available_with_ops(
     cli: &Cli,
     ops: &impl PublishCloudOps,
@@ -883,6 +853,7 @@ fn transient_image_status_error(error: &anyhow::Error) -> bool {
     .any(|marker| message.contains(marker))
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn publish_variant_image_with_ops(
     cli: &Cli,
@@ -898,18 +869,72 @@ fn publish_variant_image_with_ops(
     source_size: u64,
     wait: bool,
 ) -> Result<PublishedImage> {
-    // Existing uploads/imports retain their exact object custody across upgrades.
-    let previous = state.build.published.get(key);
+    let previous = state.build.published.get(key).cloned();
+    publish_disk(
+        cli,
+        ops,
+        DiskPublication {
+            account: &ops.caller_account(cli, region)?,
+            manifest_digest: "",
+            region,
+            service_id,
+            variant,
+            build_id,
+            source_sha256,
+            source_size,
+        },
+        previous,
+        || Ok(image_path.to_owned()),
+        wait,
+        |entry| persist_published(cli, state, key, entry),
+    )
+}
+
+struct DiskPublication<'a> {
+    account: &'a str,
+    manifest_digest: &'a str,
+    region: &'a str,
+    service_id: &'a str,
+    variant: &'a str,
+    build_id: &'a str,
+    source_sha256: &'a str,
+    source_size: u64,
+}
+
+fn publish_disk(
+    cli: &Cli,
+    ops: &impl PublishCloudOps,
+    source: DiskPublication<'_>,
+    previous: Option<PublishedImage>,
+    image_path: impl FnOnce() -> Result<PathBuf>,
+    wait: bool,
+    mut save: impl FnMut(PublishedImage) -> Result<()>,
+) -> Result<PublishedImage> {
+    let DiskPublication {
+        account,
+        manifest_digest,
+        region,
+        service_id,
+        variant,
+        build_id,
+        source_sha256,
+        source_size,
+    } = source;
+    let previous = previous.as_ref();
+    // Retries keep the original cloud names, object and import token regardless of the entry point.
+    let build_id = previous.map_or(build_id, |entry| &entry.build_id);
     let bucket = match previous.and_then(|entry| entry.bucket.clone()) {
         Some(bucket) => bucket,
-        None => publish_bucket_name(region, &cli.state_dir)?,
+        None => publish_bucket_name(region, &cli.state_dir, account)?,
     };
     let object_key = previous
         .and_then(|entry| entry.object_key.clone())
         .unwrap_or_else(|| publish_object_key(service_id, variant, build_id, source_sha256));
     let image_name = publish_image_name(service_id, variant, build_id, source_sha256);
-    let mut entry = state.build.published.get(key).cloned().unwrap_or_else(|| {
+    let mut entry = previous.cloned().unwrap_or_else(|| {
         published_base_entry(PublishEntrySeed {
+            account,
+            manifest_digest,
             region,
             variant,
             build_id,
@@ -928,7 +953,6 @@ fn publish_variant_image_with_ops(
     if entry.import_token.is_empty() {
         entry.import_token = new_import_token();
     }
-    ops.validate_credentials(cli, region)?;
 
     if let Some(image_id) = entry.image_id.clone() {
         match ops
@@ -939,17 +963,17 @@ fn publish_variant_image_with_ops(
                 update_entry_status(&mut entry, STATUS_AVAILABLE, None);
                 capture_import_snapshots(cli, ops, &mut entry)?;
                 cleanup_upload(cli, ops, &mut entry);
-                persist_published(cli, state, key, entry.clone())?;
+                save(entry.clone())?;
                 return Ok(entry);
             }
             Some("CreateFailed") | None => {
                 update_entry_status(&mut entry, STATUS_FAILED, Some("recorded image is missing or import failed; explicitly unpublish before retrying".into()));
-                persist_published(cli, state, key, entry.clone())?;
+                save(entry.clone())?;
                 bail!("recorded image {image_id} is missing or failed; use image unpublish to retire this publication first");
             }
             _ => {
                 update_entry_status(&mut entry, STATUS_IMPORTING, None);
-                persist_published(cli, state, key, entry.clone())?;
+                save(entry.clone())?;
                 if !wait {
                     return Ok(entry);
                 }
@@ -957,31 +981,31 @@ fn publish_variant_image_with_ops(
                 update_entry_status(&mut entry, STATUS_AVAILABLE, None);
                 capture_import_snapshots(cli, ops, &mut entry)?;
                 cleanup_upload(cli, ops, &mut entry);
-                persist_published(cli, state, key, entry.clone())?;
+                save(entry.clone())?;
                 return Ok(entry);
             }
         }
     }
 
-    if let Some(existing_id) = ops.find_existing_published_image(
-        cli,
-        region,
-        service_id,
-        variant,
-        build_id,
-        source_sha256,
-    )? {
+    let existing_id = if previous.is_none() {
+        ops.find_existing_published_image(
+            cli,
+            region,
+            service_id,
+            variant,
+            build_id,
+            source_sha256,
+        )?
+    } else {
+        None
+    };
+    if let Some(existing_id) = existing_id {
         entry.image_id = Some(existing_id.clone());
-        // Finding matching bits does not establish deletion custody or external retention.
+        // An independent publication has no deletion custody for an image found by tags.
         entry.owned = false;
-        if state.build.published.contains_key(key) {
-            capture_import_snapshots(cli, ops, &mut entry)?;
-            cleanup_upload(cli, ops, &mut entry);
-        } else {
-            entry.oss_cleaned = true;
-        }
+        entry.oss_cleaned = true;
         update_entry_status(&mut entry, STATUS_AVAILABLE, None);
-        persist_published(cli, state, key, entry.clone())?;
+        save(entry.clone())?;
         println!("[ca] adopted existing published image: {existing_id}");
         return Ok(entry);
     }
@@ -991,15 +1015,15 @@ fn publish_variant_image_with_ops(
         // upload acquires it again, including when upload/import later fails.
         entry.oss_cleaned = false;
         update_entry_status(&mut entry, STATUS_UPLOADING, None);
-        persist_published(cli, state, key, entry.clone())?;
+        save(entry.clone())?;
         println!("[ca] uploading image to OSS ({source_size} bytes)...");
         ops.ensure_publish_bucket(cli, &bucket, region)?;
-        ops.upload_image(cli, image_path, &bucket, &object_key, region)?;
+        ops.upload_image(cli, &image_path()?, &bucket, &object_key, region)?;
         update_entry_status(&mut entry, STATUS_UPLOADED, None);
-        persist_published(cli, state, key, entry.clone())?;
+        save(entry.clone())?;
     }
 
-    persist_published(cli, state, key, entry.clone())?;
+    save(entry.clone())?;
     println!("[ca] importing ECS image '{image_name}'...");
     let imported = ops.import_image(
         cli,
@@ -1019,7 +1043,7 @@ fn publish_variant_image_with_ops(
     entry.image_id = Some(image_id.clone());
     entry.import_task_id = imported.task_id;
     update_entry_status(&mut entry, STATUS_IMPORTING, None);
-    persist_published(cli, state, key, entry.clone())?;
+    save(entry.clone())?;
     println!("[ca] import started: image_id={image_id}");
 
     if !wait {
@@ -1033,86 +1057,202 @@ fn publish_variant_image_with_ops(
             _ => STATUS_IMPORTING,
         };
         update_entry_status(&mut entry, status, Some(err.to_string()));
-        persist_published(cli, state, key, entry.clone())?;
+        save(entry.clone())?;
         return Err(err);
     }
     update_entry_status(&mut entry, STATUS_AVAILABLE, None);
     capture_import_snapshots(cli, ops, &mut entry)?;
     cleanup_upload(cli, ops, &mut entry);
-    persist_published(cli, state, key, entry.clone())?;
+    save(entry.clone())?;
     println!("[ca] image published: image_id={image_id} region={region}");
     Ok(entry)
 }
 
+pub(super) enum Receipt {
+    Builder { service: String, key: String },
+    Imported(artifact::Location, StateDirLock),
+}
+
+impl Receipt {
+    pub(super) fn mark_exported(self, cli: &Cli, mut entry: PublishedImage) -> Result<()> {
+        entry.exported = true;
+        match self {
+            Self::Imported(location, _lock) => location.save_imported(entry),
+            Self::Builder { service, key } => with_state_dir_lock(&cli.state_dir, || {
+                let mut state = read_service_state_file(
+                    &context_paths(&cli.state_dir, &service).service_state,
+                )?
+                .context("publication custody disappeared during export")?;
+                let current = state
+                    .build
+                    .published
+                    .get_mut(&key)
+                    .context("publication retired during export")?;
+                anyhow::ensure!(
+                    !current.retiring && current.image_id == entry.image_id,
+                    "publication changed during export"
+                );
+                current.exported = true;
+                write_local_service_state(&cli.state_dir, &state)
+            }),
+        }
+    }
+}
+
+pub(super) fn build_publication(
+    cli: &Cli,
+    state: &LocalServiceState,
+    variant: &BuildManifestVariant,
+    name: &str,
+    region: &str,
+    image_id: Option<&str>,
+    account: impl FnOnce() -> Result<String>,
+) -> Result<Option<(Receipt, PublishedImage)>> {
+    let Ok(result) = read_shelter_build_result(&variant.build_result, &variant.shelter_build_id)
+    else {
+        return Ok(None);
+    };
+    let matches = |entry: &PublishedImage| {
+        entry.provider == PROVIDER_ALIYUN
+            && entry.region == region
+            && entry.variant == name
+            && entry.image_id.is_some()
+            && image_id.map_or(true, |id| entry.image_id.as_deref() == Some(id))
+    };
+    let rows: Vec<_> = state
+        .build
+        .published
+        .iter()
+        .filter(|(_, entry)| entry.build_id == variant.shelter_build_id && matches(entry))
+        .collect();
+    let catalog = artifact::catalog_for_disk(&cli.state_dir, &result.image_path)?;
+    if rows.is_empty() && catalog.is_none() {
+        return Ok(None);
+    }
+    let account = account()?;
+    let disk_sha = result
+        .image_path
+        .exists()
+        .then(|| sha256_file(&result.image_path))
+        .transpose()?;
+    let usable = |entry: &PublishedImage| {
+        !entry.retiring
+            && entry.status == STATUS_AVAILABLE
+            && disk_sha
+                .as_ref()
+                .map_or(true, |sha| sha == &entry.source_sha256)
+    };
+    for (key, entry) in &rows {
+        if entry.account_id == account && usable(entry) {
+            return Ok(Some((
+                Receipt::Builder {
+                    service: state.service_id.clone(),
+                    key: key.to_string(),
+                },
+                (*entry).clone(),
+            )));
+        }
+    }
+    if let Some(digest) = catalog {
+        let location =
+            artifact::Location::for_account(&cli.state_dir, account.clone(), region, &digest)?;
+        let lock = location.lock()?;
+        let found = match location.read()? {
+            Some(artifact::Publication::Imported(entry)) => {
+                Some((Receipt::Imported(location, lock), entry))
+            }
+            Some(artifact::Publication::Builder { service, key }) => location
+                .entry(cli)?
+                .map(|entry| (Receipt::Builder { service, key }, entry)),
+            None => None,
+        };
+        if let Some((owner, entry)) = found {
+            if matches(&entry) && entry.account_id == account {
+                if usable(&entry) {
+                    return Ok(Some((owner, entry)));
+                }
+                anyhow::ensure!(
+                    image_id.is_none(),
+                    "published image is unavailable or no longer matches the local artifact"
+                );
+            }
+        }
+    }
+    if let Some(id) = image_id {
+        anyhow::ensure!(
+            !rows.iter().any(|(_, entry)| entry.account_id != account),
+            "image {id} is recorded in a different cloud account"
+        );
+        anyhow::ensure!(
+            rows.is_empty(),
+            "published image is unavailable or no longer matches the local artifact"
+        );
+    }
+    Ok(None)
+}
+
 pub(super) fn published_image_for_deploy(
+    cli: &Cli,
     state: &LocalServiceState,
     spec: &AgentSpec,
     variant: &BuildManifestVariant,
-) -> Option<String> {
-    state
-        .build
-        .published
-        .values()
-        .filter(|entry| {
-            entry.provider == PROVIDER_ALIYUN
-                && entry.region == spec.deploy.region
-                && entry.variant == spec.image_variant()
-                && entry.build_id == variant.shelter_build_id
-                && entry.status == STATUS_AVAILABLE
-                && !entry.retiring
-                && entry.image_id.is_some()
-        })
-        .find_map(|entry| {
-            let result =
-                read_shelter_build_result(&variant.build_result, &variant.shelter_build_id).ok()?;
-            if result.image_path.exists() {
-                let source_sha256 = match sha256_file(&result.image_path) {
-                    Ok(value) => value,
-                    Err(err) => {
-                        eprintln!(
-                            "[ca] warning: failed to hash local image '{}': {err:#}; skipping published image",
-                            result.image_path.display()
-                        );
-                        return None;
-                    }
-                };
-                if source_sha256 != entry.source_sha256 {
-                    eprintln!(
-                        "[ca] warning: published image source hash no longer matches local image; skipping published image"
-                    );
-                    return None;
-                }
-            }
-            entry.image_id.clone()
-        })
+    account: impl FnOnce() -> Result<String>,
+) -> Result<Option<String>> {
+    Ok(build_publication(
+        cli,
+        state,
+        variant,
+        spec.image_variant(),
+        &spec.deploy.region,
+        None,
+        account,
+    )?
+    .and_then(|(_, entry)| entry.image_id))
 }
 
 pub(super) fn cmd_image_publish(cli: &Cli, args: &ImagePublishArgs) -> Result<()> {
-    let _operation = lock_service_operation(&cli.state_dir, &args.service)?;
-    let spec = AgentSpec::from_path(&args.spec)?;
-    if spec.service.id != args.service {
-        bail!(
-            "spec service id '{}' does not match requested service '{}'",
-            spec.service.id,
+    let published = if let Some(input) = &args.artifact {
+        artifact::publish_artifact(cli, args, input)?
+    } else {
+        publish_build(
+            cli,
+            args,
             args.service
-        );
+                .as_deref()
+                .context("expected a local builder service")?,
+        )?
+    };
+    if let Some(path) = &args.output {
+        write_json_atomic(path, &published)?;
     }
+    println!(
+        "[ca] published state: status={} image_id={}",
+        published.status,
+        published.image_id.as_deref().unwrap_or("-")
+    );
+    Ok(())
+}
+
+fn publish_build(cli: &Cli, args: &ImagePublishArgs, service: &str) -> Result<PublishedImage> {
+    let _operation = lock_service_operation(&cli.state_dir, service)?;
+    let paths = context_paths(&cli.state_dir, service);
+    let mut state = read_service_state_file(&paths.service_state)?
+        .with_context(|| format!("no local state for service '{}'; run build first", service))?;
+    let spec = AgentSpec::from_path(args.spec.as_deref().unwrap_or(&state.spec.path))?;
+    anyhow::ensure!(
+        spec.service.id == service,
+        "spec service id '{}' does not match requested service '{service}'",
+        spec.service.id
+    );
     let region = args.region.as_deref().unwrap_or(&spec.deploy.region);
     let variant = args
         .variant
         .as_deref()
         .unwrap_or_else(|| spec.image_variant());
-    let paths = context_paths(&cli.state_dir, &args.service);
-    let mut state = read_service_state_file(&paths.service_state)?.with_context(|| {
-        format!(
-            "no local state for service '{}'; run build first",
-            args.service
-        )
-    })?;
     let manifest = read_build_manifest(&paths.manifest).with_context(|| {
         format!(
             "service '{}' has no build manifest; run build first",
-            args.service
+            service
         )
     })?;
     let build_variant = manifest.variant(variant, Some(&state.build.variant))?;
@@ -1121,7 +1261,7 @@ pub(super) fn cmd_image_publish(cli: &Cli, args: &ImagePublishArgs) -> Result<()
     if !build_result.image_path.exists() {
         bail!(
             "local image for service '{}' variant '{}' was removed at '{}'; run build first",
-            args.service,
+            service,
             variant,
             build_result.image_path.display()
         );
@@ -1132,31 +1272,78 @@ pub(super) fn cmd_image_publish(cli: &Cli, args: &ImagePublishArgs) -> Result<()
         .metadata()
         .with_context(|| format!("failed to stat '{}'", build_result.image_path.display()))?
         .len();
-    let key = publish_key(
-        region,
-        variant,
-        &build_variant.shelter_build_id,
-        &source_sha256,
+    let manifest_file = build_result
+        .image_path
+        .with_file_name("artifact-manifest.json");
+    let artifact = artifact::read_artifact_manifest(&manifest_file)?;
+    artifact.check_disk(&source_sha256, source_size)?;
+    let location = artifact::Location::new(cli, region, &artifact.manifest_digest)?;
+    let _publication_lock = location.lock()?;
+    let key = format!(
+        "{}/{}",
+        location.account,
+        publish_key(
+            region,
+            variant,
+            &build_variant.shelter_build_id,
+            &source_sha256
+        )
     );
-    let published = publish_variant_image(
-        cli,
-        &mut state,
-        &key,
-        &build_result.image_path,
+    let source = DiskPublication {
+        account: &location.account,
+        manifest_digest: &artifact.manifest_digest,
         region,
-        &args.service,
+        service_id: service,
         variant,
-        &build_variant.shelter_build_id,
-        &source_sha256,
+        build_id: &build_variant.shelter_build_id,
+        source_sha256: &source_sha256,
         source_size,
+    };
+    let prior = match location.read()? {
+        Some(artifact::Publication::Imported(entry)) => {
+            artifact::check_disk_binding(&entry, variant, &source_sha256, source_size)?;
+            return publish_disk(
+                cli,
+                &RealPublishCloudOps,
+                DiskPublication {
+                    service_id: "artifact",
+                    ..source
+                },
+                Some(entry),
+                || Ok(build_result.image_path),
+                !args.no_wait,
+                |entry| location.save_imported(entry),
+            );
+        }
+        Some(artifact::Publication::Builder {
+            service: owner,
+            key: owner_key,
+        }) if owner != service || owner_key != key => {
+            if let Some(entry) = location.entry(cli)? {
+                artifact::check_disk_binding(&entry, variant, &source_sha256, source_size)?;
+                if !entry.retiring && entry.status == STATUS_AVAILABLE {
+                    if let Some(id) = &entry.image_id {
+                        if describe_image_status(cli, region, id)?.as_deref() == Some("Available") {
+                            return Ok(entry);
+                        }
+                    }
+                }
+                bail!("complete or retire the publication owned by builder {owner}");
+            }
+            None
+        }
+        _ => state.build.published.get(&key).cloned(),
+    };
+    location.record_builder(service, &key)?;
+    publish_disk(
+        cli,
+        &RealPublishCloudOps,
+        source,
+        prior,
+        || Ok(build_result.image_path),
         !args.no_wait,
-    )?;
-    println!(
-        "[ca] published state: key={key} status={} image_id={}",
-        published.status,
-        published.image_id.as_deref().unwrap_or("-")
-    );
-    Ok(())
+        |entry| persist_published(cli, &mut state, &key, entry),
+    )
 }
 
 pub(super) fn cmd_image_unpublish(cli: &Cli, args: &ImageUnpublishArgs) -> Result<()> {
@@ -1214,19 +1401,32 @@ fn cmd_image_unpublish_with_ops(
     ops: &impl PublishCloudOps,
     args: &ImageUnpublishArgs,
 ) -> Result<()> {
+    if args.service.starts_with("sha256:") {
+        return artifact::unpublish_artifact(cli, ops, args);
+    }
     let _operation = lock_service_operation(&cli.state_dir, &args.service)?;
     let paths = context_paths(&cli.state_dir, &args.service);
     let mut state = read_service_state_file(&paths.service_state)?
         .with_context(|| format!("no local state for service '{}'", args.service))?;
+    let Some(first) = state.build.published.values().next() else {
+        println!(
+            "[ca] no published images to unpublish for service '{}'",
+            args.service
+        );
+        return Ok(());
+    };
+    let account = ops.caller_account(cli, args.region.as_deref().unwrap_or(&first.region))?;
     let keys = state
         .build
         .published
         .iter()
         .filter(|(_, entry)| {
-            args.region
-                .as_deref()
-                .map(|region| entry.region == region)
-                .unwrap_or(true)
+            entry.account_id == account
+                && args
+                    .region
+                    .as_deref()
+                    .map(|region| entry.region == region)
+                    .unwrap_or(true)
                 && args
                     .variant
                     .as_deref()
@@ -1295,13 +1495,40 @@ fn retire_publication(
     key: &str,
     force: bool,
 ) -> Result<()> {
-    let mut entry = state.build.published[key].clone();
+    let entry = state.build.published[key].clone();
+    let location = if entry.manifest_digest.is_empty() {
+        None
+    } else {
+        Some(artifact::Location::for_account(
+            &cli.state_dir,
+            entry.account_id.clone(),
+            &entry.region,
+            &entry.manifest_digest,
+        )?)
+    };
+    retire_entry(cli, ops, entry, force, |entry| {
+        persist_published(cli, state, key, entry)
+    })?;
+    remove_publication(cli, state, key)?;
+    if let Some(location) = location {
+        location.remove_builder(&state.service_id, key)?;
+    }
+    Ok(())
+}
+
+fn retire_entry(
+    cli: &Cli,
+    ops: &impl PublishCloudOps,
+    mut entry: PublishedImage,
+    force: bool,
+    mut save: impl FnMut(PublishedImage) -> Result<()>,
+) -> Result<()> {
     anyhow::ensure!(entry.owned || force, "image was adopted from another publication; explicit unpublish --force is required to assume deletion custody");
     entry.retiring = true;
-    persist_published(cli, state, key, entry.clone())?;
+    save(entry.clone())?;
     if let Some(image_id) = entry.image_id.clone() {
         capture_import_snapshots(cli, ops, &mut entry)?;
-        persist_published(cli, state, key, entry.clone())?;
+        save(entry.clone())?;
         let deletion = (|| {
             if ops
                 .describe_image_status(cli, &entry.region, &image_id)?
@@ -1313,29 +1540,29 @@ fn retire_publication(
         })();
         if let Err(error) = deletion {
             entry.error = Some(format!("cloud image retirement failed: {error:#}"));
-            persist_published(cli, state, key, entry)?;
+            save(entry)?;
             return Err(error);
         }
         entry.image_id = None;
         entry.import_task_id = None;
         // Save cloud deletion before attempting OSS cleanup, including across process restarts.
-        persist_published(cli, state, key, entry.clone())?;
+        save(entry.clone())?;
     }
     for snapshot in entry.import_snapshot_ids.clone() {
         if let Err(error) = ops.delete_import_snapshot(cli, &entry.region, &snapshot) {
             entry.error = Some(format!("snapshot cleanup pending: {error:#}"));
-            persist_published(cli, state, key, entry)?;
+            save(entry)?;
             return Err(error);
         }
         entry.import_snapshot_ids.retain(|id| id != &snapshot);
-        persist_published(cli, state, key, entry.clone())?;
+        save(entry.clone())?;
     }
     cleanup_upload(cli, ops, &mut entry);
     if !entry.oss_cleaned {
-        persist_published(cli, state, key, entry)?;
+        save(entry)?;
         bail!("OSS cleanup pending; retry image unpublish");
     }
-    remove_publication(cli, state, key)
+    Ok(())
 }
 
 fn published_entry_is_deployed(state: &LocalServiceState, entry: &PublishedImage) -> bool {
@@ -1370,6 +1597,7 @@ fn cmd_image_prune_with_ops(
 ) -> Result<()> {
     let mut total = 0usize;
     let mut failures = 0usize;
+    let mut account = None;
     for state in read_service_states(&cli.state_dir)? {
         let _operation = lock_service_operation(&cli.state_dir, &state.service_id)?;
         let Some(mut state) = read_service_state_file(
@@ -1377,6 +1605,13 @@ fn cmd_image_prune_with_ops(
         )?
         else {
             continue;
+        };
+        let Some(first) = state.build.published.values().next() else {
+            continue;
+        };
+        let account = match &account {
+            Some(account) => account,
+            None => account.insert(ops.caller_account(cli, &first.region)?),
         };
         let manifest_path = context_paths(&cli.state_dir, &state.service_id).manifest;
         let current_builds = if manifest_path.exists() {
@@ -1391,7 +1626,11 @@ fn cmd_image_prune_with_ops(
         // Upload GC is independent of whether the cloud image is retained/exported.
         for key in state.build.published.keys().cloned().collect::<Vec<_>>() {
             let mut entry = state.build.published[&key].clone();
-            if entry.status == STATUS_AVAILABLE && !entry.oss_cleaned && !entry.retiring {
+            if &entry.account_id == account
+                && entry.status == STATUS_AVAILABLE
+                && !entry.oss_cleaned
+                && !entry.retiring
+            {
                 if args.dry_run {
                     println!("[ca] would clean OSS upload for {}", key);
                 } else {
@@ -1408,7 +1647,8 @@ fn cmd_image_prune_with_ops(
             .published
             .iter()
             .filter(|(_, entry)| {
-                should_prune_published_entry(&state, entry, args.all)
+                &entry.account_id == account
+                    && should_prune_published_entry(&state, entry, args.all)
                     && (args.all
                         || entry.retiring
                         || entry.status == STATUS_FAILED
@@ -1484,7 +1724,7 @@ mod tests {
         cli.tools_dir = std::env::var_os("CA_TOOLS_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("/usr/libexec/cagent/bin"));
-        validate_cloud_credentials(&cli, "cn-beijing")?;
+        caller_account(&cli, "cn-beijing")?;
         let config = ossutil_config(&cli, "cn-beijing")?;
         assert_eq!(
             fs::metadata(&config.path)?.permissions().mode() & 0o777,
@@ -1516,11 +1756,20 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let original = temp.path().join("state");
         let moved = temp.path().join("moved");
-        let first = publish_bucket_name("cn-beijing", &original).unwrap();
-        assert_eq!(first, publish_bucket_name("cn-beijing", &original).unwrap());
+        let first = publish_bucket_name("cn-beijing", &original, "test-account").unwrap();
+        assert_eq!(
+            first,
+            publish_bucket_name("cn-beijing", &original, "test-account").unwrap()
+        );
         fs::rename(&original, &moved).unwrap();
-        assert_eq!(first, publish_bucket_name("cn-beijing", &moved).unwrap());
-        assert_ne!(first, publish_bucket_name("cn-beijing", &original).unwrap());
+        assert_eq!(
+            first,
+            publish_bucket_name("cn-beijing", &moved, "test-account").unwrap()
+        );
+        assert_ne!(
+            first,
+            publish_bucket_name("cn-beijing", &original, "test-account").unwrap()
+        );
         assert!(first.starts_with("ca-images-cn-beijing-"));
         assert!(first.len() <= 63);
     }
@@ -1531,7 +1780,9 @@ mod tests {
         let threads = (0..4)
             .map(|_| {
                 let root = temp.path().to_path_buf();
-                std::thread::spawn(move || publish_bucket_name("cn-beijing", &root).unwrap())
+                std::thread::spawn(move || {
+                    publish_bucket_name("cn-beijing", &root, "test-account").unwrap()
+                })
             })
             .collect::<Vec<_>>();
         let names = threads
@@ -1646,6 +1897,7 @@ mod tests {
             image: Some(images::ImageDeployment {
                 image_id: entry.image_id.clone().unwrap(),
                 source: confidential_agent_core::spec::PublishedImageSpec {
+                    release_digest: None,
                     release: "/release.json".into(),
                     trusted_key: "/publisher.pem".into(),
                     manifest: Some(format!("sha256:{}", "a".repeat(64))),
@@ -1750,13 +2002,7 @@ mod tests {
         assert_eq!(published.image_id.as_deref(), Some("m-imported"));
         assert_eq!(
             ops.calls(),
-            vec![
-                "validate",
-                "find-existing",
-                "ensure-bucket",
-                "upload",
-                "import"
-            ]
+            vec!["find-existing", "ensure-bucket", "upload", "import"]
         );
         let written =
             read_service_state_file(&context_paths(temp.path(), "openclaw").service_state)
@@ -1874,13 +2120,7 @@ mod tests {
         assert!(written.build.published[&key].image_id.is_none());
         assert_eq!(
             ops.calls(),
-            vec![
-                "validate",
-                "find-existing",
-                "ensure-bucket",
-                "upload",
-                "import"
-            ]
+            vec!["find-existing", "ensure-bucket", "upload", "import"]
         );
     }
 
@@ -1924,7 +2164,6 @@ mod tests {
         assert_eq!(
             ops.calls(),
             vec![
-                "validate",
                 "find-existing",
                 "ensure-bucket",
                 "upload",
@@ -1984,7 +2223,6 @@ mod tests {
         assert_eq!(
             ops.calls(),
             vec![
-                "validate",
                 "find-existing",
                 "ensure-bucket",
                 "upload",
@@ -2082,7 +2320,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(published.status, STATUS_IMPORTING);
-        assert_eq!(ops.calls(), vec!["validate", "find-existing", "import"]);
+        assert_eq!(ops.calls(), vec!["import"]);
     }
 
     #[test]
@@ -2127,7 +2365,7 @@ mod tests {
 
         assert_eq!(published.status, STATUS_IMPORTING);
         assert_eq!(published.image_id.as_deref(), Some("m-existing-import"));
-        assert_eq!(ops.calls(), vec!["validate", "describe:m-existing-import"]);
+        assert_eq!(ops.calls(), vec!["describe:m-existing-import"]);
     }
 
     #[test]
@@ -2174,7 +2412,7 @@ mod tests {
         assert!(published.oss_cleaned);
         assert_eq!(
             ops.calls(),
-            vec!["validate", "describe:m-existing-import", "cleanup-oss"]
+            vec!["describe:m-existing-import", "cleanup-oss"]
         );
     }
 
@@ -2216,7 +2454,7 @@ mod tests {
         assert_eq!(published.status, STATUS_AVAILABLE);
         assert_eq!(published.image_id.as_deref(), Some("m-adopted"));
         assert!(published.oss_cleaned);
-        assert_eq!(ops.calls(), vec!["validate", "find-existing"]);
+        assert_eq!(ops.calls(), vec!["find-existing"]);
     }
 
     #[test]
@@ -2229,6 +2467,12 @@ mod tests {
         let key = "aliyun/cn-beijing/release/openclaw-agent-release/source".to_string();
         let mut entry = test_published_entry(&state.build.build_id, "source");
         entry.oss_cleaned = false;
+        let mut foreign = entry.clone();
+        foreign.account_id = "654321".into();
+        state
+            .build
+            .published
+            .insert("foreign".into(), foreign.clone());
         state.build.published.insert(key.clone(), entry);
         write_local_service_state(temp.path(), &state).unwrap();
         let ops = FakePublishCloudOps {
@@ -2254,6 +2498,7 @@ mod tests {
             read_service_state_file(&context_paths(temp.path(), "openclaw").service_state)
                 .unwrap()
                 .unwrap();
+        assert_eq!(written.build.published["foreign"], foreign);
         let remaining = written.build.published.get(&key).unwrap();
         assert!(remaining.retiring);
         assert_eq!(remaining.status, "source");
@@ -2483,6 +2728,8 @@ mod tests {
 
     fn test_published_entry(build_id: &str, status: &str) -> PublishedImage {
         PublishedImage {
+            account_id: "123456".into(),
+            manifest_digest: String::new(),
             provider: PROVIDER_ALIYUN.to_string(),
             region: "cn-beijing".to_string(),
             variant: "release".to_string(),
@@ -2567,17 +2814,16 @@ mod tests {
     }
 
     impl PublishCloudOps for FakePublishCloudOps {
+        fn caller_account(&self, _: &Cli, _: &str) -> Result<String> {
+            Ok("123456".into())
+        }
+
         fn image_import_timeout(&self) -> Duration {
             self.timeout
         }
 
         fn image_import_poll_interval(&self) -> Duration {
             self.poll_interval
-        }
-
-        fn validate_credentials(&self, _cli: &Cli, _region: &str) -> Result<()> {
-            self.record("validate");
-            Ok(())
         }
 
         fn find_existing_published_image(
@@ -3003,6 +3249,13 @@ mod tests {
         let mut entry = test_published_entry(&state.build.build_id, STATUS_AVAILABLE);
         entry.exported = true;
         entry.oss_cleaned = false;
+        let mut foreign = entry.clone();
+        foreign.account_id = "654321".into();
+        foreign.exported = false;
+        state
+            .build
+            .published
+            .insert("foreign".into(), foreign.clone());
         state.build.published.insert("pub".into(), entry);
         write_local_service_state(root.path(), &state).unwrap();
         let ops = FakePublishCloudOps::default();
@@ -3019,6 +3272,7 @@ mod tests {
         let state = read_service_state_file(&context_paths(root.path(), "builder").service_state)
             .unwrap()
             .unwrap();
+        assert_eq!(state.build.published["foreign"], foreign);
         assert!(state.build.published["pub"].oss_cleaned);
         assert!(state.build.published["pub"].image_id.is_some());
     }

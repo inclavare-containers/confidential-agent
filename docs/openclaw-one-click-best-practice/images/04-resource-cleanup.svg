@@ -28,8 +28,9 @@
   <text class="text small" x="104" y="248">不可逆云资源释放</text>
 
   <rect class="cloud" x="395" y="110" width="260" height="96"/>
-  <text class="text h" x="436" y="148">计算资源</text>
-  <text class="text body" x="430" y="178">TDX ECS 实例 / 自定义镜像</text>
+  <text class="text h" x="436" y="144">计算资源</text>
+  <text class="text body" x="430" y="172">TDX ECS 实例 / 临时镜像</text>
+  <text class="text small" x="430" y="194">共享云镜像由 image unpublish 退役</text>
 
   <rect class="cloud" x="395" y="236" width="260" height="96"/>
   <text class="text h" x="436" y="274">网络资源</text>
@@ -41,7 +42,7 @@
 
   <rect class="local" x="770" y="150" width="300" height="120"/>
   <text class="text h" x="812" y="188">本地 connect 隧道</text>
-  <text class="text body" x="812" y="222">kill $(cat connect.pid)</text>
+  <text class="text body" x="812" y="222">connect stop --ready-json ...</text>
   <text class="text small" x="812" y="248">只停止本机 TNG Client</text>
 
   <rect class="local" x="770" y="330" width="300" height="120"/>

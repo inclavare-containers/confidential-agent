@@ -11,7 +11,7 @@
 %global __brp_strip_comment_note %{nil}
 
 Name:           cagent
-Version:        0.2.0
+Version:        0.3.0
 Release:        1%{?dist}
 Summary:        Confidential Agent host CLI and guest image assets
 License:        Apache-2.0
@@ -28,7 +28,7 @@ BuildRequires:  glibc-devel
 BuildRequires:  python3.11
 BuildRequires:  /usr/bin/pkg-config
 
-Requires:       shelter >= 0.3.2-2
+Requires:       shelter >= 0.3.2-3
 Requires:       attestation-challenge-client
 Requires:       libtdx-verify
 Requires:       trusted-network-gateway = 2.9.2-1.al8
@@ -38,13 +38,15 @@ Requires:       openssh-clients
 Requires:       openssl
 Requires:       bash
 Requires:       jq
+Requires:       python3.11
 
 %description
 Build, publish and deploy confidential AI agents with native host tools.
-Includes the CA CLI, guest daemon/gateway/PEP assets, pinned cloud/signing tools,
-and application examples. Attestation and TNG runtimes are installed through
-RPM dependencies; rekor-cli is shared with Shelter. Docker is not a host
-dependency. Applications may still use container isolation inside their guest.
+Includes the CA CLI, guest daemon/gateway/PEP assets, pinned cloud/OCI/signing
+tools, one-click installers, and application examples. Attestation and TNG
+runtimes are installed through RPM dependencies; rekor-cli is shared with
+Shelter. Docker is not a host dependency. Applications may still use container
+isolation inside their guest.
 
 %prep
 %setup -q
@@ -69,7 +71,7 @@ for binary in confidential-agent confidential-agentd cai-gateway cai-pep; do
 done
 ln -s confidential-agent %{buildroot}%{_bindir}/cagent
 install -d %{buildroot}%{_libexecdir}/cagent/bin
-for tool in cosign aliyun ossutil64; do
+for tool in cosign aliyun ossutil64 oras; do
     install -m 0755 native-tools/$tool %{buildroot}%{_libexecdir}/cagent/bin/$tool
 done
 for tool in tng attestation-challenge-client; do
@@ -77,9 +79,19 @@ for tool in tng attestation-challenge-client; do
 done
 ln -s %{_libexecdir}/shelter/bin/rekor-cli %{buildroot}%{_libexecdir}/cagent/bin/rekor-cli
 install -m 0644 native-tools/SOURCES.tsv %{buildroot}%{_libexecdir}/cagent/SOURCES.tsv
-install -d %{buildroot}%{_datadir}/cagent
+install -d %{buildroot}%{_datadir}/cagent/{one-click,hack,packaging}
 cp -a examples common software-versions.json %{buildroot}%{_datadir}/cagent/
+cp -a one-click/install*.sh one-click/lib %{buildroot}%{_datadir}/cagent/one-click/
+for helper in check-shelter.sh check-shelter-rpm.sh resolve-shelter-rpm.sh fetch-shelter-rpm.py resolve-release-image.sh fetch-release-image.py; do
+    install -m 0755 hack/$helper %{buildroot}%{_datadir}/cagent/hack/$helper
+done
+install -m 0644 hack/shelter-rpm.json %{buildroot}%{_datadir}/cagent/hack/shelter-rpm.json
+install -m 0644 hack/release-image.json %{buildroot}%{_datadir}/cagent/hack/release-image.json
 install -m 0644 hack/shelter-rpm.json %{buildroot}%{_datadir}/cagent/shelter-rpm.json
+for helper in install-rpm.sh install-native-tools.sh fetch-native-tools.sh; do
+    install -m 0755 packaging/$helper %{buildroot}%{_datadir}/cagent/packaging/$helper
+done
+install -m 0644 packaging/native-tools.tsv %{buildroot}%{_datadir}/cagent/packaging/native-tools.tsv
 
 %check
 export CARGO_TARGET_DIR=%{cagent_target}
@@ -91,6 +103,7 @@ bash one-click/tests/paired-rpm-upgrade.sh
 native-tools/cosign version >/dev/null
 native-tools/aliyun version >/dev/null
 native-tools/ossutil64 --version >/dev/null
+native-tools/oras version >/dev/null
 
 %files
 %license LICENSE
@@ -104,6 +117,10 @@ native-tools/ossutil64 --version >/dev/null
 %{_datadir}/cagent/
 
 %changelog
+* Wed Nov 18 2026 Weidong Sun <sunweidong@linux.alibaba.com> - 0.3.0-1
+- Require Shelter 0.3.2-3 and package ORAS 1.3.0 for OCI artifact delivery and digest-authenticated image releases.
+- Package one-click scripts and shared version/dependency helpers under /usr/share/cagent.
+
 * Mon Nov 02 2026 Weidong Sun <sunweidong@linux.alibaba.com> - 0.2.0-1
 - Publish the host CLI and guest assets with a verified companion Shelter RPM.
 - Fetch pinned Shelter packages from GitHub Releases instead of Git LFS.

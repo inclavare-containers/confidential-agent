@@ -1,277 +1,245 @@
-# confidential-agent RPM 安装与 all-in-one 流程
+# confidential-agent RPM 安装与预构建镜像流程
 
-当前支持 Alibaba Cloud Linux 3、x86_64。confidential-agent 使用原生工具，标准
-all-in-one 构建和部署不需要宿主机 Docker 或 Podman。Guest 内应用如果启用
-PEP，仍可以使用 Guest 自己的容器隔离。
+当前支持 Alibaba Cloud Linux 3（`x86_64`）。`confidential-agent`（兼容别名 `cagent`）使用原生宿主机工具，预构建镜像导入、本地构建和云端部署均不需要宿主机安装 Docker 或 Podman；Guest 内应用如启用 PEP，仍使用 Guest 自身的容器沙箱隔离。本地 `confidential-agent` CLI 从不在宿主机自动安装任何应用客户端。
 
 ## 从 Release 安装
 
-v0.2.0 的正式入口是 [GitHub Release](https://github.com/inclavare-containers/confidential-agent/releases/tag/v0.2.0)。可从附件下载 `install-rpm.sh`，或在 Bash 中使用代理优先、官方回退的方式下载：
+从 [v0.3.0 GitHub Release](https://github.com/inclavare-containers/confidential-agent/releases/tag/v0.3.0) 下载并运行安装器：
 
 ```bash
-set -euo pipefail
-INSTALL_URL="https://github.com/inclavare-containers/confidential-agent/releases/download/v0.2.0/install-rpm.sh"
-INSTALL_SCRIPT="$(mktemp)"
-PROXY_URL="${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}"
-FIRST_URL="${PROXY_URL:+${PROXY_URL%/}/}${INSTALL_URL}"
-SECOND_URL="$INSTALL_URL"
-if [[ "${CA_GITHUB_PROXY_FIRST:-1}" == 0 ]]; then
-  SECOND_URL="$FIRST_URL"
-  FIRST_URL="$INSTALL_URL"
-fi
-if ! curl -fL --connect-timeout 10 --max-time 90 "$FIRST_URL" -o "$INSTALL_SCRIPT" ||
-   [[ "$(head -c 2 "$INSTALL_SCRIPT")" != '#!' ]]; then
-  curl -fL --connect-timeout 10 --max-time 90 "$SECOND_URL" -o "$INSTALL_SCRIPT"
-fi
-[[ "$(head -c 2 "$INSTALL_SCRIPT")" == '#!' ]]
-sudo --preserve-env=CA_GITHUB_PROXY_URL,CA_GITHUB_PROXY_FIRST bash "$INSTALL_SCRIPT" --version 0.2.0
+curl -fsSLo install-rpm.sh https://github.com/inclavare-containers/confidential-agent/releases/download/v0.3.0/install-rpm.sh
+sudo --preserve-env=CA_GITHUB_PROXY_URL,CA_GITHUB_PROXY_FIRST bash install-rpm.sh --version 0.3.0
 confidential-agent --version
 ```
 
-安装器下载并校验 cagent 和配套 Shelter 两个 RPM，再通过 DNF 一起安装。无需先克隆源码或编译 CA。该方式需要联网访问 Release 和 Alinux3 软件源；`--download-only --output-dir DIR` 可只下载已校验的两个包和清单，`--from-dir DIR` 可安装本地包。后者仍可能从软件源获取系统依赖，不等于完全离线安装。
+安装器会下载并校验 `cagent-0.3.0-1.al8.x86_64.rpm` 与配套 `shelter-0.3.2-3.al8.x86_64.rpm` 的文件 SHA-256 和 RPM payload 摘要，再通过 DNF 一并安装，无需克隆源码或编译 Rust：
+
+- `--download-only --output-dir DIR`：仅下载并校验两个 RPM 及 `release-manifest.json`。
+- `--from-dir DIR`：从已下载目录校验并安装本地包（仍通过系统源解析常规 RPM 依赖）。
+
+安装完成后，执行 `/usr/share/cagent/hack/resolve-release-image.sh --output-dir ./prebuilt` 下载镜像索引与描述文件。可用 `--version V` 选择 Release 版本，或用 `--from-dir DIR` 读取已从官方 Release 获取的索引和描述文件。
 
 ## 构建 RPM
 
-在打包机安装构建依赖，然后从源码根目录执行：
+在打包机安装构建依赖后，从源码根目录执行：
 
 ```bash
 sudo dnf install -y rpm-build cargo rust gcc glibc-devel pkgconf-pkg-config python3.11 curl tar
 packaging/build-rpm.sh
 ```
 
-产物位于 `target/rpm/RPMS/x86_64/cagent-0.2.0-1.al8.x86_64.rpm`，
-SRPM 位于 `target/rpm/SRPMS/`。源码准备阶段缓存并校验固定版本的
-cosign、aliyun、ossutil，GitHub 下载默认先尝试国内代理再回退官方地址；
-可用 `CA_GITHUB_PROXY_URL` 修改代理。`target/rpm/SOURCES/SHA256SUMS`
-记录源码、Cargo vendor 和工具归档的哈希。rpmbuild 内的 Cargo 构建和测试
-使用 `--locked --offline`，不会再次下载依赖。
+产物位于 `target/rpm/RPMS/x86_64/cagent-0.3.0-1.al8.x86_64.rpm`，SRPM 位于 `target/rpm/SRPMS/`。源码准备阶段缓存并校验固定版本的 `cosign`、`aliyun`、`ossutil64` 和 `oras`；`target/rpm/SOURCES/SHA256SUMS` 记录源码、Cargo vendor 和原生工具归档的哈希，rpmbuild 内使用 `--locked --offline` 编译与测试。
 
-打包输出目录同时包含配套 Shelter RPM、`shelter-rpm.json` 和两包的
-`SHA256SUMS`。配套 Shelter 为 `0.3.2-2`，其准确源码提交记录在
-`hack/shelter-rpm.json` 的 `source_commit` 字段中。
-one-click 和 E2E 安装入口按该记录选择 RPM，避免目录中遗留的其他版本被误选。
-该版本在主线运行时和 VMM 基础上保留可移植镜像发布、可选 manifest 版本固定、
-ext4 稀疏文件提取与副本生命周期功能。CA 使用显式 v1 构建配置和 v2 运行时配置。
-内置 Cryptpilot guest 使用官方 0.9.3，CA 安装预检要求 host 和 guest 均为 0.9.3。
-Cryptpilot 启动配置直接使用最终根设备 `/dev/mapper/rootfs`，避免标签扫描探测内部增量设备。
-one-click 的 cleanup 使用已安装的 Shelter，只预检实例删除和剩余节点网络更新命令。
-清理不会因 Cryptpilot 构建工具版本不同而被拒绝，也不会在删除前自动替换 Shelter 包；
-构建和部署仍执行配套 RPM 与 Cryptpilot 版本预检。
-Shelter RPM 显式依赖 `zstd`，安装时由 DNF 自动解析，以支持默认的 Zstd initrd 压缩。
-`hack/shelter-rpm.json` 记录固定 Release URL、源码提交、RPM SHA-256 和 payload 摘要。
-`hack/resolve-shelter-rpm.sh` 按该记录解析包，缺少时下载到 `target/dependencies/shelter/`（可用 `CA_SHELTER_RPM_CACHE` 覆盖），并校验两个摘要。Shelter RPM 通过 GitHub Releases 分发。准备 cagent 源码包时也会核对实际 Shelter RPM。
+输出目录同时包含配套 Shelter RPM（`cagent` 依赖 `shelter >= 0.3.2-3`）、`shelter-rpm.json` 与 `SHA256SUMS`。`hack/shelter-rpm.json` 记录固定 Release URL、源码提交、RPM SHA-256 和 payload 摘要，缺少时由 `hack/resolve-shelter-rpm.sh` 下载到缓存目录并双重校验。`CAGENT_BUILD_JOBS` 控制打包并行度（默认 `4`）。
 
-`CAGENT_BUILD_JOBS` 控制打包并行度，默认 4。公开发布不同 payload 时递增
-RPM 的 Release；当前 cagent 为 `0.2.0-1`，并依赖 `shelter >= 0.3.2-2`。
-升级 Version 时，Release 从 `1` 开始。
+## 在干净机器手动安装本地 RPM
 
-## 在干净机器安装
-
-把 confidential-agent 和随项目发布的 Shelter RPM 放在同一目录，安装：
+将 `cagent` 与配套 `shelter` RPM 放在同一目录后安装：
 
 ```bash
-# 若只下载了两个 RPM，仅校验清单中对应的两项。
-grep -E '  (cagent-0\.2\.0-1\.al8\.x86_64|shelter-0\.3\.2-2\.al8\.x86_64)\.rpm$' SHA256SUMS | sha256sum -c -
-sudo dnf install -y ./shelter-0.3.2-2.al8.x86_64.rpm ./cagent-0.2.0-1.al8.x86_64.rpm
+grep -E '  (cagent-0\.3\.0-1\.al8\.x86_64|shelter-0\.3\.2-3\.al8\.x86_64)\.rpm$' SHA256SUMS | sha256sum -c -
+sudo dnf install -y ./shelter-0.3.2-3.al8.x86_64.rpm ./cagent-0.3.0-1.al8.x86_64.rpm
 confidential-agent version
 rpm -q cagent shelter attestation-challenge-client libtdx-verify trusted-network-gateway
 ```
 
-RPM 包名为 `cagent`，正式命令为 `confidential-agent`；`cagent` 是兼容别名。
-如果已安装相同版本号的旧包，需对相应本地 RPM 执行 `dnf reinstall -y`，
-普通 `dnf install` 不会替换同版本旧内容。可用 `rpm -q --qf '%{PAYLOADDIGEST}\n' shelter`
-与 `shelter-rpm.json` 中的 `payload_sha256` 比较，确认实际安装的 Shelter 内容。
-RPM 安装 CLI、Guest 构建资产和示例，并自动解析原生验证工具的依赖。
-不需要在这台机器安装 Rust/Cargo、克隆源码或编译 CA。
-分阶段模板为只读基础镜像之外的加密可写层预留磁盘空间；Hermes 默认使用 60 GB 部署盘。
-发布使用工作区持久化的独立 OSS 命名，已有发布记录继续保留其原 bucket 和对象位置。
-目前 Shelter RPM 仍携带构建依赖，因此这也是可用于构建镜像的安装环境。
+如果机器上已安装同版本号的包，需使用 `sudo dnf reinstall -y` 重新安装对应本地 RPM。
 
-## 初始化项目
+## 镜像交付与运行时证明
 
-初始化向导可直接读取 RPM 内的模板，无需源码目录：
+- **镜像交付**。从官方 GitHub Release 的 `image-index.json` 读取不可变 OCI 引用 `oci_reference` 和可信 `release_digest`，或使用本机 `image export` 输出的摘要。该摘要校验 `image-release.json` 的完整字节。`image publish --artifact` 校验本地或从 OCI 拉取的产物，确认其 manifest 和磁盘摘要及大小与描述一致。镜像站只负责传输。
+- **实例启动**。`deploy` 验证镜像描述和运行时契约，再创建 TDX 实例。通过 TDX Quote 和 Rekor 参考值验证后，challenge 或 Trustee 才释放磁盘密钥与业务资源。开发场景也可使用 `sample` 参考值。
+
+## 按手头已有产物选择手动流程
+
+构建共享镜像用 `confidential-agent init --stage build`，导入 ECS 用 `confidential-agent image publish`，创建应用配置用 `confidential-agent init <app>`。
+
+### 1. 从零构建共享镜像（本地尚无构建产物）
 
 ```bash
 export PATH=/usr/libexec/cagent/bin:$PATH
 aliyun configure
-confidential-agent init
-```
 
-先选择构建或部署，再选择模板。也可以显式生成共享镜像构建目录：
-
-```bash
-confidential-agent init allinone --stage build --non-interactive --output-dir ~/cagent-work
+# 生成共享镜像构建目录 ~/cagent-work/allinone-builder（含 build.yaml，无需模型 API Key）
+confidential-agent init --stage build --non-interactive --output-dir ~/cagent-work
 cd ~/cagent-work/allinone-builder
-```
 
-生成目录包含 `build.yaml`、完整构建脚本及 `NEXT_STEPS.md`。构建阶段不要求模型 API key。
-`all-in-one` 是 `allinone` 的别名。OpenClaw、Hermes、Codex、Claude Code、
-OpenClaw-vLLM 和 vLLM inference 同样支持 `--stage build/deploy`。
-旧的显式目标命令（例如不带 `--stage` 的 `init hermes`）仍保留原来的合并模板行为。
-
-CA 的发布和云部署会读取宿主机的 AK/StsToken profile；也可使用
-AccessKey 环境变量。凭证优先级和命名 profile 见
-[all-in-one 文档](../examples/allinone/README.md#build-and-publish)。
-
-## 构建和发布
-
-进入 init 生成的 `allinone-builder` 目录，检查其中的 `build.yaml`，然后执行：
-
-```bash
+confidential-agent spec validate --spec build.yaml
 confidential-agent build --spec build.yaml
-confidential-agent image publish allinone-builder --spec build.yaml
-test -f publisher.key || (umask 077; openssl genpkey -algorithm ED25519 -out publisher.key)
-openssl pkey -in publisher.key -pubout -out publisher.pem
-confidential-agent image export allinone-builder \
-  --signing-key publisher.key --output image-release.json
+
+# 导出镜像描述文件（无需签名私钥或云端镜像 ID），记录输出的 release_digest=sha256:...
+confidential-agent image export allinone-builder --output ./image-release.json
+
+# 显式上传并导入为目标地域阿里云 ECS 自定义镜像
+confidential-agent image publish allinone-builder \
+  --spec ./build.yaml \
+  --region cn-beijing \
+  --output ./published.json
 ```
 
-manifest 摘要会从经过验签的 release 自动读取，无需抄写。镜像上传的
-`CA_IMAGE_OSS_ENDPOINT=auto` 会检测同地域 ECS 内网端点，否则使用公网。
-发布不重新构建镜像。
+### 2. 本机已完成构建（复用已有 Shelter 构建记录）
 
-## 部署和对话
-
-使用已发布的 release 为每个独立实例生成部署目录。通过交互向导填写信任信息、
-harness、运行模式、模型和凭证，或使用参数：
-
-交互提示的方括号表示按回车即可采用的默认值。模型名与非交互模式使用同一份
-`software-versions.json` 默认配置；传入 `--model` 或设置 `DASHSCOPE_MODEL` 时直接使用指定值，
-不再询问。地域、可用区、实例规格、磁盘大小、运行模式和输出目录也提供默认值。
+本机已经执行过 `build` 时，无需重新构建镜像，直接导出描述并导入目标地域 ECS：
 
 ```bash
-# 在模型 API key 已通过 DASHSCOPE_API_KEY 设置的环境中执行。
-confidential-agent init allinone --stage deploy --non-interactive \
-  --service-id hermes-01 --harness hermes --harness-mode gateway \
-  --image-release ./image-release.json --trusted-key ./publisher.pem \
-  --reference-values sample --output-dir ~/cagent-work
-cd ~/cagent-work/hermes-01
+cd ~/cagent-work/allinone-builder
+confidential-agent image export allinone-builder --output ./image-release.json
+confidential-agent image publish allinone-builder \
+  --spec ./build.yaml \
+  --region cn-beijing \
+  --output ./published.json
 ```
 
-部署目录只包含 `instance.yaml`、release、公钥、私有配置及后续步骤，不包含构建输入。
-签名和镜像兼容性会在 deploy 创建云资源前验证。
-只有需要额外固定某个版本时才传 `--manifest sha256:<完整摘要>`；省略时仍会验签，并把解析出的摘要固定在部署状态中。
-再次 init 时换 `--service-id`，可复用相同镜像创建同种或不同 harness 的实例。
-allinone 支持 OpenClaw、Hermes、Codex、Claude Code、QoderCLI、OpenCode、Pi、DSH；
-Qoder 使用自己的账户登录流程，不把 DashScope key 当成 Qoder 凭证。
-模型、凭证使用生成的私有资源，不写入共享镜像。
+### 3. 按不可变 OCI 引用下载并导入 ECS（使用官方预构建镜像）
 
-`--replicas N` 表示一个服务的副本，共享服务配置与身份；gateway/app-server 默认使用 NLB，
-vLLM inference 保持 ALB + OHTTP。CLI 模式应使用不同的 service ID 创建独立实例。副本不会自动同步应用文件或会话历史。
-同时运行的不同 harness 使用不同服务 ID。同一 all-in-one 实例在 CLI harness 之间切换时，
-可以保持 service ID、release 和基础设施设置不变，使用新的输出目录生成部署配置，
-再运行 `confidential-agent inject --spec 新配置/instance.yaml --target-ip 实例IP`；实例及其数据保留。
-切换监听端口或负载均衡拓扑时，创建新的部署。多条本地连接使用不同 `--ready-json`，实际本地端口读取
-ready 文件的 `client_endpoints`，避免假设所有连接都能占用相同端口。
+本机未构建、也未预先下载大体积镜像文件时，从官方 Release 获取 `image-index.json` 与 `image-release.json`，按 `@sha256` 固定的 `oci_reference` 直接拉取、校验并导入本账号目标地域 ECS：
 
 ```bash
-confidential-agent peering add --role operator --cidr DEPLOYER_PUBLIC_IP/32 --label deployer
-confidential-agent spec validate --spec instance.yaml
-confidential-agent deploy --spec instance.yaml
+/usr/share/cagent/hack/resolve-release-image.sh --output-dir ./prebuilt
+OCI_REF="$(jq -er '.oci_reference' ./prebuilt/image-index.json)"
+RELEASE_DIGEST="$(jq -er '.release_digest' ./prebuilt/image-index.json)"
+
+confidential-agent image publish \
+  --artifact "$OCI_REF" \
+  --image-release ./prebuilt/image-release.json \
+  --release-digest "$RELEASE_DIGEST" \
+  --region cn-beijing \
+  --output ./published.json
+```
+
+### 4. 预构建产物已下载到本地（离线传输或镜像加速下载后导入）
+
+如果 Shelter 产物目录（含 `artifact-manifest.json` 和磁盘镜像）已经下载或拷贝到本机，用官方 Release `image-index.json` 中的可信 `release_digest` 校验本地产物并导入 ECS：
+
+```bash
+/usr/share/cagent/hack/resolve-release-image.sh --output-dir ./prebuilt
+RELEASE_DIGEST="$(jq -er '.release_digest' ./prebuilt/image-index.json)"
+
+confidential-agent image publish \
+  --artifact ./local-shelter-artifact \
+  --image-release ./prebuilt/image-release.json \
+  --release-digest "$RELEASE_DIGEST" \
+  --region cn-beijing \
+  --output ./published.json
+```
+
+`--artifact` 既可指向 Shelter 产物目录，也可直接指向其中的 `artifact-manifest.json`。
+
+### 5. 当前地域已有可用 ECS 自定义镜像 ID（直接初始化并部署）
+
+已有当前地域可用的 ECS 镜像时，使用与该镜像对应的描述、可信摘要和 `image_id`。下面以官方预构建镜像为例。使用本机构建时，将 `IMAGE_RELEASE` 设为本机导出的文件，并采用 `image export` 输出的 `RELEASE_DIGEST`。
+
+```bash
+export DASHSCOPE_API_KEY="<YOUR_DASHSCOPE_API_KEY>"
+IMAGE_RELEASE="./prebuilt/image-release.json"
+RELEASE_DIGEST="$(jq -er '.release_digest' ./prebuilt/image-index.json)"
+IMAGE_ID="$(jq -er '.image_id' ./published.json)" # 或填写已知的镜像 ID
+
+confidential-agent init openclaw \
+  --non-interactive \
+  --image-release "$IMAGE_RELEASE" \
+  --release-digest "$RELEASE_DIGEST" \
+  --image-id "$IMAGE_ID" \
+  --service-id openclaw-01 \
+  --region cn-beijing \
+  --output-dir ~/cagent-work
+
+confidential-agent peering add --role operator --cidr "<DEPLOYER_PUBLIC_IP>/32" --label deployer
+confidential-agent spec validate --spec ~/cagent-work/openclaw-01/instance.yaml
+confidential-agent deploy --spec ~/cagent-work/openclaw-01/instance.yaml
+```
+
+若该镜像是在同一 `--state-dir` 下通过 `image publish` 导入当前账号和地域的，可省略 `--image-id`，CA 会在部署前按 `manifest_digest`、账号与地域自动解析对应的 `image_id`。未显式传入 `--model`（或 `DASHSCOPE_MODEL`）时，默认模型为 `qwen4-max`。
+
+### 6. 复用同一云镜像创建新实例（相同或不同应用）
+
+云端自定义镜像就绪后，拉起更多实例无需重新构建、重新下载或重复执行 `image publish`；只需指定新的 `--service-id` 运行 `init <app>` 再执行 `deploy`：
+
+```bash
+export DASHSCOPE_API_KEY="<YOUR_DASHSCOPE_API_KEY>"
+
+# 复用同一镜像再起一个 Hermes HTTP API 实例
+confidential-agent init hermes \
+  --non-interactive \
+  --image-release "$IMAGE_RELEASE" \
+  --release-digest "$RELEASE_DIGEST" \
+  --image-id "$IMAGE_ID" \
+  --service-id hermes-01 \
+  --region cn-beijing \
+  --output-dir ~/cagent-work
+
+confidential-agent deploy --spec ~/cagent-work/hermes-01/instance.yaml
+```
+
+每个实例拥有独立的 `service.id`、磁盘口令、网关身份、实例 SSH 密钥与业务资源配置。更多共享镜像内部细节见 [allinone 说明](../examples/allinone/README.md#build-and-publish)。
+
+## 原生服务接入、SSH 与生命周期管理
+
+支持基于同一共享预构建镜像初始化的应用及接入方式如下：
+
+- **原生网络服务（通过 `confidential-agent connect start` 建立本地 RATS-TLS 隧道访问）**：
+  - **OpenClaw**：Gateway 服务（Web `/openclaw`、WebSocket/TUI，支持 `--enable-dingtalk` 与 A2A）。传入 `--disable-pep` 可按实例关闭 `exec` 策略控制，同时保留 TDX 运行时证明与 `cai-pep attest`。
+  - **Hermes**：带鉴权的 HTTP API 服务（默认端口 `8642`）。
+  - **Codex**：带能力令牌鉴权的 WebSocket `app-server` 服务（默认端口 `4500`，也可切为 SSH CLI）。
+  - **OpenCode**：带密码鉴权的 Web / attach 服务（默认端口 `4096`，也可切为 SSH CLI）。
+  - **DSH**：带鉴权的 Web 服务（默认端口 `3080`，通过 `confidential-agent ssh <id> -- cai-agent --web-url --port <本地端口>` 获取带登录 token 的地址；也可通过 SSH 运行 `cai-agent headless`）。
+- **SSH 终端接入（通过远程证明下发实例级密钥）**：
+  - **Claude Code**、**QoderCLI**（进入会话后完成 Qoder 登录）、**Pi**：通过 `confidential-agent ssh <service-id> --tty -- cai-agent` 使用。
+
+常用连接、巡检与销毁命令：
+
+```bash
 confidential-agent status --live
 confidential-agent report --json
-confidential-agent ssh SERVICE -- cai-agent --check
-confidential-agent ssh SERVICE --tty -- cai-agent
-```
 
-最后一条命令进入所选 harness 的交互入口。配置模型后发送实际问题并确认
-模型返回内容；`active` 或端口就绪只说明部署状态，不等同于模型对话成功。
-Gateway 的 HTTP/WebSocket 客户端使用原生 TNG 隧道：
-
-```bash
-confidential-agent connect start --service SERVICE --ready-json connect.json --log-file connect.log
+# 原生网络服务建立与停止本地隧道（多条并发隧道请指定不同的 --ready-json 与 --log-file）
+confidential-agent connect start --service openclaw-01 --ready-json connect.json --log-file connect.log
 confidential-agent connect stop --ready-json connect.json
-confidential-agent destroy SERVICE
+
+# 实例级管理 SSH 检查与交互进入
+confidential-agent ssh codex-01 -- cai-agent --check
+confidential-agent ssh codex-01 --tty -- cai-agent
+
+# 销毁单个实例（保留共享云镜像）
+confidential-agent destroy openclaw-01
 ```
 
-后台连接记录使用 v2 格式，包含 PID、进程启动时刻、系统 boot ID 和日志
-路径，停止时校验进程身份。旧 tools 容器产生的 v1 ready 文件不用于管理
-原生隧道，升级前应先停止旧连接。
+网络服务支持 `--replicas N` 部署共享身份的负载均衡副本。CPU 网络服务使用 NLB，`vllm-inference` 使用 ALB + OHTTP。CLI 模式通过不同的 `--service-id` 创建独立实例。确认无消费者依赖镜像后，用 `image unpublish` 按构建服务名或产物的 `manifest_digest` 退役云镜像与自有导入快照。曾写入导出描述映射的镜像需加 `--force`。
 
-销毁消费者不会删除共享云镜像。发布者确认无消费者依赖后，使用
-`image unpublish` 退役镜像；导出过的镜像需要显式 `--force`。
-
-`status --live` 汇总副本就绪状态；`report --json` 的 `replicas` 数组包含各物理实例的证明和
-管理状态，查询直接访问已记录的实例地址。负载均衡地址仅用于应用流量。只要有副本收集失败，
-报告不会把整个服务视为证明收集成功；兼容字段中的 EAR 是首个实例的证明，逐副本检查使用 `replicas`。
-
-## 目录和已有镜像
+## 目录说明
 
 | 位置 | 用途 |
 |---|---|
-| `./confidential-agent-init/allinone-builder/` | 从执行 init 时的目录生成；包含 `build.yaml`、构建脚本、NEXT_STEPS。可由 `--output-dir` 改变 |
-| `./confidential-agent-init/<service-id>/` | 独立消费者的 `instance.yaml`、私有资源、release 与可选公钥 |
-| `~/.confidential-agent/` | 默认 CA state，按操作用户的 HOME 定位；与当前工作目录无关 |
-| `<state>/services/<service-id>/` | 构建/发布记录、构建清单、实例身份、密钥、运行状态 |
-| `<state>/services/<service-id>/shelter/` | CA 管理的 Shelter 构建记录与 Terraform 工作目录，不要另建同名独立 Shelter 工作区替代 |
-| `<state>/services/<service-id>/shelter/cache/` | Shelter 的基础镜像等构建缓存；包解析缓存另在 `shelter/inputs/resolver-cache/` |
-| 源码中的 `one-click/` | 另一套安装/操作脚本入口，RPM init 流程不需要进入它 |
-| `<state>/one-click/` | one-click 默认生成工作目录；`--work-dir` 可单独指定 |
-| `/usr/share/cagent/` | RPM 提供的模板资产，由 init 复制到可编辑项目目录 |
-
-NEXT_STEPS 会写入明确的 `cd` 和绝对 `--state-dir`。自定义 state 时所有操作使用同一个绝对路径；
-不同用户或遗漏该参数会看到另一套状态。相对 `--spec`、签名密钥和 `--output` 路径按命令执行目录解释；
-spec 内的文件路径按 spec 所在目录解释。导出的 `image-release.json` 放在指定输出位置，不会代替 state。
-不要把清空 state 当作清理缓存，也不要通过重新 init --force 来修复 export。
-旧 CA 清单的 `cache_dir` 可能指向未使用的 `<service>/cache`；新记录修正为实际 Shelter cache 路径，升级不会迁移或删除旧目录。
-`shelter/artifacts`、`records`、`proofs`、`images` 和实例密钥是构建/证明或运行记录，不应作为普通缓存清空。
-
-已构建且发布的镜像在更新 CLI/Shelter 后可以直接重新 export，无须重建或重发。
-新 release 不包含 UID；旧 release/spec/target 中的 `account_id` 作为兼容字段读取并忽略。
-共享镜像或云市场镜像已有可用 ID 时，发布者使用原构建记录直接签发映射：
-
-```bash
-confidential-agent image export allinone-builder --region cn-beijing --image-id m-EXISTING \
-  --signing-key publisher.key --output image-release.json
-```
-
-消费者仍需发布者提供的 release（含参考值和运行兼容信息），仅有云镜像 ID 不能推导可信参考值。
-消费者可在 `deploy.image.image_id`、`init --image-id` 或 `deploy --image-id` 指定自己地域中的已有镜像 ID。
-该选择不修改 release 中的参考值，不上传、导入或取得共享镜像的生命周期所有权。
-镜像的云端共享权限、云市场订阅由云平台管理，CA 不替用户购买或订阅。
-
-## 显式跳过发布签名
-
-默认要求 `trusted_key` 并验签。可以显式执行：
-
-```bash
-confidential-agent deploy --spec instance.yaml --skip-signature-verification
-```
-
-也可在 init 时传同名参数，生成 `deploy.image.skip_signature_verification: true`；此时无需公钥。
-仅跳过 release 的发布签名，不跳过 manifest 固定摘要、参考值结构/关联检查、runtime 兼容检查或运行时证明。
-跳过后文件中的参考值没有发布签名的来源保证，使用者需要自行信任该来源。
-CLI 覆盖选项会记录到部署快照；使用原 spec 恢复同一部署时应传相同覆盖选项，或使用包含该设置的 spec。
-原有镜像与构建记录保持可用；用户现有 NEXT_STEPS 是普通项目文件，不会随 RPM 升级自动重写。
+| `./confidential-agent-init/allinone-builder/` | `init --stage build` 默认生成的共享镜像构建目录（含 `build.yaml`、脚本与 `NEXT_STEPS.md`），可用 `--output-dir` 修改 |
+| `./confidential-agent-init/<service-id>/` | `init <app>` 生成的实例部署目录（含 `instance.yaml`、`image-release.json`、`secrets/` 与 `NEXT_STEPS.md`） |
+| `~/.confidential-agent/` | 默认 CA state 目录，可通过全局 `--state-dir` 指定一致的绝对路径 |
+| `<state>/services/<service-id>/` | 构建或实例的本地状态、清单、密钥与 Shelter/Terraform 工作目录 |
+| `<state>/image-publications/` | `image publish` 按 `manifest_digest`、阿里云账号与地域记录的云镜像发布台账 |
+| `/usr/share/cagent/` | RPM 安装的模板资产、`one-click/` 脚本、`hack/` 元数据解析器与 `software-versions.json` |
 
 ## GitHub 下载与大陆网络
 
-首个安装脚本、one-click 的源码拉取、Shelter RPM 和固定原生工具下载均支持代理优先及官方回退。下载器校验 RPM 的 SHA256 和 payload 摘要；校验失败时尝试下一个下载地址。
+安装器从官方 GitHub Release 获取 RPM 校验清单。从镜像站下载的 RPM 须匹配清单中的 SHA-256 和 RPM payload 摘要。下列设置控制支持代理的下载步骤：
 
 ```bash
-# 默认：代理优先，失败回退官方；可替换为自己可信且支持对应资源类型的代理。
+# 默认：代理优先，失败回退官方
 export CA_GITHUB_PROXY_URL="https://gh-proxy.org/"
 export CA_GITHUB_PROXY_FIRST=1
 
-# 海外/可直连网络：官方优先，失败再尝试上述代理。
+# 海外或可直连环境：官方优先，失败回退代理
 export CA_GITHUB_PROXY_FIRST=0
 
-# 完全关闭代理（显式空值，不等于未设置）。
+# 完全禁用代理
 export CA_GITHUB_PROXY_URL=""
 ```
 
-自定义代理需要支持所用的 raw 文件、Git fetch 和 Release 附件。使用 sudo 时保留这两个环境变量，或在 root shell 设置。代理与官方地址均不可达时，可通过 `--from-dir` 安装已下载的本地包。
-
 ## 维护者发布流程
 
-`.github/workflows/binary-release.yml` 使用 GitHub 托管的 Ubuntu runner 和固定摘要的 Alinux3 容器。分支和 PR 执行版本检查、下载与升级测试、RPM 构建及全新安装测试；`vX.Y.Z` 标签在这些检查通过后发布对应的 draft Release。
+`.github/workflows/binary-release.yml` 在固定摘要的 Alinux3 容器内执行版本一致性检查、下载测试、RPM 构建与全新安装验证；`vX.Y.Z` 标签通过检查后发布 GitHub Release。
 
-1. 更新工作区、RPM、安装器及安装测试中的版本，更新 `Cargo.lock`，并在 `docs/releases/vX.Y.Z.md` 编写发布说明。运行 `python3.11 packaging/check-version.py` 检查版本一致性。
-2. 更新 Shelter 时，先发布其独立 RPM Release，再更新 `hack/shelter-rpm.json` 中的 URL、源码提交和摘要。构建任务从该 URL 下载配套包，cagent Release 同时附带这份 RPM。
-3. 提交代码，在主仓库创建对应版本的 draft Release，然后创建并推送 `vX.Y.Z` 标签。CI 验证标签、版本和产物源码提交，上传附件后公开 Release。
+1. 更新 `Cargo.toml`、`Cargo.lock`、`cagent.spec`、`hack/release-image.json` 与安装脚本中的版本号，编写 `docs/releases/vX.Y.Z.md`，运行 `python3.11 packaging/check-version.py`。
+2. 如配套 Shelter 更新，先发布 Shelter RPM Release 并更新 `hack/shelter-rpm.json`。
+3. 在安装新 RPM 的构建机上，从干净的发布提交执行 `python3.11 packaging/produce-release-image.py build WORK_DIR`。执行 `python3.11 packaging/produce-release-image.py push WORK_DIR OUTPUT_DIR` 将已有产物推送至 GHCR 并生成 `image-index.json`、`image-release.json`，然后将两份元数据上传至 draft Release。若通过 staging 仓库交接，给 `push` 传入 `--repository REPOSITORY`，并在发布前将相同 OCI digest 提升到官方仓库。
+4. 推送 `vX.Y.Z` 标签，CI 校验标签、源码提交、Rekor 元数据、公开匿名 GHCR 可拉取性及全部附件 `SHA256SUMS` 一致后正式发布 Release。
 
-构建和测试任务使用 `contents: read`；发布任务使用 GitHub 内置的 `GITHUB_TOKEN` 和 `contents: write`。如果附件上传中断，重跑失败的发布任务可继续上传；已有同名附件的摘要必须一致。
-
-发布附件包括 cagent 与 Shelter RPM、cagent SRPM、构建输入归档、安装脚本、版本与依赖清单及 `SHA256SUMS`。`release-manifest.json` 记录源码提交和包摘要，`build-environment.txt` 记录构建环境中的 RPM 版本。
-
-`/usr/libexec/cagent/SOURCES.tsv` 记录上游下载物的版本、URL 和 SHA-256；其中 aliyun 的摘要属于下载的 tgz，不是解压后可执行文件的摘要。打包关闭 RPM 的 strip 和 comment-note 改写，保留固定原生工具的二进制字节；RPM 自身记录最终安装文件的摘要。
+`/usr/libexec/cagent/SOURCES.tsv` 记录固定原生工具（`cosign`、`aliyun`、`ossutil64`、`oras`）的版本、URL 与下载归档 SHA-256（其中 `aliyun` 与 `oras` 为压缩包摘要）；RPM 自身记录最终安装文件的摘要。

@@ -10,7 +10,8 @@ contract=/usr/local/share/confidential-agent/image-runtime.json
 export CODEX_VERSION="$(jq -er '.software_versions.codex' "$contract")"
 export CLAUDE_CODE_VERSION="$(jq -er '.software_versions["claude-code"]' "$contract")"
 export HERMES_COMMIT="$(jq -er '.software_versions.hermes' "$contract")"
-OPENCLAW_VERSION="$(jq -er '.software_versions.openclaw' "$contract")"
+export OPENCLAW_VERSION="$(jq -er '.software_versions.openclaw' "$contract")"
+DINGTALK_COMMIT="$(jq -er '.software_versions.dingtalk' "$contract")"
 QODER_VERSION="$(jq -er '.software_versions.qodercli' "$contract")"
 OPENCODE_VERSION="$(jq -er '.software_versions.opencode' "$contract")"
 PI_VERSION="$(jq -er '.software_versions.pi' "$contract")"
@@ -37,10 +38,18 @@ npm install -g --no-audit --no-fund \
 
 # Only OpenClaw has the executor patch. Other harnesses use cai-pep's local
 # attestation subcommand directly, without a policy server or execution hooks.
+# DingTalk and CAI plugins are prebuilt in the shared image; openclaw.json
+# controls per-instance plugin activation and --disable-pep.
 pep=/usr/local/libexec/confidential-agent/openclaw/install-cai-pep.sh
 claw_home=/opt/data/allinone/home/.openclaw
 CA_DISABLE_PEP=0 "$pep" setup-runtime root "$claw_home"
-CA_DISABLE_PEP=0 "$pep" install-openclaw-plugin root "$claw_home"
+CA_DISABLE_PEP=0 /usr/local/libexec/confidential-agent/openclaw/install-openclaw-runtime.sh \
+    root /opt/data/allinone/home
+test -f "$claw_home/extensions/dingtalk/dist/index.js"
+test "$(git -C "$claw_home/extensions/dingtalk" rev-parse HEAD)" = "$DINGTALK_COMMIT"
+test -d "$claw_home/extensions/cai-a2a"
+test -d "$claw_home/extensions/cai-pep"
+rm -rf /root/.local/share/pnpm/store /root/.cache/pnpm
 install -d -m 0700 /opt/data/allinone/workspace
 policy=/etc/cai/pep/policy.json
 jq '.workspace_host_path = "/opt/data/allinone/workspace"
@@ -77,6 +86,7 @@ install -d -m 0755 /usr/local/share/confidential-agent
 {
     npm list -g --depth=0 --json
     git -C /usr/local/lib/hermes-agent rev-parse HEAD
+    git -C "$claw_home/extensions/dingtalk" rev-parse HEAD
 } > /usr/local/share/confidential-agent/allinone-versions.txt
 python3.11 /usr/local/libexec/confidential-agent/allinone/finalize-runtime.py
 for command in openclaw hermes qoder opencode codex claude pi dsh; do

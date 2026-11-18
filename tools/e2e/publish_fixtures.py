@@ -1,5 +1,5 @@
 #!/usr/bin/env python3.11
-"""Build and publish the signed images owned by a full E2E run."""
+"""Build and publish the reusable images owned by a full E2E run."""
 import argparse
 import hashlib
 import json
@@ -8,12 +8,12 @@ from pathlib import Path
 import re
 import shutil
 import time
-from cloud_case import Case, ROOT, release_selection, run, write_json
+from cloud_case import Case, ROOT, copy_release_fixture, run, write_json
 from render_case import configure_repositories
 
 # Inference has its own producer; all-in-one consumers need only this image.
 REQUIRED_PUBLICATIONS = {("allinone-builder", "release"), ("allinone-hardened-builder", "release")}
-SIGNED_FIXTURE_DIRECTORIES = ("allinone", "allinone-hardened")
+FIXTURE_DIRECTORIES = ("allinone", "allinone-hardened")
 
 
 def allinone_spec(case, cosign, resume=False, *, hardened=False):
@@ -27,7 +27,7 @@ def allinone_spec(case, cosign, resume=False, *, hardened=False):
         if not hardened:
             return legacy if legacy.is_file() else spec
     # Native init binds CA_PEP_BIN and stages every relative application asset.
-    case.command("init-" + service, "init", "allinone", "--stage", "build", "--non-interactive",
+    case.command("init-" + service, "init", "--stage", "build", "--non-interactive",
                  "--service-id", service,
                  "--output-dir", case.work / "init", "--region", case.region,
                  "--reference-values", "rekor", "--cosign-key", cosign)
@@ -60,26 +60,30 @@ def verify_full_hardening_build(case):
     case.checks["full_hardening_release_built"] = True
 
 
-def publish_variant(case, service, spec, variant, directory, records):
-    """Publish once and durably record ownership before exporting the envelope."""
+def publish_variant(case, service, spec, variant, directory, records, *, signed=True):
+    """Publish once and durably record ownership before exporting the release."""
+    receipt = case.work / f"publication-{service}-{variant}.json"
     case.command("publish-"+service+"-"+variant, "image", "publish", service,
-                 "--spec", spec, "--region", case.region, "--variant", variant, timeout=14400)
-    state = case.local_state(service)
-    entry = next(image for image in state["build"]["published"].values()
-                 if image["region"] == case.region and image["variant"] == variant)
+                 "--spec", spec, "--region", case.region, "--variant", variant, "--output", receipt, timeout=14400)
+    image_id = json.loads(receipt.read_text())["image_id"]
     records[:] = [record for record in records
                   if (record.get("region", case.region), record["service"], record["variant"])
                   != (case.region, service, variant)]
-    records.append({"service": service, "variant": variant, "region": case.region, "image_id": entry["image_id"],
+    records.append({"service": service, "variant": variant, "region": case.region, "image_id": image_id,
                     "release_dir": str(directory)})
     write_json(case.work / "published-images.json", records)
     record_publication_snapshots(case)
     directory.mkdir(mode=0o700, exist_ok=True)
-    case.command("export-"+service+"-"+variant, "image", "export", service,
-                 "--signing-key", case.work / "publisher.key",
-                 "--output", directory / "image-release.json", "--region", case.region,
-                 "--variant", variant)
-    shutil.copyfile(case.work / "publisher.pem", directory / "publisher.pem")
+    release = directory / "image-release.json"
+    signing = ["--signing-key", case.work / "publisher.key"] if signed else []
+    case.command("export-"+service+"-"+variant, "image", "export", service, *signing,
+                 "--output", release, "--region", case.region, "--variant", variant,
+                 "--image-id", image_id)
+    if signed:
+        shutil.copyfile(case.work / "publisher.pem", directory / "publisher.pem")
+    else:
+        digest = hashlib.sha256(release.read_bytes()).hexdigest()
+        (directory / "image-release.sha256").write_text("sha256:" + digest + "\n")
 
 
 def verify_resumable_build(case, service, spec, variants):
@@ -201,29 +205,25 @@ def main():
     case = Case()
     if args.cleanup:
         if os.environ.get("E2E_PUBLISHED_FIXTURES"):
-            raise RuntimeError("external signed-fixture consumers do not own publisher cleanup")
+            raise RuntimeError("external release-fixture consumers do not own publisher cleanup")
         cleanup(case)
         return
     external = os.environ.get("E2E_PUBLISHED_FIXTURES")
     if args.resume:
         if external:
-            raise RuntimeError("external signed fixtures cannot resume a producer build")
+            raise RuntimeError("external fixtures cannot resume a producer build")
         resume_producer(case)
     if external:
-        # A clean runner imports only signed envelopes and public keys. The
-        # originating producer retains ownership of images and their cleanup.
+        # Release documents travel with their publisher key or release digest.
+        # The originating producer owns the images and cleanup.
         with case:
             source = Path(external).resolve()
-            for name in SIGNED_FIXTURE_DIRECTORIES:
-                release_selection(source / name, case.region)
-                destination = case.work / name
-                destination.mkdir(mode=0o700)
-                for filename in ["image-release.json", "publisher.pem"]:
-                    shutil.copyfile(source / name / filename, destination / filename)
+            for name in FIXTURE_DIRECTORIES:
+                copy_release_fixture(source / name, case.work / name, case.region)
             publisher = case.state / "services/allinone-builder/state.json"
             publisher.parent.mkdir(parents=True)
             shutil.copyfile(source / "allinone-publisher-state.json", publisher)
-            case.checks.update(external_signed_fixtures=True, producer_artifacts_copied=False)
+            case.checks.update(external_release_fixtures=True, producer_artifacts_copied=False)
         return
     case.defer_cleanup = True
     ledger = case.work / "published-images.json"
@@ -248,10 +248,11 @@ def main():
                 if service == "allinone-hardened-builder":
                     verify_full_hardening_build(case)
                 for variant in variants:
-                    publish_variant(case, service, spec, variant, case.work / fixture, records)
+                    publish_variant(case, service, spec, variant, case.work / fixture, records,
+                                    signed=fixture == "allinone")
             # Older producers may own inference publications too. Retain every
             # owned entry for cleanup when resuming, without rebuilding them.
-            case.checks["signed_images_published"] = REQUIRED_PUBLICATIONS <= {
+            case.checks["images_published"] = REQUIRED_PUBLICATIONS <= {
                 (record["service"], record["variant"]) for record in records
             }
     except BaseException:

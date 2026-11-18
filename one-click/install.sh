@@ -3,17 +3,19 @@ set -eu
 
 DEFAULT_REPO="https://github.com/inclavare-containers/confidential-agent.git"
 DEFAULT_BRANCH="master"
+RELEASE_VERSION="0.3.0"
+PACKAGED_DIR="/usr/share/cagent/one-click"
 
 usage() {
     cat <<'EOF'
 Usage:
-  curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install.sh | sh
+  curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-agent/one-click/one-click/install.sh | sh
   sh one-click/install.sh [deploy|install-only|cleanup] [options]
 
 Bootstrap options:
-  --repo URL             Git repository to clone when running through curl | sh
-  --branch NAME          Git branch to checkout when running through curl | sh
-  --ref REF              Git branch, tag, or commit to checkout when running through curl | sh
+  --repo URL             Git repository for source workflows
+  --branch NAME          Git branch for source workflows
+  --ref REF              Git branch, tag, or commit for source workflows
   --commit SHA           Alias for --ref; SHA must be the full 40 hex chars
   --source-dir PATH      Local source checkout directory
   --help                 Show this help
@@ -22,11 +24,15 @@ Deployment options:
   --harness NAME         openclaw (default), hermes, codex, claude-code, qodercli, opencode, pi, dsh
   --api-base-url URL     Inference API base URL; defaults to Bailian
   --api-key KEY          Inference API key (or CA_API_KEY); --bailian-api-key is an alias
-  --model MODEL          Model id; default: qwen4-max; --bailian-model is an alias
-  --image-release PATH   Reuse a signed allinone image for CLI harnesses
-  --trusted-key PATH     Trusted publisher key for --image-release
+  --model MODEL          Model id; --bailian-model is an alias
+  --image-source MODE    prebuilt (default) or build
+  --artifact REF         Local Shelter artifact or OCI digest reference
+  --image-release PATH   Local image-release.json with --release-digest
+  --release-digest HASH  Trusted SHA-256 digest of --image-release
+  --image-id ID          Existing regional ECS image ID
+  --non-interactive      Fail if a required value is missing
 
-All other options are handled by the one-click installer after checkout.
+The one-click installer handles all other deployment options.
 EOF
 }
 
@@ -53,29 +59,37 @@ run_main() {
         xargs -0 -a "$pass_args_file" bash "$main_script"
         exit $?
     fi
-    exec bash "$main_script"
+    bash "$main_script"
+    exit $?
+}
+
+install_release() {
+    rpm_installer="$(mktemp "${TMPDIR:-/tmp}/ca-install-rpm.XXXXXX")"
+    release_url="https://github.com/inclavare-containers/confidential-agent/releases/download/v$RELEASE_VERSION"
+    curl -fsSL --retry 2 --connect-timeout 10 --max-time 90 -o "$rpm_installer" "$release_url/install-rpm.sh"
+    if [ "$(head -n 1 "$rpm_installer")" != '#!/usr/bin/env bash' ]; then
+        echo "Invalid RPM installer downloaded from $release_url/install-rpm.sh" >&2
+        exit 1
+    fi
+    bash "$rpm_installer" --version "$RELEASE_VERSION"
 }
 
 ensure_git() {
-    if command -v git >/dev/null 2>&1 && command -v git-lfs >/dev/null 2>&1; then
-        git lfs install --system >/dev/null 2>&1 || git lfs install >/dev/null 2>&1 || true
+    if command -v git >/dev/null 2>&1; then
         return 0
     fi
     if [ "$(id -u)" != "0" ]; then
-        echo "git and git-lfs are required. Re-run as root or install git/git-lfs first." >&2
+        echo "git is required for source workflows. Re-run as root or install git first." >&2
         exit 2
     fi
     if command -v dnf >/dev/null 2>&1; then
-        dnf install -y git git-lfs ca-certificates
+        dnf install -y git ca-certificates
     elif command -v yum >/dev/null 2>&1; then
-        yum install -y git git-lfs ca-certificates
+        yum install -y git ca-certificates
     else
-        echo "git and git-lfs are required and no yum/dnf package manager was found." >&2
+        echo "git is required and no yum/dnf package manager was found." >&2
         exit 2
     fi
-    command -v git >/dev/null 2>&1 || { echo "git installation failed" >&2; exit 2; }
-    command -v git-lfs >/dev/null 2>&1 || { echo "git-lfs installation failed" >&2; exit 2; }
-    git lfs install --system >/dev/null 2>&1 || git lfs install >/dev/null 2>&1 || true
 }
 
 github_proxy_repo_url() {
@@ -142,63 +156,23 @@ git_fetch_with_fallback() {
     run_git_with_timeout -C "$dir" fetch --depth 1 origin "$ref_name"
 }
 
-git_lfs_pull_with_fallback() {
-    dir="$1"
-    repo_url="$2"
-    timeout_sec="${CA_GIT_LFS_TIMEOUT_SEC:-300}"
-    proxy_url="$(github_proxy_repo_url "$repo_url" || true)"
-    current_url="$(git -C "$dir" remote get-url origin 2>/dev/null || printf '%s' "$repo_url")"
-
-    git -C "$dir" remote set-url origin "$current_url"
-    if command -v timeout >/dev/null 2>&1; then
-        if GIT_HTTP_LOW_SPEED_LIMIT="${GIT_HTTP_LOW_SPEED_LIMIT:-1024}" \
-           GIT_HTTP_LOW_SPEED_TIME="${GIT_HTTP_LOW_SPEED_TIME:-20}" \
-           timeout "$timeout_sec" git -C "$dir" lfs pull origin; then
-            return 0
-        fi
-    elif GIT_HTTP_LOW_SPEED_LIMIT="${GIT_HTTP_LOW_SPEED_LIMIT:-1024}" \
-         GIT_HTTP_LOW_SPEED_TIME="${GIT_HTTP_LOW_SPEED_TIME:-20}" \
-         git -C "$dir" lfs pull origin; then
-        return 0
-    fi
-
-    if [ "$current_url" = "$proxy_url" ]; then
-        echo "Git LFS proxy pull failed, retrying original URL $repo_url" >&2
-        git -C "$dir" remote set-url origin "$repo_url"
-    elif [ "$current_url" = "$repo_url" ] && [ -n "$proxy_url" ]; then
-        echo "Git LFS pull failed, retrying via $proxy_url" >&2
-        git -C "$dir" remote set-url origin "$proxy_url"
-    elif github_proxy_first && [ -n "$proxy_url" ]; then
-        echo "Git LFS pull failed, retrying via $proxy_url" >&2
-        git -C "$dir" remote set-url origin "$proxy_url"
-    elif [ "$current_url" != "$repo_url" ]; then
-        echo "Git LFS pull failed, retrying original URL $repo_url" >&2
-        git -C "$dir" remote set-url origin "$repo_url"
-    else
-        return 1
-    fi
-    if command -v timeout >/dev/null 2>&1; then
-        GIT_HTTP_LOW_SPEED_LIMIT="${GIT_HTTP_LOW_SPEED_LIMIT:-1024}" \
-        GIT_HTTP_LOW_SPEED_TIME="${GIT_HTTP_LOW_SPEED_TIME:-20}" \
-            timeout "$timeout_sec" git -C "$dir" lfs pull origin
-    else
-        GIT_HTTP_LOW_SPEED_LIMIT="${GIT_HTTP_LOW_SPEED_LIMIT:-1024}" \
-        GIT_HTTP_LOW_SPEED_TIME="${GIT_HTTP_LOW_SPEED_TIME:-20}" \
-            git -C "$dir" lfs pull origin
-    fi
-}
-
 # Wrap the imperative body so `sh` parses the entire script before executing
 # anything. Without this wrapper, `curl ... | sh` would hit `exec </dev/tty`
 # while the rest of the script bytes are still in the curl pipe, then sh would
 # try to read the remaining script from the terminal and silently hang.
 main() {
+    explicit_ref=""
+    if [ -n "${CA_ONE_CLICK_REPO:-}${CA_ONE_CLICK_REF:-}${CA_ONE_CLICK_BRANCH:-}" ]; then
+        explicit_ref=1
+    fi
     repo="${CA_ONE_CLICK_REPO:-$DEFAULT_REPO}"
     ref="${CA_ONE_CLICK_REF:-${CA_ONE_CLICK_BRANCH:-$DEFAULT_BRANCH}}"
     commit_ref=0
-    source_dir="${CA_ONE_CLICK_SOURCE_DIR:-${HOME:-/root}/.cache/confidential-agent/source}"
+    source_dir="${CA_ONE_CLICK_SOURCE_DIR:-}"
+    mode=""
+    rpm_installer=""
     pass_args_file="$(mktemp "${TMPDIR:-/tmp}/ca-one-click-args.XXXXXX")"
-    trap 'rm -f "$pass_args_file"' EXIT HUP INT TERM
+    trap 'rm -f "$pass_args_file" ${rpm_installer:+"$rpm_installer"}' EXIT HUP INT TERM
 
     if [ ! -t 0 ] && ( : </dev/tty ) 2>/dev/null; then
         exec </dev/tty
@@ -209,21 +183,25 @@ main() {
             --repo)
                 [ "$#" -ge 2 ] || { echo "missing value for --repo" >&2; exit 2; }
                 repo="$2"
+                explicit_ref=1
                 shift 2
                 ;;
             --branch)
                 [ "$#" -ge 2 ] || { echo "missing value for --branch" >&2; exit 2; }
                 ref="$2"
+                explicit_ref=1
                 shift 2
                 ;;
             --ref)
                 [ "$#" -ge 2 ] || { echo "missing value for $1" >&2; exit 2; }
                 ref="$2"
+                explicit_ref=1
                 shift 2
                 ;;
             --commit)
                 [ "$#" -ge 2 ] || { echo "missing value for --commit" >&2; exit 2; }
                 ref="$2"
+                explicit_ref=1
                 commit_ref=1
                 shift 2
                 ;;
@@ -237,6 +215,7 @@ main() {
                 exit 0
                 ;;
             *)
+                mode="${mode:-$1}"
                 append_pass_arg "$1"
                 shift
                 ;;
@@ -247,34 +226,43 @@ main() {
         validate_commit_ref "$ref"
     fi
 
-    script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd -P 2>/dev/null || pwd)
-    local_root=$(CDPATH= cd -- "$script_dir/.." 2>/dev/null && pwd -P 2>/dev/null || true)
-    if [ -n "$local_root" ] && [ -f "$local_root/Cargo.toml" ] && [ -f "$local_root/one-click/lib/main.sh" ]; then
-        run_main "$local_root/one-click/lib/main.sh"
+    if [ -z "$explicit_ref" ] && [ -n "$source_dir" ] && [ -f "$source_dir/one-click/lib/main.sh" ]; then
+        run_main "$source_dir/one-click/lib/main.sh"
     fi
 
-    ensure_git
-    mkdir -p "$(dirname "$source_dir")"
+    if [ -z "$explicit_ref" ] && [ -z "$source_dir" ]; then
+        if [ -f "$0" ]; then
+            script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)
+            if [ -f "$script_dir/../Cargo.toml" ] && [ -f "$script_dir/lib/main.sh" ]; then
+                run_main "$script_dir/lib/main.sh"
+            fi
+            if [ "$script_dir" = "$PACKAGED_DIR" ]; then
+                export CA_PACKAGED_INSTALL=1
+                run_main "$PACKAGED_DIR/lib/main.sh"
+            fi
+        fi
 
-    if [ -d "$source_dir/.git" ]; then
-        git_fetch_with_fallback "$source_dir" "$repo" "$ref"
-        GIT_LFS_SKIP_SMUDGE=1 git -C "$source_dir" checkout --detach "FETCH_HEAD"
-        git_lfs_pull_with_fallback "$source_dir" "$repo"
-    else
-        rm -rf "$source_dir"
+        if [ "$mode" = cleanup ]; then
+            if [ ! -f "$PACKAGED_DIR/lib/main.sh" ]; then
+                echo "Packaged one-click installer not found. For a source deployment, run cleanup with --source-dir." >&2
+                exit 1
+            fi
+        else
+            install_release
+        fi
+        export CA_PACKAGED_INSTALL=1
+        run_main "$PACKAGED_DIR/lib/main.sh"
+    fi
+
+    source_dir="${source_dir:-${HOME:-/root}/.cache/confidential-agent/source}"
+    ensure_git
+    if [ ! -e "$source_dir/.git" ]; then
         mkdir -p "$source_dir"
         git -C "$source_dir" init
         git -C "$source_dir" remote add origin "$repo"
-        git_fetch_with_fallback "$source_dir" "$repo" "$ref"
-        GIT_LFS_SKIP_SMUDGE=1 git -C "$source_dir" checkout --detach "FETCH_HEAD"
-        git_lfs_pull_with_fallback "$source_dir" "$repo"
     fi
-
-    if [ ! -f "$source_dir/one-click/lib/main.sh" ]; then
-        echo "one-click installer not found in checkout: $source_dir" >&2
-        exit 1
-    fi
-
+    git_fetch_with_fallback "$source_dir" "$repo" "$ref"
+    git -C "$source_dir" checkout --detach FETCH_HEAD
     run_main "$source_dir/one-click/lib/main.sh"
 }
 

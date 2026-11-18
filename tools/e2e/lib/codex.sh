@@ -15,7 +15,7 @@ assert_codex_secret_rendering() {
   done
   grep -Fq "wire_api = \"responses\"" "$CODEX_DIR/secrets/config.toml"
   grep -Fq "packages: [ca-certificates, curl, git, jq, nodejs, npm, procps-ng, tar, xz]" "$spec"
-  grep -Fq "source: ./files/install-cli-agent-runtime.sh" "$spec"
+  grep -Fq "source: $ROOT_DIR/examples/cli-agents/files/install-cli-agent-runtime.sh" "$spec"
   grep -Fq "target: /usr/local/libexec/confidential-agent/cli-agent/install-cli-agent-runtime.sh" "$spec"
   grep -Fq "target: /root/.codex/config.toml" "$spec"
   grep -Fq "target: /root/.agents/skills/tdx-remote-attestation/SKILL.md" "$spec"

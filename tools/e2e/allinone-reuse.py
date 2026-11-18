@@ -20,6 +20,7 @@ import termios
 import time
 import urllib.error
 import urllib.request
+from probes.native_service import connected
 from resource_ledger import record_service
 
 CRYPTPILOT_GUEST_SHA256 = "2a0d2793b167d18600af103af810fb2bded78a61add99be786a909679d79fece"
@@ -168,11 +169,17 @@ class Consumer:
         assert manifest["image"]["image_id"]
         assert manifest["ssh"]
         assert not list(self.state.rglob("*.qcow2")), "consumer staged a local image"
-        if self.probe.get("connect_http_path"):
-            self.verify_connect()
+        self.verify_model("model")
+
+    def verify_model(self, label):
+        native = self.probe.get("native_service")
+        if native or self.probe.get("connect_http_path"):
+            self.verify_connect(label)
+        if native:
+            return
         if self.probe.get("command"):
             try:
-                result = self.ssh("model", self.probe["command"], timeout=600)
+                result = self.ssh(label, self.probe["command"], timeout=600)
             except RuntimeError:
                 self.ssh("model-network-diagnostics", "cat /etc/resolv.conf; "
                          "systemctl show NetworkManager -p ActiveState -p Result; "
@@ -336,7 +343,7 @@ print(json.dumps(actual))
         else:
             probe = Path(__file__).parent / "probes/harness-skills.py"
             self.ssh("native-tdx-skill", "python3.11 -c " + shlex.quote(probe.read_text()), timeout=90)
-        if runtime["harness"] == "codex" and runtime["mode"] == "cli":
+        if runtime["harness"] == "codex":
             # `exec` and explicit app-server bypass the default daemon startup,
             # so they cannot detect missing process-management tools such as ps.
             command = '''set -e; work=$(mktemp -d /tmp/codex-startup.XXXXXX); trap 'rm -rf "$work"' EXIT
@@ -405,23 +412,26 @@ cai-agent --no-alt-screen --sandbox read-only -C "$work" -c "projects.\\"$work\\
                     process.wait()
             os.close(master)
 
-    def verify_connect(self):
-        ready = self.work / "connect-ready.json"
+    def verify_connect(self, label):
+        ready = self.work / (label + "-connect-ready.json")
         try:
-            self.command("connect-start", "connect", "start", "--service", self.service,
+            self.command(label + "-connect-start", "connect", "start", "--service", self.service,
                          "--ready-json", str(ready), "--wait-ready", "180",
-                         "--log-file", str(self.work / "connect.log"), timeout=600)
+                         "--log-file", str(self.work / (label + "-connect.log")), timeout=600)
             endpoints = json.loads(ready.read_text())["client_endpoints"]
             assert len(endpoints) == 1
             endpoint = endpoints[0]
             assert endpoint["local_host"] == "127.0.0.1"
+            if self.probe.get("native_service"):
+                connected(self, endpoint, run, label)
+                return
             url = endpoint["http_base_url"] + self.probe["connect_http_path"]
             deadline = time.monotonic() + 180
             while True:
                 try:
                     with urllib.request.urlopen(url, timeout=15) as response:
                         assert response.status == 200
-                        (self.work / "connect-health.json").write_bytes(response.read())
+                        (self.work / (label + "-connect-health.json")).write_bytes(response.read())
                     break
                 except (urllib.error.URLError, TimeoutError, ConnectionError):
                     if time.monotonic() >= deadline:
@@ -431,11 +441,11 @@ cai-agent --no-alt-screen --sandbox read-only -C "$work" -c "projects.\\"$work\\
             if ready.exists():
                 log = Path(json.loads(ready.read_text())["log_file"])
                 if log.exists():
-                    (self.work / "connect-diagnostics").write_bytes(log.read_bytes()[-65536:])
+                    (self.work / (label + "-connect-diagnostics")).write_bytes(log.read_bytes()[-65536:])
             raise
         finally:
             if ready.exists():
-                self.command("connect-stop", "connect", "stop", "--ready-json", str(ready))
+                self.command(label + "-connect-stop", "connect", "stop", "--ready-json", str(ready))
 
     def destroy(self):
         if not self.attempted:
@@ -451,10 +461,10 @@ cai-agent --no-alt-screen --sandbox read-only -C "$work" -c "projects.\\"$work\\
 
 def reject_invalid_release(consumer):
     spec = consumer.spec
-    altered_release = consumer.work / "altered-release.json"
-    envelope = json.loads(Path(spec["deploy"]["image"]["release"]).read_text())
-    release = json.loads(base64.b64decode(envelope["payload"]))
-    mapping = next(value for value in release["images"] if value["region"] == spec["deploy"]["region"])
+    image = spec["deploy"]["image"]
+    path = Path(image["release"])
+    document = json.loads(path.read_text())
+    release = json.loads(base64.b64decode(document["payload"])) if "payload" in document else document
     # Old specs can retain an account field, but image authorization comes from
     # the authenticated release mapping. Rendering does not allocate resources.
     legacy = json.loads(json.dumps(spec))
@@ -465,29 +475,19 @@ def reject_invalid_release(consumer):
     consumer.command("accept-legacy-account", "deploy", "--spec", str(legacy_path), "--render-only")
     legacy_directory = consumer.state / "services" / legacy["service"]["id"]
     rendered = json.loads((legacy_directory / "manifest.json").read_text())
-    selected_image = spec["deploy"]["image"].get("image_id", mapping["image_id"])
+    selected_image = image.get("image_id") or next(value["image_id"] for value in release["images"]
+                                                  if value["region"] == spec["deploy"]["region"])
     assert rendered["image"]["image_id"] == selected_image, "legacy account changed the authenticated image selection"
     assert not (legacy_directory / "state.json").exists(), "render-only recorded an infrastructure deployment"
-    altered_mapping = consumer.work / "altered-mapping-release.json"
-    mapping_envelope = json.loads(json.dumps(envelope))
-    mapping["image_id"] += "-mismatch"
-    mapping_envelope["payload"] = base64.b64encode(json.dumps(release).encode()).decode()
-    altered_mapping.write_text(json.dumps(mapping_envelope))
-    signature = envelope["signatures"][0]["sig"]
-    envelope["signatures"][0]["sig"] = ("A" if signature[0] != "A" else "B") + signature[1:]
-    altered_release.write_text(json.dumps(envelope))
-    wrong_key = consumer.work / "wrong-publisher.key"
-    wrong_public = consumer.work / "wrong-publisher.pem"
-    run(["openssl", "genpkey", "-algorithm", "ED25519", "-out", str(wrong_key)],
-        consumer.work / "wrong-publisher-key")
-    run(["openssl", "pkey", "-in", str(wrong_key), "-pubout", "-out", str(wrong_public)],
-        consumer.work / "wrong-publisher-public")
-    # image_id in an AppSpec is an explicit image override. The mapping negative
-    # instead alters publisher-authenticated payload bytes without resigning.
-    for label, field, wrong in [("manifest", "manifest", "sha256:" + "0" * 64),
-                                ("image_id", "release", str(altered_mapping)),
-                                ("release", "release", str(altered_release)),
-                                ("trusted_key", "trusted_key", str(wrong_public))]:
+    invalid_fields = [("manifest", "manifest", "sha256:" + "0" * 64)]
+    if "release_digest" in image:
+        altered_release = consumer.work / "altered-release.json"
+        altered_release.write_bytes(path.read_bytes() + b"\n")
+        invalid_fields.extend([("release_digest", "release_digest", "sha256:" + "0" * 64),
+                               ("release", "release", str(altered_release))])
+    else:
+        invalid_fields.extend(invalid_signed_release_fields(consumer, document, release))
+    for label, field, wrong in invalid_fields:
         invalid = json.loads(json.dumps(spec))
         invalid["service"]["id"] += "-invalid-" + label.replace("_", "-")
         invalid["deploy"]["image"][field] = wrong
@@ -502,16 +502,40 @@ def reject_invalid_release(consumer):
         assert not (rejected / "bootstrap.json").exists()
 
 
+def invalid_signed_release_fields(consumer, envelope, release):
+    # Preserve the signature-tampering tests for explicitly signed fixtures.
+    mapping = next(value for value in release["images"] if value["region"] == consumer.spec["deploy"]["region"])
+    mapping["image_id"] += "-mismatch"
+    altered_mapping = consumer.work / "altered-mapping-release.json"
+    altered_mapping.write_text(json.dumps(dict(envelope, payload=base64.b64encode(json.dumps(release).encode()).decode())))
+    signature = envelope["signatures"][0]["sig"]
+    envelope["signatures"][0]["sig"] = ("A" if signature[0] != "A" else "B") + signature[1:]
+    altered_release = consumer.work / "altered-release.json"
+    altered_release.write_text(json.dumps(envelope))
+    wrong_key = consumer.work / "wrong-publisher.key"
+    wrong_public = consumer.work / "wrong-publisher.pem"
+    run(["openssl", "genpkey", "-algorithm", "ED25519", "-out", str(wrong_key)],
+        consumer.work / "wrong-publisher-key")
+    run(["openssl", "pkey", "-in", str(wrong_key), "-pubout", "-out", str(wrong_public)],
+        consumer.work / "wrong-publisher-public")
+    return [("image_id", "release", str(altered_mapping)), ("release", "release", str(altered_release)),
+            ("trusted_key", "trusted_key", str(wrong_public))]
+
+
 def reject_incompatible_release(consumer, release):
     spec = json.loads(json.dumps(consumer.spec))
     spec["service"]["id"] += "-incompatible"
-    spec["deploy"]["image"]["release"] = str(release.resolve())
+    image = spec["deploy"]["image"]
+    image["release"] = str(release.resolve())
+    image.pop("manifest", None)
+    if "release_digest" in image:
+        image["release_digest"] = release.with_suffix(".sha256").read_text().strip()
     path = consumer.spec_path.parent / "incompatible-appspec.json"
     path.write_text(json.dumps(spec))
     result = consumer.command("reject-incompatible-runtime", "deploy", "--spec", str(path),
                               "--render-only", success=False)
     assert result.returncode and b"runtime contract" in result.stderr
-    assert b"authentication failed" not in result.stderr, "incompatible fixture did not have a valid publisher signature"
+    assert b"authentication failed" not in result.stderr, "incompatible fixture failed release authentication"
     directory = consumer.state / "services" / spec["service"]["id"]
     assert not (directory / "state.json").exists()
     assert not (directory / "bootstrap.json").exists()
@@ -1167,8 +1191,7 @@ def main():
                            peers=consumers[1:])
             trustee_status(consumers, "trustee-after-outage")
             verify_live_lifecycle(consumers, "trustee-outage-recovered-ready")
-            recovered = consumers[0].ssh("outage-model-recovered", consumers[0].probe["command"], timeout=600)
-            assert consumers[0].probe["expect"].encode() in recovered.stdout
+            consumers[0].verify_model("outage-model-recovered")
         if args.publication_state:
             verify_publication_cleanup(consumers, args.publication_state, args.aliyun)
         first, *remaining = consumers
@@ -1184,8 +1207,7 @@ def main():
         for item in remaining:
             item.ssh("survives-other-destroy", "cai-agent --version")
             if args.trustee_url:
-                reply = item.ssh("surviving-model", item.probe["command"], timeout=600)
-                assert item.probe["expect"].encode() in reply.stdout, "surviving service model response missing marker"
+                item.verify_model("surviving-model")
     finally:
         cleanup_errors = []
         for item in consumers:

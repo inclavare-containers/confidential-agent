@@ -11,8 +11,8 @@ docker run --rm -v "$release_dir:/release:ro" \
   cd /release
   sha256sum -c SHA256SUMS
   bash install-rpm.sh --from-dir /release
-  test "$(rpm -q --qf "%{VERSION}-%{RELEASE}" cagent)" = "0.2.0-1.al8"
-  confidential-agent --version | grep -Fx "confidential-agent 0.2.0"
+  test "$(rpm -q --qf "%{VERSION}-%{RELEASE}" cagent)" = "0.3.0-1.al8"
+  confidential-agent --version | grep -Fx "confidential-agent 0.3.0"
   for binary in confidential-agent confidential-agentd cai-gateway cai-pep; do
     if ldd "/usr/bin/$binary" | grep -F "not found"; then exit 1; fi
   done
@@ -32,9 +32,16 @@ docker run --rm -v "$release_dir:/release:ro" \
   /usr/libexec/cagent/bin/rekor-cli version >/dev/null
   mkdir /consumer
   cd /consumer
-  confidential-agent init allinone --stage build --non-interactive --output-dir /consumer/projects
+  confidential-agent init --stage build --non-interactive --output-dir /consumer/projects
   test -f /consumer/projects/allinone-builder/build.yaml
   confidential-agent spec validate --spec /consumer/projects/allinone-builder/build.yaml
+  printf "{}\n" > /consumer/image-release.json
+  read -r digest _ < <(sha256sum /consumer/image-release.json)
+  confidential-agent init openclaw --non-interactive --output-dir /consumer/projects \
+    --service-id ci-openclaw --image-release /consumer/image-release.json --release-digest "sha256:$digest" \
+    --dashscope-api-key test-key
+  test -f /consumer/projects/ci-openclaw/instance.yaml
+  confidential-agent spec validate --spec /consumer/projects/ci-openclaw/instance.yaml
   # The identical release is also safe to install again.
   bash /release/install-rpm.sh --from-dir /release
   echo "Clean Alinux3 installation, native tools, RPM templates and reinstall: PASS"

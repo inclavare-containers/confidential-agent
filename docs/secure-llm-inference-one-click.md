@@ -355,6 +355,7 @@ Deployment summary
   chat:      curl http://127.0.0.1:8080/v1/chat/completions \
                  -H 'Content-Type: application/json' \
                  -d '{"model":"Qwen3.8-27B","messages":[{"role":"user","content":"hi"}]}'
+  ready:     /root/.confidential-agent/one-click/connect-vllm-inference.json
   connect:   running (pid 12345, log /root/.confidential-agent/one-click/connect-vllm-inference.log)
 ```
 

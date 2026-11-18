@@ -1,7 +1,6 @@
 #!/usr/bin/env python3.11
 """Collect an exact, versioned pair of RPMs and offline cagent build inputs."""
 import argparse
-import hashlib
 import json
 from pathlib import Path
 import re
@@ -9,10 +8,7 @@ import shutil
 import subprocess
 import tarfile
 
-
-def sha256(path):
-    with path.open('rb') as stream:
-        return hashlib.file_digest(stream, 'sha256').hexdigest()
+from release_files import digest, write_manifest
 
 
 def main():
@@ -37,14 +33,14 @@ def main():
         name, actual_version, actual_release, arch, payload = subprocess.check_output(
             ['rpm', '-qp', '--qf', '%{NAME}\n%{VERSION}\n%{RELEASE}\n%{ARCH}\n%{PAYLOADDIGEST}', str(path)],
             text=True).splitlines()
-        digest = sha256(path)
+        checksum = digest(path)
         if name == 'cagent':
             assert actual_version == version and actual_release == release + '.al8' and arch == 'x86_64'
         else:
-            assert name == 'shelter' and digest == companion['sha256'] and payload == companion['payload_sha256']
+            assert name == 'shelter' and checksum == companion['sha256'] and payload == companion['payload_sha256']
         shutil.copy2(path, output / path.name)
         packages.append({'name': name, 'version': actual_version, 'release': actual_release,
-                         'arch': arch, 'file': path.name, 'sha256': digest, 'payload_sha256': payload})
+                         'arch': arch, 'file': path.name, 'sha256': checksum, 'payload_sha256': payload})
     srpm = args.rpm_root / 'SRPMS' / ('cagent-' + version + '-' + release + '.al8.src.rpm')
     shutil.copy2(srpm, output / srpm.name)
     inputs = ['cagent-' + version + '.tar.gz', 'cagent-vendor.tar.gz',
@@ -64,11 +60,8 @@ def main():
     commit, dirty = source_info['source_commit'], source_info['source_dirty']
     manifest = {'schema': 'confidential-agent/binary-release/v1', 'version': version,
                 'tag': 'v' + version, 'source_commit': commit, 'source_dirty': dirty, 'platform': 'alinux3-x86_64',
-                'packages': packages, 'shelter': companion,
-                'files': {p.name: sha256(p) for p in sorted(output.iterdir())}}
-    (output / 'release-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
-    (output / 'SHA256SUMS').write_text(''.join(
-        sha256(p) + '  ' + p.name + '\n' for p in sorted(output.iterdir()) if p.name != 'SHA256SUMS'))
+                'packages': packages, 'shelter': companion}
+    write_manifest(output, manifest)
     print(json.dumps({'version': version, 'packages': packages, 'output': str(output)}))
 
 

@@ -12,7 +12,7 @@ deploy:
   disk_gb: 120
   image:
     release: ./image-release.json
-    trusted_key: ./publisher.pem
+    release_digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
     # Optional: manifest: sha256:<full digest>, to pin a specific publisher version.
 attestation:
   tee: tdx

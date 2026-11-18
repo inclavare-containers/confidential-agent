@@ -1,5 +1,6 @@
 #!/usr/bin/python3.11
 """Image-owned harness selection; CA delivers this configuration as a resource."""
+import argparse
 import json
 import os
 from pathlib import Path
@@ -7,11 +8,16 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
+import urllib.parse
 
 CONFIG = Path("/opt/data/allinone/runtime.json")
 HOME = Path("/opt/data/allinone/home")
 WORKSPACE = Path("/opt/data/allinone/workspace")
 RUNTIME_CONTEXT = Path("/run/confidential-agent/application-runtime.json")
+DSH_WEB_URL = Path("/run/cai-allinone/dsh-web-url")
+
+
 class ConfigurationError(ValueError):
     """Messages contain static diagnostics, never instance environment values."""
 
@@ -30,24 +36,41 @@ COMMANDS = {
 
 def load_configuration(path=CONFIG):
     value = json.loads(path.read_text())
-    if not isinstance(value, dict) or set(value) - {"harness", "mode", "port", "environment"}:
+    if not isinstance(value, dict) or set(value) - {
+        "harness",
+        "mode",
+        "port",
+        "environment",
+        "disable_pep",
+    }:
         raise ConfigurationError("invalid runtime configuration fields")
     if value.get("harness") not in COMMANDS:
         raise ConfigurationError("unknown allinone harness")
     environment = value.get("environment", {})
     if not isinstance(environment, dict) or any(
-        not re.fullmatch(r"[A-Z_][A-Z0-9_]*", key) or not isinstance(item, str)
-        or "\x00" in item or key in {"HOME", "PATH", "LD_PRELOAD", "LD_LIBRARY_PATH"}
+        not re.fullmatch(r"[A-Z_][A-Z0-9_]*", key)
+        or not isinstance(item, str)
+        or "\x00" in item
+        or key in {"HOME", "PATH", "LD_PRELOAD", "LD_LIBRARY_PATH"}
         for key, item in environment.items()
     ):
         raise ConfigurationError("invalid harness environment")
     harness = value["harness"]
+    if "disable_pep" in value:
+        if harness != "openclaw" or type(value["disable_pep"]) is not bool:
+            raise ConfigurationError("disable_pep applies only to OpenClaw")
+        environment = dict(environment, CA_DISABLE_PEP="1" if value["disable_pep"] else "0")
+    elif "CA_DISABLE_PEP" in environment:
+        if harness != "openclaw" or environment["CA_DISABLE_PEP"] not in {"0", "1"}:
+            raise ConfigurationError("CA_DISABLE_PEP applies only to OpenClaw")
     mode = value.get("mode", "gateway" if harness in {"openclaw", "hermes"} else "cli")
     allowed = {"cli"}
     if harness in {"openclaw", "hermes"}:
         allowed.add("gateway")
-    if harness == "codex":
+    elif harness == "codex":
         allowed.add("app-server")
+    elif harness in {"opencode", "dsh"}:
+        allowed.add("web")
     if mode not in allowed:
         raise ConfigurationError("unsupported harness mode")
     port = value.get("port")
@@ -57,9 +80,18 @@ def load_configuration(path=CONFIG):
         port = port or 18789
     elif mode == "app-server":
         port = port or 4500
+    elif mode == "web" and harness == "opencode":
+        port = port or 4096
+    elif mode == "web" and harness == "dsh":
+        port = port or 3080
     elif mode == "gateway" and harness == "hermes":
         if port is not None:
-            environment = dict(environment, API_SERVER_ENABLED="true", API_SERVER_HOST="0.0.0.0", API_SERVER_PORT=str(port))
+            environment = dict(
+                environment,
+                API_SERVER_ENABLED="true",
+                API_SERVER_HOST="0.0.0.0",
+                API_SERVER_PORT=str(port),
+            )
         elif environment.get("API_SERVER_ENABLED", "").lower() in {"true", "1", "yes"}:
             port = int(environment.get("API_SERVER_PORT", "8642"))
             if not 1 <= port <= 65535:
@@ -74,6 +106,7 @@ def validate_declared_ports(port, path=RUNTIME_CONTEXT):
     expected = [] if port is None else [port]
     if sorted(bootstrap["ports"]) != expected:
         raise ConfigurationError("runtime listening port does not match CA service.ports")
+    return bootstrap
 
 
 def configure_fixed_release(harness, environment):
@@ -89,51 +122,161 @@ def configure_fixed_release(harness, environment):
             raise ConfigurationError("Qoder instance settings must disable general.enableAutoUpdate")
 
 
+def validate_service_auth(harness, mode, port, environment):
+    if mode == "app-server":
+        token = HOME / ".codex/app-server-token"
+        if not token.is_file() or token.stat().st_mode & 0o077 or not token.read_text().strip():
+            raise ConfigurationError("Codex app-server requires a private capability token")
+        return token
+    if harness == "opencode" and mode == "web" and not environment.get("OPENCODE_SERVER_PASSWORD"):
+        raise ConfigurationError("OpenCode web requires OPENCODE_SERVER_PASSWORD")
+    if harness == "hermes" and mode == "gateway" and port is not None:
+        if not environment.get("API_SERVER_KEY", "").strip():
+            raise ConfigurationError("Hermes HTTP gateway requires API_SERVER_KEY")
+    if harness == "openclaw":
+        cfg_path = HOME / ".openclaw/openclaw.json"
+        if cfg_path.is_file():
+            cfg = json.loads(cfg_path.read_text())
+            if mode == "gateway":
+                auth = (cfg.get("gateway") or {}).get("auth") or {}
+                if (
+                    auth.get("mode") != "token"
+                    or not isinstance(auth.get("token"), str)
+                    or len(auth["token"]) < 32
+                ):
+                    raise ConfigurationError("OpenClaw gateway requires a 32+ character token")
+            plugins = cfg.get("plugins") or {}
+            allow = plugins.get("allow")
+            pep_entry = (plugins.get("entries") or {}).get("cai-pep")
+            if environment.get("CA_DISABLE_PEP") == "1":
+                if (
+                    not isinstance(allow, list)
+                    or not allow
+                    or "cai-pep" in allow
+                    or (isinstance(pep_entry, dict) and pep_entry.get("enabled") is True)
+                ):
+                    raise ConfigurationError("OpenClaw disable_pep conflicts with cai-pep plugin")
+            elif (
+                not isinstance(allow, list)
+                or "cai-pep" not in allow
+                or not isinstance(pep_entry, dict)
+                or pep_entry.get("enabled") is not True
+                or (pep_entry.get("config") or {}).get("pepRequired") is not True
+            ):
+                raise ConfigurationError("OpenClaw PEP requires cai-pep plugin with pepRequired=true")
+    return None
+
+
+def dsh_web_url(arguments, path=DSH_WEB_URL):
+    parser = argparse.ArgumentParser(prog="cai-agent --web-url")
+    parser.add_argument("--port", type=int)
+    local_port = parser.parse_args(arguments).port
+    try:
+        url = path.read_text().strip()
+    except FileNotFoundError as error:
+        raise ConfigurationError("DSH web login URL is not ready") from error
+    if local_port is None:
+        return url
+    return urllib.parse.urlsplit(url)._replace(netloc=f"127.0.0.1:{local_port}").geturl()
+
+
+def serve_dsh_web(command, port, host, environment, path=DSH_WEB_URL):
+    path.unlink(missing_ok=True)
+    command += [
+        "web", "--no-open", "--host", host, "--port", str(port),
+        "--public-url", f"http://127.0.0.1:{port}/",
+    ]
+    process = subprocess.Popen(
+        command, cwd=WORKSPACE, env=environment, stdout=subprocess.PIPE, text=True, errors="replace"
+    )
+    try:
+        for line in process.stdout:
+            if line.startswith("dsh web: http"):
+                # DSH prints its process login credential in the native startup URL.
+                with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as url_file:
+                    url_file.write(line.removeprefix("dsh web: "))
+                os.replace(url_file.name, path)
+                print(f"dsh web ready on port {port}", flush=True)
+            else:
+                print(line, end="", flush=True)
+        return process.wait()
+    finally:
+        path.unlink(missing_ok=True)
+
+
 def main():
     harness, mode, port, configured = load_configuration()
+    arguments = sys.argv[1:]
+    if arguments and arguments[0] == "--web-url":
+        if harness != "dsh" or mode != "web":
+            raise ConfigurationError("--web-url applies only to DSH web mode")
+        print(dsh_web_url(arguments[1:]))
+        return
     HOME.mkdir(parents=True, exist_ok=True, mode=0o700)
     WORKSPACE.mkdir(parents=True, exist_ok=True, mode=0o700)
     environment = dict(os.environ, **configured)
-    environment.update(HOME=str(HOME), PWD=str(WORKSPACE), XDG_CONFIG_HOME=str(HOME / ".config"),
-                       HERMES_HOME="/opt/data/allinone/hermes",
-                       CODEX_HOME=str(HOME / ".codex"),
-                       QODER_CONFIG_DIR=str(HOME / ".qoder"),
-                       PI_CODING_AGENT_DIR=str(HOME / ".pi/agent"),
-                       DSH_HOME=str(HOME / ".dsh"),
-                       PATH="/usr/local/bin:/usr/bin:/usr/local/sbin:/usr/sbin:/bin:/sbin")
+    environment.update(
+        HOME=str(HOME),
+        PWD=str(WORKSPACE),
+        XDG_CONFIG_HOME=str(HOME / ".config"),
+        HERMES_HOME="/opt/data/allinone/hermes",
+        CODEX_HOME=str(HOME / ".codex"),
+        QODER_CONFIG_DIR=str(HOME / ".qoder"),
+        PI_CODING_AGENT_DIR=str(HOME / ".pi/agent"),
+        DSH_HOME=str(HOME / ".dsh"),
+        PATH="/usr/local/bin:/usr/bin:/usr/local/sbin:/usr/sbin:/bin:/sbin",
+    )
     configure_fixed_release(harness, environment)
     command = COMMANDS[harness].copy()
-    if not shutil.which(command[0], path=environment["PATH"]):
+    executable = shutil.which(command[0], path=environment["PATH"])
+    if not executable:
         raise RuntimeError("selected harness is absent from the image")
-    arguments = sys.argv[1:]
     if arguments in (["--serve"], ["--check"]):
-        validate_declared_ports(port)
-        if mode == "app-server":
-            token = HOME / ".codex/app-server-token"
-            if not token.is_file() or token.stat().st_mode & 0o077:
-                raise ConfigurationError("Codex app-server requires a private capability token")
+        runtime = validate_declared_ports(port)
+        token = validate_service_auth(harness, mode, port, environment)
         if arguments == ["--check"]:
             print(json.dumps({"harness": harness, "mode": mode, "port": port}))
             return
+        if harness == "openclaw":
+            if environment.get("CA_DISABLE_PEP") == "1":
+                subprocess.run(["systemctl", "stop", "cai-pep.service"], check=False)
+            else:
+                subprocess.run(["systemctl", "start", "cai-pep.service"], check=True)
         if mode == "gateway" and harness == "openclaw":
-            command += ["gateway", "--port", str(port)]
+            environment.setdefault("OPENCLAW_NO_RESPAWN", "1")
+            environment.setdefault("OPENCLAW_DISABLE_BONJOUR", "1")
+            command += ["gateway", "run", "--port", str(port)]
         elif mode == "gateway" and harness == "hermes":
             command += ["gateway", "run"]
         elif mode == "app-server":
-            command += ["app-server", "--listen", f"ws://0.0.0.0:{port}",
-                        "--ws-auth", "capability-token", "--ws-token-file", str(token)]
+            command += [
+                "app-server",
+                "--listen",
+                f"ws://0.0.0.0:{port}",
+                "--ws-auth",
+                "capability-token",
+                "--ws-token-file",
+                str(token),
+            ]
+        elif mode == "web" and harness == "opencode":
+            environment["BROWSER"] = "/bin/true"
+            command += ["web", "--hostname", "0.0.0.0", "--port", str(port)]
+        elif mode == "web" and harness == "dsh":
+            sys.exit(serve_dsh_web(command, port, runtime["connect_host"], environment))
         else:
             # Interactive CLIs run through `ca ssh <id> -- cai-agent ...`.
             # Keep the readiness unit alive without starting another harness.
             command = ["/usr/bin/sleep", "infinity"]
+        os.chdir(WORKSPACE)
+        os.execvpe(command[0], command, environment)
     else:
         command += arguments
-    if harness == "openclaw":
-        # Root-owned, patched OpenClaw must fail closed when its PEP cannot start.
-        # The other harnesses only use the local attestation helper.
-        subprocess.run(["systemctl", "start", "cai-pep.service"], check=True)
-    os.chdir(WORKSPACE)
-    os.execvpe(command[0], command, environment)
+        if harness == "openclaw" and environment.get("CA_DISABLE_PEP") != "1":
+            # Root-owned, patched OpenClaw must fail closed when its PEP cannot start.
+            # The other harnesses only use the local attestation helper.
+            subprocess.run(["systemctl", "start", "cai-pep.service"], check=True)
+        os.chdir(WORKSPACE)
+        os.execvpe(command[0], command, environment)
 
 
 if __name__ == "__main__":
