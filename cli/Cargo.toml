@@ -18,6 +18,7 @@ confidential-agent-shelter = { path = "../shelter" }
 crossterm.workspace = true
 curve25519-dalek.workspace = true
 ed25519-dalek.workspace = true
+httpdate.workspace = true
 libc.workspace = true
 rand_core.workspace = true
 ratatui.workspace = true
