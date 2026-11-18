@@ -113,7 +113,7 @@ class ConsumerSpecTest(unittest.TestCase):
             with patch.dict(os.environ, {'DASHSCOPE_API_KEY': 'fixture-key'}):
                 selected, extra = platform_case.prepare_fixtures(root, self.selection(root), 'cn-beijing')
             runtime = runpy.run_path(str(ROOT / 'examples/allinone/files/cai-agent'))
-            self.assertEqual([fixture.name for fixture in selected], ['codex', 'openclaw', 'hermes'])
+            self.assertEqual([fixture.name for fixture in selected], ['claude-code', 'openclaw', 'hermes'])
             for fixture in [*selected, extra]:
                 spec = json.loads((fixture / 'appspec.json').read_text())
                 port = runtime['load_configuration'](fixture / 'runtime.json')[2]

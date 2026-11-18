@@ -2,10 +2,18 @@ use super::*;
 
 mod staged;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum InitPlan {
+    SharedCpuBuild,
+    SharedCpuDeploy(InitTarget),
+    GpuDirect(InitTarget),
+    GpuStaged(InitTarget, InitStage),
+}
+
 #[derive(Debug)]
 struct InitProject {
-    target: InitTarget,
-    service_id: &'static str,
+    plan: InitPlan,
+    service_id: String,
     dir: PathBuf,
     spec_path: PathBuf,
     region: String,
@@ -63,49 +71,52 @@ impl VllmBuildVariants {
 
 pub(super) fn cmd_init(cli: &Cli, args: &InitArgs) -> Result<()> {
     let mut resolved_args = args.clone();
-    staged::resolve_interactive(&mut resolved_args)?;
+    let plan = staged::resolve_plan_and_interactive(&mut resolved_args)?;
     let args = &resolved_args;
-    let target = match args.target {
-        Some(target) => target,
-        None if args.non_interactive => {
-            bail!("init --non-interactive requires a target, for example `init openclaw`")
-        }
-        None => prompt_target()?,
-    };
 
-    staged::validate_args(args, target)?;
-    let mut project = resolve_project(args, target)?;
+    staged::validate_args(args, plan)?;
+    let mut project = resolve_project(args, plan)?;
     guard_output_dir(&project.dir, args.force)?;
     fs::create_dir_all(&project.dir)
         .with_context(|| format!("failed to create '{}'", project.dir.display()))?;
     set_mode(&project.dir, 0o755)?;
-    if args.stage == Some(InitStage::Deploy) {
-        project.cosign_key = Some(PathBuf::from("./cosign.key"));
-    } else if project.reference_values == InitReferenceValues::Rekor {
+    if matches!(
+        plan,
+        InitPlan::SharedCpuBuild
+            | InitPlan::GpuDirect(_)
+            | InitPlan::GpuStaged(_, InitStage::Build)
+    ) && project.reference_values == InitReferenceValues::Rekor
+    {
         project.cosign_key = Some(resolve_or_generate_cosign_key(cli, args, &project)?);
     }
 
-    match target {
-        InitTarget::Allinone => staged::write_allinone(args, &project)?,
-        InitTarget::Openclaw => write_openclaw_project(cli, args, &project)?,
-        InitTarget::OpenclawVllm => write_openclaw_vllm_project(cli, args, &project)?,
-        InitTarget::Hermes => write_hermes_project(&project, args)?,
-        InitTarget::Codex => write_codex_project(args, &project)?,
-        InitTarget::Claudecode => write_claude_code_project(args, &project)?,
-        InitTarget::VllmInference => write_vllm_inference_project(cli, args, &project)?,
+    match plan {
+        InitPlan::SharedCpuBuild => staged::write_shared_cpu_build(args, &project)?,
+        InitPlan::SharedCpuDeploy(target) => {
+            staged::write_shared_cpu_deploy(args, &project, target)?
+        }
+        InitPlan::GpuDirect(InitTarget::OpenclawVllm)
+        | InitPlan::GpuStaged(InitTarget::OpenclawVllm, _) => {
+            write_openclaw_vllm_project(cli, args, &project)?;
+            staged::finish_gpu(args, &project)?;
+        }
+        InitPlan::GpuDirect(InitTarget::VllmInference)
+        | InitPlan::GpuStaged(InitTarget::VllmInference, _) => {
+            write_vllm_inference_project(cli, args, &project)?;
+            staged::finish_gpu(args, &project)?;
+        }
+        _ => unreachable!("unexpected GPU target in plan"),
     }
 
-    staged::finish(args, &project)?;
     AgentSpec::from_path(&project.spec_path).with_context(|| {
         format!(
             "generated AppSpec '{}' did not parse",
             project.spec_path.display()
         )
     })?;
-    if args.stage.is_some() {
-        staged::write_next_steps(cli, args, &project)?;
-    } else {
-        write_next_steps(cli, &project)?;
+    match plan {
+        InitPlan::GpuDirect(_) => write_next_steps(cli, &project)?,
+        _ => staged::write_next_steps(cli, args, &project)?,
     }
     println!("[ca] init generated {}", project.dir.display());
     println!("[ca] AppSpec: {}", project.spec_path.display());
@@ -116,16 +127,21 @@ pub(super) fn cmd_init(cli: &Cli, args: &InitArgs) -> Result<()> {
     Ok(())
 }
 
-fn resolve_project(args: &InitArgs, target: InitTarget) -> Result<InitProject> {
-    if target == InitTarget::OpenclawVllm && args.disable_pep {
+fn resolve_project(args: &InitArgs, plan: InitPlan) -> Result<InitProject> {
+    if matches!(
+        plan,
+        InitPlan::GpuDirect(InitTarget::OpenclawVllm)
+            | InitPlan::GpuStaged(InitTarget::OpenclawVllm, _)
+    ) && args.disable_pep
+    {
         bail!("init openclaw-vllm does not support --disable-pep because the TDX attestation skill uses cai-pep attest");
     }
-    let service_id = target.service_id();
-    let dir = args.output_dir.join(staged::project_name(args, target));
-    let spec_path = dir.join(match args.stage {
-        Some(InitStage::Build) => "build.yaml",
-        Some(InitStage::Deploy) => "instance.yaml",
-        None => target.spec_name(),
+    let service_id = staged::project_name(args, plan);
+    let dir = args.output_dir.join(&service_id);
+    let spec_path = dir.join(match plan {
+        InitPlan::SharedCpuBuild | InitPlan::GpuStaged(_, InitStage::Build) => "build.yaml",
+        InitPlan::SharedCpuDeploy(_) | InitPlan::GpuStaged(_, InitStage::Deploy) => "instance.yaml",
+        InitPlan::GpuDirect(target) => target.spec_name(),
     });
     let region = args
         .region
@@ -138,74 +154,75 @@ fn resolve_project(args: &InitArgs, target: InitTarget) -> Result<InitProject> {
     let instance_type = args
         .instance_type
         .clone()
-        .unwrap_or_else(|| default_instance_type(&region, target).to_string());
-    let disk_gb = args
-        .disk_gb
-        .unwrap_or_else(|| staged::default_disk(args, target));
-    let reference_values = args
-        .reference_values
-        .unwrap_or_else(|| default_reference_values(target));
-    let dashscope_key = resolve_dashscope_key(args, target)?;
+        .unwrap_or_else(|| default_instance_type(&region, plan).to_string());
+    let disk_gb = args.disk_gb.unwrap_or_else(|| staged::default_disk(plan));
+    let reference_values = args.reference_values.unwrap_or(InitReferenceValues::Rekor);
+    let dashscope_key = resolve_dashscope_key(args, plan)?;
     let model = args
         .model
         .clone()
         .unwrap_or_else(|| confidential_agent_core::software::version("bailian_model"));
-    let gateway_token = match target {
-        InitTarget::Openclaw | InitTarget::OpenclawVllm => {
-            Some(args.gateway_token.clone().unwrap_or_else(|| random_hex(20)))
-        }
-        _ => args.gateway_token.clone(),
-    };
-    if let Some(token) = gateway_token.as_deref() {
+    if let Some(token) = args.gateway_token.as_deref() {
         if token.len() < 32 {
             bail!("--gateway-token must be at least 32 characters");
         }
     }
-    let (enable_dingtalk, dingtalk_client_id, dingtalk_client_secret) =
-        if matches!(target, InitTarget::Openclaw | InitTarget::OpenclawVllm) {
-            if args.stage == Some(InitStage::Build) {
-                (false, None, None)
-            } else {
-                resolve_dingtalk_credentials(args)?
-            }
-        } else {
-            (false, None, None)
-        };
-    let vllm_build_variants =
-        if matches!(target, InitTarget::OpenclawVllm | InitTarget::VllmInference) {
-            parse_vllm_build_variants(&args.vllm_build_variants)?
-        } else {
-            VllmBuildVariants::default()
-        };
-    let vllm_model_dir = if target == InitTarget::VllmInference {
+    let gateway_token = match plan {
+        InitPlan::SharedCpuDeploy(InitTarget::Openclaw)
+        | InitPlan::SharedCpuDeploy(InitTarget::Opencode)
+        | InitPlan::GpuDirect(InitTarget::OpenclawVllm)
+        | InitPlan::GpuStaged(InitTarget::OpenclawVllm, InitStage::Deploy) => {
+            Some(args.gateway_token.clone().unwrap_or_else(|| random_hex(20)))
+        }
+        _ => args.gateway_token.clone(),
+    };
+    let (enable_dingtalk, dingtalk_client_id, dingtalk_client_secret) = match plan {
+        InitPlan::SharedCpuDeploy(InitTarget::Openclaw)
+        | InitPlan::GpuDirect(InitTarget::OpenclawVllm)
+        | InitPlan::GpuStaged(InitTarget::OpenclawVllm, InitStage::Deploy) => {
+            resolve_dingtalk_credentials(args)?
+        }
+        _ => (false, None, None),
+    };
+    let is_gpu = matches!(plan, InitPlan::GpuDirect(_) | InitPlan::GpuStaged(_, _));
+    let is_vllm_inference = matches!(
+        plan,
+        InitPlan::GpuDirect(InitTarget::VllmInference)
+            | InitPlan::GpuStaged(InitTarget::VllmInference, _)
+    );
+    let vllm_build_variants = if is_gpu {
+        parse_vllm_build_variants(&args.vllm_build_variants)?
+    } else {
+        VllmBuildVariants::default()
+    };
+    let vllm_model_dir = if is_vllm_inference {
         "/tmp/model".to_string()
     } else {
         args.vllm_model_dir.clone()
     };
     let vllm_port = args
         .vllm_port
-        .unwrap_or(if target == InitTarget::VllmInference {
-            8080
-        } else {
-            8090
-        });
+        .unwrap_or(if is_vllm_inference { 8080 } else { 8090 });
     anyhow::ensure!(vllm_port > 0, "--vllm-port must be greater than zero");
-    let (oss_bucket, model_key_file) =
-        if target == InitTarget::VllmInference && args.stage != Some(InitStage::Build) {
-            (
-                args.oss_bucket
-                    .clone()
-                    .context("vllm-inference requires --oss-bucket")?,
-                args.model_key_file
-                    .clone()
-                    .context("vllm-inference requires --model-key-file")?,
-            )
-        } else {
-            (String::new(), PathBuf::new())
-        };
+    let (oss_bucket, model_key_file) = if matches!(
+        plan,
+        InitPlan::GpuDirect(InitTarget::VllmInference)
+            | InitPlan::GpuStaged(InitTarget::VllmInference, InitStage::Deploy)
+    ) {
+        (
+            args.oss_bucket
+                .clone()
+                .context("vllm-inference requires --oss-bucket")?,
+            args.model_key_file
+                .clone()
+                .context("vllm-inference requires --model-key-file")?,
+        )
+    } else {
+        (String::new(), PathBuf::new())
+    };
 
     Ok(InitProject {
-        target,
+        plan,
         service_id,
         dir,
         spec_path,
@@ -264,13 +281,11 @@ fn guard_output_dir(dir: &Path, force: bool) -> Result<()> {
     Ok(())
 }
 
-fn resolve_dashscope_key(args: &InitArgs, target: InitTarget) -> Result<Option<String>> {
-    if args.stage == Some(InitStage::Build)
-        || (target == InitTarget::Allinone && args.harness.as_deref() == Some("qodercli"))
-    {
+fn resolve_dashscope_key(args: &InitArgs, plan: InitPlan) -> Result<Option<String>> {
+    let InitPlan::SharedCpuDeploy(target) = plan else {
         return Ok(None);
-    }
-    if matches!(target, InitTarget::OpenclawVllm | InitTarget::VllmInference) {
+    };
+    if target == InitTarget::Qodercli {
         return Ok(None);
     }
     let key = args
@@ -398,32 +413,6 @@ fn resolve_or_generate_cosign_key(
     Ok(PathBuf::from("./cosign.key"))
 }
 
-fn prompt_target() -> Result<InitTarget> {
-    println!("Select deployment target:");
-    println!("  1) openclaw");
-    println!("  2) openclaw-vllm");
-    println!("  3) hermes");
-    println!("  4) codex");
-    println!("  5) claudecode");
-    println!("  6) vllm-inference");
-    println!("  7) allinone (shared image, per-instance harness)");
-    loop {
-        print!("Target [1]: ");
-        std::io::stdout().flush().ok();
-        let value = read_stdin_line()?;
-        match value.trim() {
-            "" | "1" | "openclaw" => return Ok(InitTarget::Openclaw),
-            "2" | "openclaw-vllm" => return Ok(InitTarget::OpenclawVllm),
-            "3" | "hermes" | "hermes-agent" => return Ok(InitTarget::Hermes),
-            "4" | "codex" => return Ok(InitTarget::Codex),
-            "5" | "claudecode" | "claude-code" => return Ok(InitTarget::Claudecode),
-            "6" | "vllm-inference" => return Ok(InitTarget::VllmInference),
-            "7" | "allinone" | "all-in-one" => return Ok(InitTarget::Allinone),
-            _ => println!("Enter 1-7 or a target name."),
-        }
-    }
-}
-
 fn prompt_secret(prompt: &str) -> Result<String> {
     print!("{prompt}: ");
     std::io::stdout().flush().ok();
@@ -463,39 +452,8 @@ fn read_stdin_line() -> Result<String> {
     Ok(value)
 }
 
-fn write_openclaw_project(_cli: &Cli, args: &InitArgs, project: &InitProject) -> Result<()> {
-    if args.stage != Some(InitStage::Deploy) {
-        let repo = find_assets_root()?;
-        copy_dir(
-            &repo.join("examples/openclaw/files"),
-            &project.dir.join("files"),
-        )?;
-        write_openclaw_install_script(
-            &repo.join("examples/openclaw/install-openclaw.sh"),
-            &project.dir.join("install-openclaw.sh"),
-            args,
-            project.disable_pep,
-        )?;
-    }
-    let pep_bin = if project.disable_pep {
-        None
-    } else {
-        Some(staged::pep_binary(args)?)
-    };
-    if args.stage != Some(InitStage::Build) {
-        let config = openclaw_json(project, false)?;
-        write_secret_file(
-            &project.dir.join("openclaw.json"),
-            &serde_json::to_string_pretty(&config)?,
-        )?;
-    }
-    let spec = openclaw_yaml(project, pep_bin.as_deref())?;
-    write_file(&project.spec_path, &spec, 0o644)?;
-    Ok(())
-}
-
 fn write_vllm_inference_project(cli: &Cli, args: &InitArgs, project: &InitProject) -> Result<()> {
-    let _ = (cli, args);
+    let _ = cli;
     if args.stage != Some(InitStage::Deploy) {
         let repo = find_assets_root()?;
         // NVIDIA stack reused verbatim from openclaw-vllm
@@ -520,13 +478,13 @@ fn write_vllm_inference_project(cli: &Cli, args: &InitArgs, project: &InitProjec
     if args.stage != Some(InitStage::Build) {
         // cai-model.env resource (non-secret: public-read ciphertext bucket)
         let env = format!(
-        "MODEL_OSS_BUCKET={}\nMODEL_OSS_ENDPOINT={}\nMODEL_MOUNT_POINT={}\nVLLM_PORT={}\nVLLM_SERVED_MODEL_NAME={}\n",
-        project.oss_bucket,
-        project.oss_endpoint,
-        project.vllm_model_dir,
-        project.vllm_port,
-        project.vllm_served_model_name,
-    );
+            "MODEL_OSS_BUCKET={}\nMODEL_OSS_ENDPOINT={}\nMODEL_MOUNT_POINT={}\nVLLM_PORT={}\nVLLM_SERVED_MODEL_NAME={}\n",
+            project.oss_bucket,
+            project.oss_endpoint,
+            project.vllm_model_dir,
+            project.vllm_port,
+            project.vllm_served_model_name,
+        );
         write_secret_file(&project.dir.join("cai-model.env"), &env)?;
 
         // model-decryption-key resource (secret: copied from operator-provided key file)
@@ -580,7 +538,7 @@ fn write_openclaw_vllm_project(_cli: &Cli, args: &InitArgs, project: &InitProjec
         )?;
     }
     if args.stage != Some(InitStage::Build) {
-        let config = openclaw_json(project, true)?;
+        let config = openclaw_json(project, true, None, "lan", 18789)?;
         write_secret_file(
             &project.dir.join("openclaw-vllm.json"),
             &serde_json::to_string_pretty(&config)?,
@@ -590,182 +548,6 @@ fn write_openclaw_vllm_project(_cli: &Cli, args: &InitArgs, project: &InitProjec
     let spec = openclaw_vllm_yaml(project, &pep_bin)?;
     write_file(&project.spec_path, &spec, 0o644)?;
     Ok(())
-}
-
-fn write_hermes_project(project: &InitProject, args: &InitArgs) -> Result<()> {
-    if args.stage != Some(InitStage::Deploy) {
-        let repo = find_assets_root()?;
-        copy_dir(
-            &repo.join("examples/hermes-agent/files"),
-            &project.dir.join("files"),
-        )?;
-        fs::copy(
-            repo.join("examples/cli-agents/files/tdx-remote-attestation.SKILL.md"),
-            project.dir.join("files/tdx-remote-attestation.SKILL.md"),
-        )?;
-        write_hermes_install_script(
-            &repo.join("examples/hermes-agent/install-hermes-agent.sh"),
-            &project.dir.join("install-hermes-agent.sh"),
-            &args.hermes_branch,
-            args.hermes_commit.as_deref(),
-        )?;
-    }
-    if args.stage != Some(InitStage::Build) {
-        let secrets = project.dir.join("secrets");
-        fs::create_dir_all(&secrets)
-            .with_context(|| format!("failed to create '{}'", secrets.display()))?;
-        set_mode(&secrets, 0o700)?;
-        let api_key = project
-            .dashscope_key
-            .as_deref()
-            .context("Hermes requires DashScope API key")?;
-        let server_key = args
-            .hermes_api_server_key
-            .clone()
-            .unwrap_or_else(|| random_hex(32));
-        let env = format!(
-        "API_SERVER_ENABLED=true\nAPI_SERVER_HOST=0.0.0.0\nAPI_SERVER_PORT=8642\nAPI_SERVER_KEY={}\nDASHSCOPE_API_KEY={}\nDASHSCOPE_BASE_URL={}\nHERMES_HOME=/opt/data\nHERMES_MODEL={}\n",
-        server_key, api_key, project.dashscope_base_url, project.model
-    );
-        write_secret_file(&secrets.join("hermes.env"), &env)?;
-        let config = format!(
-            "model:\n  provider: alibaba\n  default: {}\n  model: {}\n",
-            project.model, project.model
-        );
-        write_secret_file(&secrets.join("config.yaml"), &config)?;
-    }
-    write_file(
-        &project.spec_path,
-        &hermes_yaml(project, &staged::pep_binary(args)?)?,
-        0o644,
-    )?;
-    Ok(())
-}
-
-fn write_codex_project(args: &InitArgs, project: &InitProject) -> Result<()> {
-    if args.stage != Some(InitStage::Deploy) {
-        let repo = find_assets_root()?;
-        copy_dir(
-            &repo.join("examples/cli-agents/files"),
-            &project.dir.join("files"),
-        )?;
-        let pinned_codex = confidential_agent_core::software::version("codex");
-        let codex_version = args.codex_version.as_deref().unwrap_or(&pinned_codex);
-        write_install_script_with_exports(
-            &repo.join("examples/codex/install-codex.sh"),
-            &project.dir.join("install-codex.sh"),
-            &[
-                ("CLI_AGENT_NODE_VERSION", &args.node_version),
-                ("NPM_REGISTRY", &args.npm_registry),
-                ("CODEX_VERSION", codex_version),
-            ],
-        )?;
-    }
-    let pep_bin = staged::pep_binary(args)?;
-    if args.stage != Some(InitStage::Build) {
-        let secrets = project.dir.join("secrets");
-        fs::create_dir_all(&secrets)
-            .with_context(|| format!("failed to create '{}'", secrets.display()))?;
-        set_mode(&secrets, 0o700)?;
-        let api_key = project
-            .dashscope_key
-            .as_deref()
-            .context("Codex requires DashScope API key")?;
-        let config = format!(
-        "model_provider = \"Model_Studio\"\nmodel = \"{}\"\n\n[model_providers.Model_Studio]\nname = \"Model_Studio\"\nbase_url = \"{}\"\nenv_key = \"OPENAI_API_KEY\"\nwire_api = \"responses\"\n",
-        project.model, project.dashscope_base_url
-    );
-        write_secret_file(&secrets.join("config.toml"), &config)?;
-        write_secret_file(
-            &secrets.join("codex.env"),
-            &format!("OPENAI_API_KEY={api_key}\nCODEX_HOME=/root/.codex\n"),
-        )?;
-        let token = args
-            .codex_app_server_token
-            .clone()
-            .unwrap_or_else(|| random_base64(32));
-        write_secret_file(&secrets.join("app-server-token"), &format!("{token}\n"))?;
-    }
-    write_file(&project.spec_path, &codex_yaml(project, &pep_bin)?, 0o644)?;
-    Ok(())
-}
-
-fn write_claude_code_project(args: &InitArgs, project: &InitProject) -> Result<()> {
-    if args.stage != Some(InitStage::Deploy) {
-        let repo = find_assets_root()?;
-        copy_dir(
-            &repo.join("examples/cli-agents/files"),
-            &project.dir.join("files"),
-        )?;
-        let pinned_claude = confidential_agent_core::software::version("claude-code");
-        let claude_code_version = args
-            .claude_code_version
-            .as_deref()
-            .unwrap_or(&pinned_claude);
-        write_install_script_with_exports(
-            &repo.join("examples/claude-code/install-claude-code.sh"),
-            &project.dir.join("install-claude-code.sh"),
-            &[
-                ("CLI_AGENT_NODE_VERSION", &args.node_version),
-                ("NPM_REGISTRY", &args.npm_registry),
-                ("CLAUDE_CODE_VERSION", claude_code_version),
-            ],
-        )?;
-    }
-    let pep_bin = staged::pep_binary(args)?;
-    if args.stage != Some(InitStage::Build) {
-        let secrets = project.dir.join("secrets");
-        fs::create_dir_all(&secrets)
-            .with_context(|| format!("failed to create '{}'", secrets.display()))?;
-        set_mode(&secrets, 0o700)?;
-        let api_key = project
-            .dashscope_key
-            .as_deref()
-            .context("Claude Code requires DashScope API key")?;
-        let settings = serde_json::json!({
-            "env": {
-                "ANTHROPIC_AUTH_TOKEN": api_key,
-                "ANTHROPIC_BASE_URL": project.dashscope_anthropic_base_url,
-                "ANTHROPIC_MODEL": project.model,
-                "ANTHROPIC_DEFAULT_HAIKU_MODEL": project.model,
-                "ANTHROPIC_DEFAULT_SONNET_MODEL": project.model,
-                "ANTHROPIC_DEFAULT_OPUS_MODEL": project.model,
-                "CLAUDE_CODE_SUBAGENT_MODEL": project.model,
-            }
-        });
-        write_secret_file(
-            &secrets.join("settings.json"),
-            &serde_json::to_string_pretty(&settings)?,
-        )?;
-        write_secret_file(
-            &secrets.join("claude.json"),
-            "{\"hasCompletedOnboarding\": true}\n",
-        )?;
-    }
-    write_file(
-        &project.spec_path,
-        &claude_code_yaml(project, &pep_bin)?,
-        0o644,
-    )?;
-    Ok(())
-}
-
-fn write_openclaw_install_script(
-    src: &Path,
-    dst: &Path,
-    args: &InitArgs,
-    disable_pep: bool,
-) -> Result<()> {
-    write_install_script_with_exports(
-        src,
-        dst,
-        &[
-            ("OPENCLAW_VERSION", &args.openclaw_version),
-            ("OPENCLAW_NODE_VERSION", &args.node_version),
-            ("NPM_REGISTRY", &args.npm_registry),
-            ("CA_DISABLE_PEP", if disable_pep { "1" } else { "0" }),
-        ],
-    )
 }
 
 fn write_install_script_with_exports(
@@ -803,24 +585,13 @@ fn write_install_script_with_exports(
     write_file(dst, &rendered, 0o755)
 }
 
-fn write_hermes_install_script(
-    src: &Path,
-    dst: &Path,
-    branch: &str,
-    commit: Option<&str>,
-) -> Result<()> {
-    let pinned = confidential_agent_core::software::version("hermes");
-    let commit = commit
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or(&pinned);
-    write_install_script_with_exports(
-        src,
-        dst,
-        &[("HERMES_BRANCH", branch), ("HERMES_COMMIT", commit)],
-    )
-}
-
-fn openclaw_json(project: &InitProject, local_vllm: bool) -> Result<serde_json::Value> {
+fn openclaw_json(
+    project: &InitProject,
+    local_vllm: bool,
+    workspace: Option<&str>,
+    bind: &str,
+    port: u16,
+) -> Result<serde_json::Value> {
     let token = project
         .gateway_token
         .as_deref()
@@ -851,35 +622,37 @@ fn openclaw_json(project: &InitProject, local_vllm: bool) -> Result<serde_json::
             .as_deref()
             .context("OpenClaw requires DashScope API key")?;
         let model = project.model.trim_start_matches("bailian/");
+        let mut models = vec![serde_json::json!({
+            "id": model,
+            "name": model,
+            "reasoning": false,
+            "input": ["text"],
+            "contextWindow": 262144,
+            "maxTokens": 65536
+        })];
+        if model != "qwen3-coder-plus" {
+            models.push(serde_json::json!({
+                "id": "qwen3-coder-plus",
+                "name": "qwen3-coder-plus",
+                "reasoning": false,
+                "input": ["text"],
+                "contextWindow": 131072,
+                "maxTokens": 32768
+            }));
+        }
         (
             "bailian",
             serde_json::json!({
                 "baseUrl": project.dashscope_base_url,
                 "apiKey": key,
                 "api": "openai-completions",
-                "models": [
-                    {
-                        "id": model,
-                        "name": model,
-                        "reasoning": false,
-                        "input": ["text"],
-                        "contextWindow": 262144,
-                        "maxTokens": 65536
-                    },
-                    {
-                        "id": "qwen3-coder-plus",
-                        "name": "qwen3-coder-plus",
-                        "reasoning": false,
-                        "input": ["text"],
-                        "contextWindow": 131072,
-                        "maxTokens": 32768
-                    }
-                ]
+                "models": models
             }),
             format!("bailian/{model}"),
         )
     };
 
+    let pep_workdir = workspace.unwrap_or("/workspace");
     let mut allow = vec!["cai-a2a"];
     let mut entries = serde_json::Map::new();
     if !project.disable_pep {
@@ -891,7 +664,7 @@ fn openclaw_json(project: &InitProject, local_vllm: bool) -> Result<serde_json::
                 "config": {
                     "socketPath": "/run/cai/pep.sock",
                     "pepRequired": true,
-                    "defaultWorkdir": "/workspace"
+                    "defaultWorkdir": pep_workdir
                 }
             }),
         );
@@ -933,6 +706,13 @@ fn openclaw_json(project: &InitProject, local_vllm: bool) -> Result<serde_json::
         );
     }
 
+    let mut agent_defaults = serde_json::json!({
+        "model": {"primary": primary_model}
+    });
+    if let Some(ws) = workspace {
+        agent_defaults["workspace"] = serde_json::json!(ws);
+    }
+
     Ok(serde_json::json!({
         "models": {
             "mode": "merge",
@@ -940,7 +720,7 @@ fn openclaw_json(project: &InitProject, local_vllm: bool) -> Result<serde_json::
                 provider_name: provider
             }
         },
-        "agents": {"defaults": {"model": {"primary": primary_model}}},
+        "agents": {"defaults": agent_defaults},
         "tools": {"profile": "full"},
         "plugins": {
             "enabled": true,
@@ -950,8 +730,8 @@ fn openclaw_json(project: &InitProject, local_vllm: bool) -> Result<serde_json::
         "channels": channels,
         "gateway": {
             "mode": "local",
-            "bind": "lan",
-            "port": 18789,
+            "bind": bind,
+            "port": port,
             "auth": {"mode": "token", "token": token},
             "http": {"endpoints": {"responses": {"enabled": true}}},
             "controlUi": {
@@ -964,69 +744,6 @@ fn openclaw_json(project: &InitProject, local_vllm: bool) -> Result<serde_json::
     }))
 }
 
-fn openclaw_yaml(project: &InitProject, pep_bin: Option<&Path>) -> Result<String> {
-    let files = openclaw_files_yaml(project.disable_pep, pep_bin, "/root/.openclaw")?;
-    Ok(format!(
-        r#"schema: confidential-agent/v1
-
-service:
-  id: openclaw
-  ports: [18789]
-  connect: [18789]
-  app_service: cai-openclaw-gateway.service
-
-build:
-  image_name: openclaw-agent
-  resize: 30G
-  packages: [ca-certificates, curl, findutils, git, jq, kernel, kmod, nodejs, npm, podman, tar, xz]
-  files:
-{files}  scripts: [./install-openclaw.sh]
-  variants:
-    release:
-      enabled: false
-    debug:
-      enabled: true
-
-deploy:
-  provider: aliyun
-  image_variant: debug
-  instance_type: {instance_type}
-  region: {region}
-  zone_id: {zone_id}
-  disk_gb: {disk_gb}
-
-attestation:
-  tee: tdx
-  mode: challenge
-  reference_values: {reference_values}
-{rekor}
-a2a:
-  id: openclaw
-  name: openclaw
-  version: "1.0.0"
-  description: "OpenClaw confidential agent"
-  skills:
-    - id: chat
-      name: Chat
-      description: "OpenClaw gateway chat"
-
-resources:
-  openclaw_config:
-    source: ./openclaw.json
-    target: /root/.openclaw/openclaw.json
-    mode: "0600"
-    required: true
-"#,
-        files = files,
-        instance_type = yaml_quote(&project.instance_type)?,
-        region = yaml_quote(&project.region)?,
-        zone_id = yaml_quote(&project.zone_id)?,
-        disk_gb = project.disk_gb,
-        reference_values = yaml_quote(reference_values_name(project.reference_values))?,
-        rekor = rekor_block(project)?,
-    ))
-}
-
 fn openclaw_vllm_yaml(project: &InitProject, pep_bin: &Path) -> Result<String> {
     let files = openclaw_vllm_files_yaml(pep_bin)?;
     let variants = openclaw_vllm_variants_yaml(project.vllm_build_variants);
@@ -1035,7 +752,7 @@ fn openclaw_vllm_yaml(project: &InitProject, pep_bin: &Path) -> Result<String> {
         r#"schema: confidential-agent/v1
 
 service:
-  id: openclaw-vllm
+  id: {service_id}
   ports: [18789]
   connect: [18789]
   app_service: cai-openclaw-gateway.service
@@ -1070,8 +787,8 @@ attestation:
   reference_values: {reference_values}
 {rekor}
 a2a:
-  id: openclaw-vllm
-  name: openclaw-vllm
+  id: {service_id}
+  name: {service_id}
   version: "1.0.0"
   description: "OpenClaw vLLM confidential agent"
   skills:
@@ -1088,6 +805,7 @@ resources:
     mode: "0600"
     required: true
 "#,
+        service_id = &project.service_id,
         files = files,
         variants = variants,
         deploy_variant = deploy_variant,
@@ -1109,12 +827,6 @@ fn openclaw_vllm_variants_yaml(variants: VllmBuildVariants) -> String {
 }
 
 fn vllm_inference_yaml(project: &InitProject) -> Result<String> {
-    // OHTTP-encrypted connect is used for both single-node and multi-node: the
-    // daemon's TNG egress uses a self_generated HPKE key (bound to TDX
-    // attestation) when there are no serf peers (single-node), or a peer_shared
-    // key (multi-node). --replicas > 1 additionally enables an ALB + replicas;
-    // --replicas 1 (default) is a single instance with no ALB, but still
-    // OHTTP-encrypted.
     let connect_line = format!("[{{port: {}, encryption: ohttp}}]", project.vllm_port);
     let multinode = if project.replicas > 1 {
         format!(
@@ -1129,7 +841,7 @@ fn vllm_inference_yaml(project: &InitProject) -> Result<String> {
         r#"schema: confidential-agent/v1
 
 service:
-  id: vllm-inference
+  id: {service_id}
   ports: [{vllm_port}]
   connect: {connect_line}
   app_service: cai-vllm.service
@@ -1179,6 +891,7 @@ resources:
     mode: "0600"
     required: true
 "#,
+        service_id = &project.service_id,
         instance_type = yaml_quote(&project.instance_type)?,
         region = yaml_quote(&project.region)?,
         zone_id = yaml_quote(&project.zone_id)?,
@@ -1191,238 +904,6 @@ resources:
         reference_values = yaml_quote(reference_values_name(project.reference_values))?,
         rekor = rekor_block(project)?,
     ))
-}
-
-fn hermes_yaml(project: &InitProject, pep_bin: &Path) -> Result<String> {
-    Ok(format!(
-        r#"schema: confidential-agent/v1
-
-service:
-  id: hermes-agent
-  ports: [8642]
-  connect: [8642]
-  app_service: cai-hermes-agent.service
-
-build:
-  image_name: hermes-agent
-  resize: 30G
-  packages: [ca-certificates, curl, findutils, git, libatomic, python3.11, shadow-utils, tar, util-linux, xz]
-  files:
-    - source: {pep}
-      target: /usr/local/bin/cai-pep
-      executable: true
-    - source: ./files/tdx-remote-attestation.SKILL.md
-      target: /opt/data/skills/tdx-remote-attestation/SKILL.md
-    - source: ./files/install-hermes-agent-runtime.sh
-      target: /usr/local/libexec/confidential-agent/hermes/install-hermes-agent-runtime.sh
-      executable: true
-    - source: ./files/cai-hermes-agent
-      target: /usr/local/bin/cai-hermes-agent
-      executable: true
-    - source: ./files/cai-hermes-agent.service
-      target: /etc/systemd/system/cai-hermes-agent.service
-  scripts: [./install-hermes-agent.sh]
-  variants:
-    release:
-      enabled: false
-    debug:
-      enabled: true
-
-deploy:
-  provider: aliyun
-  image_variant: debug
-  instance_type: {instance_type}
-  region: {region}
-  zone_id: {zone_id}
-  disk_gb: {disk_gb}
-
-attestation:
-  tee: tdx
-  mode: challenge
-  reference_values: {reference_values}
-{rekor}
-resources:
-  hermes_env:
-    source: ./secrets/hermes.env
-    target: /opt/data/.env
-    owner: "10000"
-    group: "10000"
-    mode: "0600"
-  hermes_config:
-    source: ./secrets/config.yaml
-    target: /opt/data/config.yaml
-    owner: "10000"
-    group: "10000"
-    mode: "0600"
-    mutable: true
-"#,
-        pep = yaml_quote(&pep_bin.to_string_lossy())?,
-        instance_type = yaml_quote(&project.instance_type)?,
-        region = yaml_quote(&project.region)?,
-        zone_id = yaml_quote(&project.zone_id)?,
-        disk_gb = project.disk_gb,
-        reference_values = yaml_quote(reference_values_name(project.reference_values))?,
-        rekor = rekor_block(project)?,
-    ))
-}
-
-fn codex_yaml(project: &InitProject, pep_bin: &Path) -> Result<String> {
-    Ok(format!(
-        r#"schema: confidential-agent/v1
-
-service:
-  id: codex
-  ports: [4500]
-  connect: [4500]
-  app_service: cai-codex-app-server.service
-
-build:
-  image_name: codex-agent
-  resize: 30G
-  packages: [ca-certificates, curl, git, jq, nodejs, npm, procps-ng, tar, xz]
-  files:
-    - source: {pep}
-      target: /usr/local/bin/cai-pep
-      executable: true
-    - source: ./files/install-cli-agent-runtime.sh
-      target: /usr/local/libexec/confidential-agent/cli-agent/install-cli-agent-runtime.sh
-      executable: true
-    - source: ./files/tdx-remote-attestation.SKILL.md
-      target: /root/.agents/skills/tdx-remote-attestation/SKILL.md
-  scripts: [./install-codex.sh]
-  variants:
-    release:
-      enabled: false
-    debug:
-      enabled: true
-
-deploy:
-  provider: aliyun
-  image_variant: debug
-  instance_type: {instance_type}
-  region: {region}
-  zone_id: {zone_id}
-  disk_gb: {disk_gb}
-
-attestation:
-  tee: tdx
-  mode: challenge
-  reference_values: {reference_values}
-{rekor}
-resources:
-  codex_config:
-    source: ./secrets/config.toml
-    target: /root/.codex/config.toml
-    mode: "0600"
-    required: true
-  codex_env:
-    source: ./secrets/codex.env
-    target: /root/.config/confidential-agent/codex/codex.env
-    mode: "0600"
-    required: true
-  codex_app_server_token:
-    source: ./secrets/app-server-token
-    target: /root/.codex/app-server-token
-    mode: "0600"
-    required: true
-"#,
-        pep = yaml_quote(&pep_bin.to_string_lossy())?,
-        instance_type = yaml_quote(&project.instance_type)?,
-        region = yaml_quote(&project.region)?,
-        zone_id = yaml_quote(&project.zone_id)?,
-        disk_gb = project.disk_gb,
-        reference_values = yaml_quote(reference_values_name(project.reference_values))?,
-        rekor = rekor_block(project)?,
-    ))
-}
-
-fn claude_code_yaml(project: &InitProject, pep_bin: &Path) -> Result<String> {
-    Ok(format!(
-        r#"schema: confidential-agent/v1
-
-service:
-  id: claude-code
-  ports: []
-  connect: []
-
-build:
-  image_name: claude-code-agent
-  resize: 30G
-  packages: [ca-certificates, curl, git, jq, nodejs, npm, tar, xz]
-  files:
-    - source: {pep}
-      target: /usr/local/bin/cai-pep
-      executable: true
-    - source: ./files/install-cli-agent-runtime.sh
-      target: /usr/local/libexec/confidential-agent/cli-agent/install-cli-agent-runtime.sh
-      executable: true
-    - source: ./files/tdx-remote-attestation.SKILL.md
-      target: /root/.claude/skills/tdx-remote-attestation/SKILL.md
-  scripts: [./install-claude-code.sh]
-  variants:
-    release:
-      enabled: false
-    debug:
-      enabled: true
-
-deploy:
-  provider: aliyun
-  image_variant: debug
-  instance_type: {instance_type}
-  region: {region}
-  zone_id: {zone_id}
-  disk_gb: {disk_gb}
-
-attestation:
-  tee: tdx
-  mode: challenge
-  reference_values: {reference_values}
-{rekor}
-resources:
-  claude_settings:
-    source: ./secrets/settings.json
-    target: /root/.claude/settings.json
-    mode: "0600"
-    required: true
-  claude_onboarding:
-    source: ./secrets/claude.json
-    target: /root/.claude.json
-    mode: "0600"
-    required: true
-"#,
-        pep = yaml_quote(&pep_bin.to_string_lossy())?,
-        instance_type = yaml_quote(&project.instance_type)?,
-        region = yaml_quote(&project.region)?,
-        zone_id = yaml_quote(&project.zone_id)?,
-        disk_gb = project.disk_gb,
-        reference_values = yaml_quote(reference_values_name(project.reference_values))?,
-        rekor = rekor_block(project)?,
-    ))
-}
-
-fn openclaw_files_yaml(disable_pep: bool, pep_bin: Option<&Path>, home: &str) -> Result<String> {
-    let mut out = String::new();
-    if !disable_pep {
-        let pep_bin = pep_bin.context("PEP-enabled OpenClaw requires cai-pep binary")?;
-        out.push_str(&format!(
-            "    - source: {}\n      target: /usr/local/bin/cai-pep\n      executable: true\n",
-            yaml_quote(&pep_bin.to_string_lossy())?
-        ));
-        out.push_str(&format!(
-            "    - source: ./files/tdx-remote-attestation.SKILL.md\n      target: {home}/skills/tdx-remote-attestation/SKILL.md\n"
-        ));
-    }
-    out.push_str("    - source: ./files/install-cai-pep.sh\n      target: /usr/local/libexec/confidential-agent/openclaw/install-cai-pep.sh\n      executable: true\n");
-    out.push_str("    - source: ./files/install-openclaw-runtime.sh\n      target: /usr/local/libexec/confidential-agent/openclaw/install-openclaw-runtime.sh\n      executable: true\n");
-    if !disable_pep {
-        out.push_str("    - source: ./files/cai-pep-default-policy.json\n      target: /usr/local/share/confidential-agent/openclaw/cai-pep-default-policy.json\n");
-        out.push_str("    - source: ./files/cai-pep-plugin\n      target: /usr/local/share/confidential-agent/openclaw/cai-pep-plugin\n");
-    }
-    out.push_str("    - source: ./files/cai-a2a-plugin\n      target: /usr/local/share/confidential-agent/openclaw/cai-a2a-plugin\n");
-    if !disable_pep {
-        out.push_str("    - source: ./files/patch-openclaw-cai-pep.js\n      target: /usr/local/share/confidential-agent/openclaw/patch-openclaw-cai-pep.js\n      executable: true\n");
-    }
-    Ok(out)
 }
 
 fn openclaw_vllm_files_yaml(pep_bin: &Path) -> Result<String> {
@@ -1467,7 +948,12 @@ fn write_project_next_steps(cli: &Cli, project: &InitProject, body: &str) -> Res
     let directory = project.dir.canonicalize()?;
     let command = format!("confidential-agent --state-dir {}", shell_path(&state));
     let body = body.replace("confidential-agent ", &format!("{command} "));
-    let preamble = format!("Project directory: `{}`\nCA state directory: `{}`\n\nStart here:\n\n```bash\ncd {}\n```\n\nSpec resource paths are relative to the spec file. Command-line key/output paths are relative to this directory.\nBuild/publication records, keys and managed Shelter/Terraform work remain under the CA state directory; keep it across upgrades.\nUse the same --state-dir in later commands even after changing directories.\nThe source one-click/ scripts and their generated work directory are separate entry points; no one-click directory is needed here.\n\n", directory.display(), state.display(), shell_path(&directory));
+    let preamble = format!(
+        "Project directory: `{}`\nCA state directory: `{}`\n\nStart here:\n\n```bash\ncd {}\n```\n\nSpec resource paths are relative to the spec file. Command-line key/output paths are relative to this directory.\nBuild/publication records, keys and managed Shelter/Terraform work remain under the CA state directory; keep it across upgrades.\nUse the same --state-dir in later commands even after changing directories.\nThe source one-click/ scripts and their generated work directory are separate entry points; no one-click directory is needed here.\n\n",
+        directory.display(),
+        state.display(),
+        shell_path(&directory)
+    );
     write_file(
         &project.dir.join("NEXT_STEPS.md"),
         &(preamble + &body),
@@ -1476,13 +962,10 @@ fn write_project_next_steps(cli: &Cli, project: &InitProject, body: &str) -> Res
 }
 
 fn write_next_steps(cli: &Cli, project: &InitProject) -> Result<()> {
-    let connect = match project.target {
-        InitTarget::Claudecode => String::new(),
-        _ => format!(
-            "\n5. Start connect when the service is active:\n\n```bash\nconfidential-agent connect start --service {} --ready-json ./{}-connect-ready.json --wait-ready 180\n```\n",
-            project.service_id, project.service_id
-        ),
-    };
+    let connect = format!(
+        "\n5. Start connect when the service is active:\n\n```bash\nconfidential-agent connect start --service {} --ready-json ./{}-connect-ready.json --wait-ready 180\n```\n",
+        project.service_id, project.service_id
+    );
     let content = format!(
         r#"# Confidential Agent Init: {service}
 
@@ -1665,31 +1148,14 @@ fn default_zone_id(region: &str) -> &'static str {
     }
 }
 
-fn default_instance_type(region: &str, target: InitTarget) -> &'static str {
-    if target == InitTarget::OpenclawVllm || target == InitTarget::VllmInference {
+fn default_instance_type(region: &str, plan: InitPlan) -> &'static str {
+    if matches!(plan, InitPlan::GpuDirect(_) | InitPlan::GpuStaged(_, _)) {
         return "ecs.gn8v-tee.4xlarge";
     }
     match region {
         "cn-hongkong" => "ecs.g8i.xlarge",
         "cn-beijing" => "ecs.g9i.xlarge",
         _ => "ecs.g8i.xlarge",
-    }
-}
-
-fn default_disk_gb(target: InitTarget) -> u32 {
-    match target {
-        InitTarget::Allinone => 120,
-        InitTarget::Openclaw => 200,
-        InitTarget::OpenclawVllm | InitTarget::VllmInference => 512,
-        InitTarget::Hermes => 30,
-        InitTarget::Codex | InitTarget::Claudecode => 60,
-    }
-}
-
-fn default_reference_values(target: InitTarget) -> InitReferenceValues {
-    match target {
-        InitTarget::Allinone | InitTarget::Hermes => InitReferenceValues::Sample,
-        _ => InitReferenceValues::Rekor,
     }
 }
 
@@ -1701,40 +1167,35 @@ fn reference_values_name(value: InitReferenceValues) -> &'static str {
 }
 
 impl InitTarget {
-    fn service_id(self) -> &'static str {
-        match self {
-            InitTarget::Allinone => "allinone",
-            InitTarget::Openclaw => "openclaw",
-            InitTarget::OpenclawVllm => "openclaw-vllm",
-            InitTarget::Hermes => "hermes-agent",
-            InitTarget::Codex => "codex",
-            InitTarget::Claudecode => "claude-code",
-            InitTarget::VllmInference => "vllm-inference",
-        }
+    pub(super) fn is_gpu(self) -> bool {
+        matches!(self, InitTarget::OpenclawVllm | InitTarget::VllmInference)
     }
 
-    fn spec_name(self) -> &'static str {
+    pub(super) fn service_id(self) -> &'static str {
         match self {
-            InitTarget::Allinone => "build.yaml",
-            InitTarget::Openclaw => "openclaw.yaml",
-            InitTarget::OpenclawVllm => "openclaw-vllm.yaml",
-            InitTarget::Hermes => "hermes-agent.yaml",
-            InitTarget::Codex => "codex.yaml",
-            InitTarget::Claudecode => "claude-code.yaml",
-            InitTarget::VllmInference => "vllm-inference.yaml",
-        }
-    }
-
-    fn command_name(self) -> &'static str {
-        match self {
-            InitTarget::Allinone => "allinone",
             InitTarget::Openclaw => "openclaw",
             InitTarget::OpenclawVllm => "openclaw-vllm",
             InitTarget::Hermes => "hermes",
             InitTarget::Codex => "codex",
-            InitTarget::Claudecode => "claudecode",
+            InitTarget::Claudecode => "claude-code",
+            InitTarget::Qodercli => "qodercli",
+            InitTarget::Opencode => "opencode",
+            InitTarget::Pi => "pi",
+            InitTarget::Dsh => "dsh",
             InitTarget::VllmInference => "vllm-inference",
         }
+    }
+
+    pub(super) fn spec_name(self) -> &'static str {
+        match self {
+            InitTarget::OpenclawVllm => "openclaw-vllm.yaml",
+            InitTarget::VllmInference => "vllm-inference.yaml",
+            _ => "instance.yaml",
+        }
+    }
+
+    pub(super) fn command_name(self) -> &'static str {
+        self.service_id()
     }
 }
 
@@ -1747,13 +1208,25 @@ mod tests {
     pub(super) static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
-    fn target_names_match_generated_layout() {
+    fn target_names_match_application_centric_layout() {
         assert_eq!(InitTarget::Openclaw.service_id(), "openclaw");
+        assert_eq!(InitTarget::Hermes.service_id(), "hermes");
+        assert_eq!(InitTarget::Claudecode.command_name(), "claude-code");
+        assert_eq!(InitTarget::Opencode.service_id(), "opencode");
+        assert_eq!(InitTarget::Dsh.service_id(), "dsh");
         assert_eq!(InitTarget::OpenclawVllm.spec_name(), "openclaw-vllm.yaml");
-        assert_eq!(InitTarget::Claudecode.command_name(), "claudecode");
         assert_eq!(InitTarget::VllmInference.service_id(), "vllm-inference");
         assert_eq!(InitTarget::VllmInference.spec_name(), "vllm-inference.yaml");
-        assert_eq!(InitTarget::VllmInference.command_name(), "vllm-inference");
+        assert!(Cli::try_parse_from(["confidential-agent", "init", "allinone"]).is_err());
+        assert!(Cli::try_parse_from(["confidential-agent", "init", "all-in-one"]).is_err());
+        assert!(Cli::try_parse_from([
+            "confidential-agent",
+            "init",
+            "openclaw",
+            "--harness",
+            "codex"
+        ])
+        .is_err());
     }
 
     #[test]
@@ -1858,8 +1331,8 @@ mod tests {
     #[test]
     fn openclaw_vllm_init_can_generate_debug_variant() {
         let project = InitProject {
-            target: InitTarget::OpenclawVllm,
-            service_id: "openclaw-vllm",
+            plan: InitPlan::GpuDirect(InitTarget::OpenclawVllm),
+            service_id: "openclaw-vllm".to_string(),
             dir: PathBuf::from("/tmp/openclaw-vllm"),
             spec_path: PathBuf::from("/tmp/openclaw-vllm/openclaw-vllm.yaml"),
             region: "cn-beijing".to_string(),
@@ -1901,8 +1374,8 @@ mod tests {
 
     fn vllm_inference_project(replicas: u32) -> InitProject {
         InitProject {
-            target: InitTarget::VllmInference,
-            service_id: "vllm-inference",
+            plan: InitPlan::GpuDirect(InitTarget::VllmInference),
+            service_id: "vllm-inference".to_string(),
             dir: PathBuf::from("/tmp/vllm-inference"),
             spec_path: PathBuf::from("/tmp/vllm-inference/vllm-inference.yaml"),
             region: "cn-beijing".to_string(),
@@ -1936,8 +1409,6 @@ mod tests {
 
     #[test]
     fn vllm_inference_yaml_multinode_when_replicas_gt_1() {
-        // --replicas N (N>1) drives the whole multi-node config: ALB + OHTTP
-        // connect are fixed for the vllm-inference scenario.
         let yaml = vllm_inference_yaml(&vllm_inference_project(2)).unwrap();
         assert!(yaml.contains("replicas: 2"));
         assert!(yaml.contains("slb:\n    enabled: true\n    slb_type: alb"));
@@ -1953,18 +1424,18 @@ mod tests {
     }
 
     #[test]
-    fn openclaw_json_includes_dingtalk_when_enabled() {
-        let project = InitProject {
-            target: InitTarget::Openclaw,
-            service_id: "openclaw",
+    fn openclaw_json_supports_dingtalk_and_per_instance_disable_pep() {
+        let mut project = InitProject {
+            plan: InitPlan::SharedCpuDeploy(InitTarget::Openclaw),
+            service_id: "openclaw".to_string(),
             dir: PathBuf::from("/tmp/openclaw"),
-            spec_path: PathBuf::from("/tmp/openclaw/openclaw.yaml"),
+            spec_path: PathBuf::from("/tmp/openclaw/instance.yaml"),
             region: "cn-beijing".to_string(),
             zone_id: "cn-beijing-i".to_string(),
             instance_type: "ecs.g9i.xlarge".to_string(),
-            disk_gb: 200,
+            disk_gb: 120,
             replicas: 1,
-            reference_values: InitReferenceValues::Sample,
+            reference_values: InitReferenceValues::Rekor,
             cosign_key: None,
             slsa_generator: PathBuf::from("/usr/libexec/shelter/slsa/slsa-generator"),
             dashscope_key: Some("sk-test".to_string()),
@@ -1977,112 +1448,53 @@ mod tests {
             enable_dingtalk: true,
             dingtalk_client_id: Some("ding-id".to_string()),
             dingtalk_client_secret: Some("ding-secret".to_string()),
-            vllm_model_id: "Qwen/Qwen3.6-35B-A3B".to_string(),
-            vllm_model_dir: "/opt/models/Qwen3.6-35B-A3B".to_string(),
-            vllm_served_model_name: "Qwen3.6-35B-A3B".to_string(),
+            vllm_model_id: String::new(),
+            vllm_model_dir: String::new(),
+            vllm_served_model_name: String::new(),
             vllm_port: 8090,
-            vllm_version: "0.19.1".to_string(),
+            vllm_version: "0.28.0".to_string(),
             vllm_build_variants: VllmBuildVariants::default(),
             oss_bucket: String::new(),
             oss_endpoint: "https://oss-cn-beijing-internal.aliyuncs.com".to_string(),
             model_key_file: PathBuf::new(),
         };
-        let config = openclaw_json(&project, false).unwrap();
+        let config = openclaw_json(
+            &project,
+            false,
+            Some("/opt/data/allinone/workspace"),
+            "lan",
+            18789,
+        )
+        .unwrap();
         assert_eq!(config["plugins"]["entries"]["dingtalk"]["enabled"], true);
+        assert_eq!(config["plugins"]["entries"]["cai-pep"]["enabled"], true);
         assert_eq!(config["channels"]["dingtalk"]["clientId"], "ding-id");
         assert_eq!(
             config["channels"]["dingtalk"]["clientSecret"],
             "ding-secret"
         );
-    }
+        assert_eq!(config["gateway"]["controlUi"]["basePath"], "/openclaw");
+        assert_eq!(config["gateway"]["bind"], "lan");
 
-    #[test]
-    fn init_generates_all_targets_with_sample_reference_values() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        let temp = tempfile::tempdir().unwrap();
-        let pep = temp.path().join("cai-pep");
-        fs::write(&pep, "#!/bin/sh\nexit 0\n").unwrap();
-        set_mode(&pep, 0o755).unwrap();
-        let previous = std::env::var_os("CA_PEP_BIN");
-        std::env::set_var("CA_PEP_BIN", &pep);
-
-        let key_file = temp.path().join("model.key");
-        fs::write(&key_file, "test-passphrase\n").unwrap();
-
-        for target in [
-            "openclaw",
-            "openclaw-vllm",
-            "hermes",
-            "codex",
-            "claudecode",
-            "vllm-inference",
-        ] {
-            let cli = Cli::parse_from([
-                "confidential-agent",
-                "--state-dir",
-                temp.path().join("state").to_str().unwrap(),
-                "init",
-                target,
-                "--non-interactive",
-                "--force",
-                "--output-dir",
-                temp.path().join("init").to_str().unwrap(),
-                "--reference-values",
-                "sample",
-                "--dashscope-api-key",
-                "sk-test",
-                "--gateway-token",
-                "0123456789abcdef0123456789abcdef",
-                "--hermes-api-server-key",
-                "abcdef0123456789abcdef0123456789",
-                "--codex-app-server-token",
-                "codex-token",
-                "--model-key-file",
-                key_file.to_str().unwrap(),
-                "--oss-bucket",
-                "test-bucket:/qwen",
-            ]);
-            let Commands::Init(args) = &cli.command else {
-                panic!("expected init command");
-            };
-            cmd_init(&cli, args).unwrap();
-            let service_id = args.target.unwrap().service_id();
-            let spec = temp
-                .path()
-                .join("init")
-                .join(service_id)
-                .join(args.target.unwrap().spec_name());
-            AgentSpec::from_path(&spec).unwrap();
-            assert!(temp
-                .path()
-                .join("init")
-                .join(service_id)
-                .join("NEXT_STEPS.md")
-                .exists());
-            if target == "vllm-inference" {
-                let text = std::fs::read_to_string(&spec).unwrap();
-                assert!(text.contains("mode: challenge"));
-                assert!(text.contains("id: vllm-inference"));
-                assert!(text.contains("ports: [8080]"));
-                assert!(!text.contains("a2a:"));
-                assert!(text.contains("model_decryption_key"));
-                assert!(text.contains("cai_model_env"));
-                let model_env = std::fs::read_to_string(
-                    temp.path()
-                        .join("init")
-                        .join("vllm-inference")
-                        .join("cai-model.env"),
-                )
-                .unwrap();
-                assert!(model_env.contains("VLLM_PORT=8080"));
-            }
-        }
-
-        if let Some(value) = previous {
-            std::env::set_var("CA_PEP_BIN", value);
-        } else {
-            std::env::remove_var("CA_PEP_BIN");
-        }
+        project.disable_pep = true;
+        let no_pep = openclaw_json(
+            &project,
+            false,
+            Some("/opt/data/allinone/workspace"),
+            "lan",
+            18789,
+        )
+        .unwrap();
+        assert!(no_pep["plugins"]["entries"].get("cai-pep").is_none());
+        assert!(!no_pep["plugins"]["allow"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == "cai-pep"));
+        assert_eq!(
+            no_pep["gateway"]["auth"]["token"],
+            "0123456789abcdef0123456789abcdef"
+        );
     }
 
     #[test]
@@ -2094,8 +1506,6 @@ mod tests {
         set_mode(&pep, 0o755).unwrap();
         let previous_pep = std::env::var_os("CA_PEP_BIN");
         std::env::set_var("CA_PEP_BIN", &pep);
-        // vllm-inference uses a local vLLM model, not Bailian/DashScope, so it
-        // must NOT require a DashScope key. Ensure no env leak masks the test.
         let previous_dashscope = std::env::var_os("DASHSCOPE_API_KEY");
         let previous_bailian = std::env::var_os("BAILIAN_API_KEY");
         std::env::remove_var("DASHSCOPE_API_KEY");
@@ -2133,11 +1543,10 @@ mod tests {
             .join("init")
             .join("vllm-inference")
             .join("vllm-inference.yaml");
-        AgentSpec::from_path(&spec).unwrap();
-        let text = std::fs::read_to_string(&spec).unwrap();
-        assert!(text.contains("id: vllm-inference"));
-        assert!(text.contains("mode: challenge"));
-        assert!(text.contains("ports: [8080]"));
+        let spec = AgentSpec::from_path(&spec).unwrap();
+        assert_eq!(spec.service.id, "vllm-inference");
+        assert_eq!(spec.attestation.mode, AttestationMode::Challenge);
+        assert_eq!(spec.service.ports, [8080]);
         let model_env = std::fs::read_to_string(
             temp.path()
                 .join("init")

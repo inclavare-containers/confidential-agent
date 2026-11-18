@@ -111,6 +111,7 @@ def main():
         raise RuntimeError('unexpected Node version while locating the n download cache')
     node = Path(shutil.which('node')).resolve()
     roots = [Path(subprocess.check_output(['npm', 'root', '-g'], text=True).strip()),
+             Path('/opt/data/allinone/home/.openclaw/extensions/dingtalk/node_modules'),
              Path('/usr/local/lib/cai-hermes/repo/node_modules'),
              Path('/usr/local/lib/cai-hermes/tools'),
              Path('/usr/local/share/uv/python')]

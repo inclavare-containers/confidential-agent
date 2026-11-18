@@ -29,6 +29,7 @@
     "opencode": "1.19.0",
     "pi": "1.5.2",
     "dsh": "0.2.2-rc.1",
-    "hermes": "e06df9c2eae6901f4c88f464e0ae6e753c0428b8"
+    "hermes": "e06df9c2eae6901f4c88f464e0ae6e753c0428b8",
+    "dingtalk": "e7ec428d8a38208ce43b4c825239355cd279f686"
   }
 }

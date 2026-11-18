@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 
 detect_os_id() {
-  if [[ -r /etc/os-release ]]; then
-    # shellcheck disable=SC1091
-    . /etc/os-release
+  local os_release="${CA_OS_RELEASE_FILE:-/etc/os-release}"
+  if [[ -r "$os_release" ]]; then
+    # shellcheck disable=SC1090
+    . "$os_release"
     # The OpenAnolis edition of Alibaba Cloud Linux 3 ships with ID=centos
     # but carries ALINUX_MINOR_ID / VARIANT_ID=openanolis and the same
     # alinux3-* repos. Treat it as alinux so the one-click runs on it.
@@ -18,9 +19,10 @@ detect_os_id() {
 }
 
 detect_os_version_id() {
-  if [[ -r /etc/os-release ]]; then
-    # shellcheck disable=SC1091
-    . /etc/os-release
+  local os_release="${CA_OS_RELEASE_FILE:-/etc/os-release}"
+  if [[ -r "$os_release" ]]; then
+    # shellcheck disable=SC1090
+    . "$os_release"
     printf '%s\n' "${VERSION_ID:-unknown}"
   else
     printf 'unknown\n'
@@ -55,6 +57,44 @@ install_packages_best_effort() {
   "$pm" install -y "$@"
 }
 
+needs_cargo_build() {
+  [[ "${CA_PACKAGED_INSTALL:-0}" != "1" && "${CA_SKIP_CARGO_BUILD:-0}" != "1" ]]
+}
+
+needs_local_image_build() {
+  case "${CA_MODE:-deploy-openclaw}" in
+    deploy-openclaw)
+      [[ "${CA_IMAGE_SOURCE:-prebuilt}" == "build" && "${CA_SKIP_BUILD:-0}" != "1" ]]
+      ;;
+    deploy-openclaw-vllm)
+      [[ "${CA_SKIP_BUILD:-0}" != "1" ]]
+      ;;
+    deploy-vllm-inference)
+      [[ -z "${CA_IMAGE_SPEC:-}" && "${CA_SKIP_BUILD:-0}" != "1" ]]
+      ;;
+    install-only)
+      [[ "${CA_PACKAGED_INSTALL:-0}" != "1" || "${CA_IMAGE_SOURCE:-prebuilt}" == "build" ]]
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+needs_host_node_runtime() {
+  case "${CA_MODE:-deploy-openclaw}" in
+    deploy-openclaw-vllm)
+      [[ "${CA_SKIP_HOST_OPENCLAW:-0}" != "1" && "${CA_SKIP_HOST_CLIENT:-0}" != "1" ]]
+      ;;
+    deploy-openclaw)
+      [[ -n "$(selected_host_client)" ]]
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 install_os_dependencies() {
   if [[ "${CA_SKIP_DEPS:-0}" == "1" ]]; then
     log "skipping OS dependency installation"
@@ -71,35 +111,44 @@ install_os_dependencies() {
     ca-certificates
     curl
     findutils
-    gcc
-    git
-    glibc-devel
     jq
-    libguestfs-tools-c
-    make
     openssh-clients
     openssl
-    pkgconf-pkg-config
     python3.11
     tar
     util-linux
     xz
   )
+  if needs_local_image_build; then
+    common_packages+=(libguestfs-tools-c)
+  fi
+  if needs_cargo_build; then
+    common_packages+=(
+      gcc
+      git
+      glibc-devel
+      make
+      pkgconf-pkg-config
+    )
+  fi
+  if [[ "${CA_MODE:-}" == deploy-openclaw && "$(selected_host_client)" == codex ]]; then
+    common_packages+=(procps-ng)
+  fi
   install_packages_best_effort "$pm" "${common_packages[@]}"
 
-  if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
-    if ! install_packages_best_effort "$pm" nodejs npm; then
-      warn "failed to install nodejs/npm; install them manually before installing the host OpenClaw CLI"
+  if needs_host_node_runtime; then
+    if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+      if ! install_packages_best_effort "$pm" nodejs npm; then
+        warn "failed to install nodejs/npm; install them manually before installing the selected host client"
+      fi
     fi
   fi
 
-  if ! command -v cargo >/dev/null 2>&1; then
+  if needs_cargo_build && ! command -v cargo >/dev/null 2>&1; then
     if ! install_packages_best_effort "$pm" cargo rust; then
       warn "failed to install cargo/rust from OS repositories; install them manually or pass --allow-rustup"
     fi
   fi
-
-
 }
 
 host_node22_usable() {
@@ -185,23 +234,29 @@ ensure_host_node22() {
     hash -r
   fi
   install_node_with_retry "${CA_NODE_VERSION:-24.21.0}" "$n_bin"
-  export PATH=/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin
+  export PATH=/usr/local/bin:/usr/local/sbin:$PATH
   hash -r
   host_node22_usable || die "Node.js ${CA_NODE_VERSION:-24.21.0} is not usable after installation"
 }
 
-openclaw_global_package_version() {
+npm_global_package_version() {
+  local pkg_name="$1"
   local npm_root package_json
   npm_root="$(npm root -g 2>/dev/null || true)"
-  package_json="$npm_root/openclaw/package.json"
+  package_json="$npm_root/$pkg_name/package.json"
   [[ -f "$package_json" ]] || return 1
   node -e 'console.log(require(process.argv[1]).version)' "$package_json"
 }
 
+openclaw_global_package_version() {
+  npm_global_package_version openclaw
+}
+
 ensure_host_openclaw_runtime() {
-  if [[ "${CA_SKIP_HOST_OPENCLAW:-0}" == "1" ]]; then
+  if [[ "${CA_SKIP_HOST_OPENCLAW:-0}" == "1" || "${CA_SKIP_HOST_CLIENT:-0}" == "1" ]]; then
     return 0
   fi
+  if command -v openclaw >/dev/null && [[ "$(openclaw_global_package_version)" == "$CA_OPENCLAW_VERSION" ]]; then return; fi
   is_root || die "installing host OpenClaw CLI requires root"
   ensure_host_node22
   command -v npm >/dev/null 2>&1 || die "npm is required to install OpenClaw"
@@ -224,6 +279,22 @@ ensure_host_openclaw_runtime() {
   cli_version="$(openclaw --version 2>/dev/null | awk '{print $2}' || true)"
   [[ "$cli_version" == "$CA_OPENCLAW_VERSION" ]] || die "host OpenClaw version mismatch: expected $CA_OPENCLAW_VERSION, got ${cli_version:-unknown}"
   log "host OpenClaw CLI is ready: $(command -v openclaw) ($cli_version)"
+}
+
+ensure_host_access_client() {
+  local client package version
+  client="$(selected_host_client)"
+  case "$client" in
+    '') return ;;
+    openclaw) ensure_host_openclaw_runtime; return ;;
+    codex) package=@openai/codex ;;
+    opencode) package=opencode-ai ;;
+  esac
+  version="$(ca_software_version "$client")"
+  if [[ "$(npm_global_package_version "$package")" == "$version" ]] && command -v "$client" >/dev/null; then return; fi
+  ensure_host_node22
+  npm install --global --registry "$CA_NPM_REGISTRY" --no-audit --no-fund "$package@$version"
+  "$client" --version
 }
 
 rust_toolchain_usable() {

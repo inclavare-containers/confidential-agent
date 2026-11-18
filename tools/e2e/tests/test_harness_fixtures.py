@@ -30,7 +30,7 @@ class HarnessFixturesTest(unittest.TestCase):
                                                        "ports": spec["service"]["ports"]}))
                         runtime["validate_declared_ports"](port, context)
                         if fixture.name == "openclaw":
-                            self.assertEqual(spec["service"]["connect"], [])
+                            self.assertEqual(spec["service"]["connect"], [18789])
                             # OpenClaw rejects --local when this fixture's gateway owns
                             # the state directory; model calls must use that gateway.
                             command = shlex.split(json.loads((fixture / "probe.json").read_text())["command"])

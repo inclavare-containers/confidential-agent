@@ -7,6 +7,10 @@ ensure_shelter() {
       return
       ;;
   esac
+  if [[ "${CA_PACKAGED_INSTALL:-0}" == 1 && -z "${CA_SHELTER_RPM:-}" ]]; then
+    export CA_SHELTER_BIN="${CA_SHELTER_BIN:-/usr/bin/shelter}"
+    return
+  fi
   local shelter_rpm=""
   if [[ -n "${CA_SHELTER_BIN:-}" ]]; then
     [[ -x "$CA_SHELTER_BIN" ]] || die "CA_SHELTER_BIN is not executable: $CA_SHELTER_BIN"
@@ -29,12 +33,13 @@ ensure_shelter() {
   "$ROOT_DIR/hack/check-shelter.sh" "$CA_SHELTER_BIN" || die "Shelter is incompatible; install the bundled RPM or set CA_SHELTER_BIN to a compatible binary"
   "$CA_SHELTER_BIN" --version >/dev/null
   log "using Shelter: $CA_SHELTER_BIN"
-  if [[ "${CA_MODE:-}" != "cleanup" && "${CA_MODE:-}" != "cleanup-openclaw-vllm" && "${CA_MODE:-}" != "cleanup-vllm-inference" && "$CA_REFERENCE_VALUES" == "rekor" && ! -x "$CA_SLSA_GENERATOR" ]]; then
+  if [[ "$CA_REFERENCE_VALUES" == rekor && ! -x "$CA_SLSA_GENERATOR" ]] && needs_local_image_build; then
     die "SLSA generator is required for rekor mode: $CA_SLSA_GENERATOR"
   fi
 }
 
 ensure_shelter_cleanup() {
+  if [[ "${CA_PACKAGED_INSTALL:-0}" == 1 ]]; then CA_SHELTER_BIN="${CA_SHELTER_BIN:-/usr/bin/shelter}"; fi
   CA_SHELTER_BIN="${CA_SHELTER_BIN:-$(command -v shelter || true)}"
   [[ -n "$CA_SHELTER_BIN" && -x "$CA_SHELTER_BIN" ]] ||
     die "Shelter is required for cleanup; install a compatible CLI or set CA_SHELTER_BIN"
@@ -81,11 +86,14 @@ install_shelter_rpm() {
   installed="$(rpm -q --qf '%{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}' shelter 2>/dev/null || true)"
   [[ "$required" != "$installed" ]] || operation=reinstall
   "$pm" "$operation" -y "$rpm"
-  "$pm" install -y libguestfs-tools-c
+  if [[ "${CA_MODE:-}" != deploy-openclaw || "${CA_IMAGE_SOURCE:-prebuilt}" == build ]]; then
+    "$pm" install -y libguestfs-tools-c
+  fi
 }
 
 build_confidential_agent() {
-  if [[ "$CA_SKIP_CARGO_BUILD" == "1" ]]; then
+  if [[ "${CA_PACKAGED_INSTALL:-0}" == 1 ]]; then return; fi
+  if [[ "${CA_SKIP_CARGO_BUILD:-0}" == 1 ]]; then
     [[ -x "$CA_BIN" ]] || die "confidential-agent binary is missing: $CA_BIN"
     [[ -x "$CA_AGENTD_BIN" ]] || die "confidential-agentd binary is missing: $CA_AGENTD_BIN"
     [[ -x "$CA_GATEWAY_BIN" ]] || die "cai-gateway binary is missing: $CA_GATEWAY_BIN"
@@ -112,6 +120,11 @@ build_confidential_agent() {
 
 install_confidential_agent_cli() {
   if [[ "${CA_INSTALL_CLI:-1}" != "1" ]]; then
+    return 0
+  fi
+  if [[ "${CA_PACKAGED_INSTALL:-0}" == "1" ]]; then
+    export CA_BIN CA_AGENTD_BIN CA_GATEWAY_BIN CA_PEP_BIN
+    log "using packaged Confidential Agent binaries: $CA_BIN"
     return 0
   fi
   is_root || die "installing confidential-agent to /usr/local/bin requires root"
@@ -143,6 +156,7 @@ install_confidential_agent_cli() {
 }
 
 ensure_native_tools() {
+  if [[ "${CA_PACKAGED_INSTALL:-0}" == 1 ]]; then return; fi
   log "installing native host tools"
   CA_TOOLS_DIR="$CA_TOOLS_DIR" "$ROOT_DIR/packaging/install-native-tools.sh"
 }
@@ -201,99 +215,17 @@ build_openclaw_image() {
     return
   fi
   local phase
-  phase="$(openclaw_phase || true)"
+  phase="$(service_status | jq -er '.phase' || true)"
   if [[ "$phase" == "deployed" || "$phase" == "active" ]]; then
     log "$CA_SERVICE_LABEL is $phase; skipping image build (existing deployment detected)"
     return
   fi
   log "building $CA_SERVICE_LABEL confidential image"
-  (cd "$CA_PROJECT_DIR" && "$CA_BIN" --tools-dir "$CA_TOOLS_DIR" --state-dir "$CA_STATE_DIR" build --spec "$CA_SPEC_PATH")
+  (cd "$CA_PROJECT_DIR" && ca_cmd build --spec "$CA_SPEC_PATH")
 }
 
-openclaw_phase() {
-  local status_json="$CA_WORK_DIR/status-local.json"
-  ca_cmd status --json >"$status_json" 2>/dev/null || return 1
-  python3.11 - "$status_json" "$CA_SERVICE_ID" <<'PY'
-import json
-import sys
-
-with open(sys.argv[1], encoding="utf-8") as f:
-    data = json.load(f)
-items = data if isinstance(data, list) else data.get("services", [])
-service_id = sys.argv[2]
-for item in items:
-    if item.get("service_id") == service_id:
-        phase = item.get("phase")
-        if phase:
-            print(phase)
-            raise SystemExit(0)
-raise SystemExit(1)
-PY
-}
-
-openclaw_is_active() {
-  local status_json="$CA_WORK_DIR/status-local.json"
-  ca_cmd status --json >"$status_json" 2>/dev/null || return 1
-  python3.11 - "$status_json" "$CA_SERVICE_ID" <<'PY' >/dev/null 2>&1
-import json
-import sys
-
-with open(sys.argv[1], encoding="utf-8") as f:
-    data = json.load(f)
-items = data if isinstance(data, list) else data.get("services", [])
-service_id = sys.argv[2]
-for item in items:
-    if item.get("service_id") == service_id and item.get("phase") == "active":
-        cloud = item.get("cloud") if isinstance(item.get("cloud"), dict) else {}
-        if cloud.get("present") is True:
-            raise SystemExit(0)
-raise SystemExit(1)
-PY
-}
-
-openclaw_public_ip() {
-  local status_json="$CA_WORK_DIR/status-local.json"
-  ca_cmd status --json >"$status_json" 2>/dev/null || return 1
-  python3.11 - "$status_json" "$CA_SERVICE_ID" <<'PY'
-import json
-import sys
-
-with open(sys.argv[1], encoding="utf-8") as f:
-    data = json.load(f)
-items = data if isinstance(data, list) else data.get("services", [])
-service_id = sys.argv[2]
-for item in items:
-    if item.get("service_id") == service_id:
-        cloud = item.get("cloud") if isinstance(item.get("cloud"), dict) else {}
-        public_ip = cloud.get("public_ip")
-        if public_ip:
-            print(public_ip)
-            raise SystemExit(0)
-raise SystemExit(1)
-PY
-}
-
-openclaw_debug_ssh_key() {
-  local status_json="$CA_WORK_DIR/status-local.json"
-  ca_cmd status --json >"$status_json" 2>/dev/null || return 1
-  python3.11 - "$status_json" "$CA_SERVICE_ID" <<'PY'
-import json
-import sys
-
-with open(sys.argv[1], encoding="utf-8") as f:
-    data = json.load(f)
-items = data if isinstance(data, list) else data.get("services", [])
-service_id = sys.argv[2]
-for item in items:
-    if item.get("service_id") == service_id:
-        build = item.get("build") if isinstance(item.get("build"), dict) else {}
-        debug_ssh = build.get("debug_ssh") if isinstance(build.get("debug_ssh"), dict) else {}
-        private_key = debug_ssh.get("private_key")
-        if private_key:
-            print(private_key)
-            raise SystemExit(0)
-raise SystemExit(1)
-PY
+service_status() {
+  ca_cmd status --service "$CA_SERVICE_ID" --json 2>/dev/null | jq -er '.[0]'
 }
 
 deploy_openclaw_service() {
@@ -301,22 +233,22 @@ deploy_openclaw_service() {
     log "skipping $CA_SERVICE_LABEL deploy"
     return
   fi
-  if openclaw_is_active; then
+  local status
+  status="$(service_status || true)"
+  if jq -e '.phase == "active" and .cloud.present' <<<"${status:-null}" >/dev/null; then
     log "$CA_SERVICE_LABEL is already active; skipping cloud deploy"
     CA_DEPLOY_SKIPPED_ACTIVE=1
     return
   fi
-  local phase
-  phase="$(openclaw_phase || true)"
-  if [[ "$phase" == "deployed" ]]; then
+  if [[ "$(jq -r '.phase' <<<"$status")" == deployed ]]; then
     local public_ip
-    public_ip="$(openclaw_public_ip)" || die "$CA_SERVICE_LABEL is deployed but has no recorded public IP; run 'confidential-agent destroy $CA_SERVICE_ID' and redeploy"
+    public_ip="$(jq -er '.cloud.public_ip' <<<"$status")" || die "$CA_SERVICE_LABEL is deployed but has no recorded public IP; run 'confidential-agent destroy $CA_SERVICE_ID' and redeploy"
     log "$CA_SERVICE_LABEL is deployed but not active; resuming from resource injection to $public_ip"
-    (cd "$CA_PROJECT_DIR" && "$CA_BIN" --tools-dir "$CA_TOOLS_DIR" --state-dir "$CA_STATE_DIR" inject --spec "$CA_SPEC_PATH" --target-ip "$public_ip")
+    (cd "$CA_PROJECT_DIR" && ca_cmd inject --spec "$CA_SPEC_PATH" --target-ip "$public_ip")
     return
   fi
   log "deploying $CA_SERVICE_LABEL to Aliyun"
-  (cd "$CA_PROJECT_DIR" && "$CA_BIN" --tools-dir "$CA_TOOLS_DIR" --state-dir "$CA_STATE_DIR" deploy --spec "$CA_SPEC_PATH")
+  (cd "$CA_PROJECT_DIR" && ca_cmd deploy --spec "$CA_SPEC_PATH")
 }
 
 sync_active_openclaw_resources() {
@@ -324,12 +256,12 @@ sync_active_openclaw_resources() {
     return
   fi
   local public_ip
-  public_ip="$(openclaw_public_ip)" || {
+  public_ip="$(service_status | jq -er '.cloud.public_ip')" || {
     warn "could not determine active $CA_SERVICE_LABEL public IP; skipping resource sync"
     return
   }
   log "syncing resources to active $CA_SERVICE_LABEL at $public_ip"
-  (cd "$CA_PROJECT_DIR" && "$CA_BIN" --tools-dir "$CA_TOOLS_DIR" --state-dir "$CA_STATE_DIR" inject --spec "$CA_SPEC_PATH" --target-ip "$public_ip")
+  (cd "$CA_PROJECT_DIR" && ca_cmd inject --spec "$CA_SPEC_PATH" --target-ip "$public_ip")
   CA_ACTIVE_RESOURCES_SYNCED=1
 }
 
@@ -342,11 +274,11 @@ restart_active_openclaw_app() {
     return
   fi
   local public_ip key known_hosts
-  public_ip="$(openclaw_public_ip)" || {
+  public_ip="$(service_status | jq -er '.cloud.public_ip')" || {
     warn "could not determine active OpenClaw public IP; skipping gateway restart"
     return
   }
-  key="$(openclaw_debug_ssh_key)" || {
+  key="$(service_status | jq -er '.build.debug_ssh.private_key')" || {
     warn "could not determine debug SSH key; skipping gateway restart"
     return
   }
@@ -371,102 +303,93 @@ wait_for_live_status() {
   local status_json="$CA_WORK_DIR/status-live.json"
   log "waiting for live guest status"
   while ((SECONDS < deadline)); do
-    if ca_cmd status --live --json >"$status_json" 2>"$CA_WORK_DIR/status-live.err"; then
-      if python3.11 - "$status_json" "$CA_SERVICE_ID" <<'PY' >/dev/null 2>&1
-import json
-import sys
-
-with open(sys.argv[1], encoding="utf-8") as f:
-    data = json.load(f)
-items = data if isinstance(data, list) else data.get("services", [])
-service_id_filter = sys.argv[2]
-for item in items:
-    local = item.get("local") if isinstance(item.get("local"), dict) else {}
-    daemon = item.get("daemon") if isinstance(item.get("daemon"), dict) else {}
-    service_id = item.get("service_id") or item.get("service") or local.get("service_id") or daemon.get("service_id")
-    if service_id == service_id_filter:
-        if daemon.get("app_ready") is True:
-            raise SystemExit(0)
-        if daemon.get("phase") in ("running", "ready", "active"):
-            raise SystemExit(0)
-        if item.get("phase") in ("ready", "active") or local.get("phase") in ("ready", "active"):
-            raise SystemExit(0)
-raise SystemExit(1)
-PY
-      then
+    if ca_cmd status --service "$CA_SERVICE_ID" --live --json >"$status_json" 2>"$CA_WORK_DIR/status-live.err"; then
+      if jq -e '.[0].daemon.app_ready' "$status_json" >/dev/null; then
         log "live status is available"
         return
       fi
     fi
     sleep 10
   done
+  if [[ "$CA_MODE" == deploy-openclaw ]]; then
+    die "guest did not become ready within ${CA_STATUS_TIMEOUT_SEC}s; see $status_json and $CA_WORK_DIR/status-live.err"
+  fi
   warn "live status did not become ready within ${CA_STATUS_TIMEOUT_SEC}s; see $CA_WORK_DIR/status-live.err"
 }
 
-parse_connect_port() {
-  awk '/^connect 127\.0\.0\.1:/ { split($2, a, ":"); print a[2]; exit }' "$1"
+expected_connect_guest_port() {
+  case "${CA_ONE_CLICK_TARGET:-openclaw}" in
+    vllm-inference) printf '%s\n' "$CA_VLLM_INFERENCE_PORT" ;;
+    openclaw-vllm) printf '18789\n' ;;
+    openclaw) harness_guest_port ;;
+  esac
+}
+
+probe_codex_websocket() {
+  python3.11 - "$CA_CONNECT_HOST" "$CA_CONNECT_PORT" "$CA_PROJECT_DIR/secrets/app-server-token" <<'PROBE'
+import base64, http.client, os, sys
+from pathlib import Path
+
+client = http.client.HTTPConnection(sys.argv[1], int(sys.argv[2]), timeout=5)
+client.request("GET", "/", headers={
+    "Connection": "Upgrade", "Upgrade": "websocket", "Sec-WebSocket-Version": "13",
+    "Sec-WebSocket-Key": base64.b64encode(os.urandom(16)).decode(),
+    "Authorization": "Bearer " + Path(sys.argv[3]).read_text().strip(),
+})
+response = client.getresponse()
+client.close()
+sys.exit(0 if response.status == 101 else 1)
+PROBE
+}
+
+probe_connect_endpoint() {
+  local url="http://$CA_CONNECT_HOST:$CA_CONNECT_PORT" path="${CA_CONNECT_READINESS_PATH:-}"
+  local -a options=(-fsSL --max-time 5)
+  case "${CA_ONE_CLICK_TARGET:-openclaw}:${CA_HARNESS:-openclaw}" in
+    openclaw:codex) probe_codex_websocket; return ;;
+    openclaw:dsh)
+      CA_DSH_WEB_URL="$(ca_cmd ssh "$CA_SERVICE_ID" -- cai-agent --web-url --port "$CA_CONNECT_PORT")" || return
+      curl "${options[@]}" -b '' "$CA_DSH_WEB_URL" >/dev/null
+      return ;;
+    openclaw:hermes)
+      options+=(-H "Authorization: Bearer $(jq -er .environment.API_SERVER_KEY "$CA_PROJECT_DIR/secrets/runtime.json")")
+      path="${path:-/v1/models}" ;;
+    openclaw:opencode)
+      options+=(-u "opencode:$(jq -er .environment.OPENCODE_SERVER_PASSWORD "$CA_PROJECT_DIR/secrets/runtime.json")")
+      path="${path:-/global/health}" ;;
+    openclaw:openclaw|openclaw-vllm:*) options+=(-H "Authorization: Bearer $CA_GATEWAY_TOKEN") ;;
+  esac
+  curl "${options[@]}" "$url$path" >/dev/null
 }
 
 start_connect() {
-  if [[ "$CA_SKIP_DEPLOY" == "1" || "$CA_START_CONNECT" != "1" ]]; then
-    return
-  fi
-  require_cmd setsid
-  local log_path="$CA_WORK_DIR/${CA_CONNECT_NAME:-connect}.log"
-  local pid_path="$CA_WORK_DIR/${CA_CONNECT_NAME:-connect}.pid"
-  log "starting local OHTTP connect tunnel"
-  if [[ -f "$pid_path" ]]; then
-    local old_pid
-    old_pid="$(cat "$pid_path" 2>/dev/null || true)"
-    if [[ -n "$old_pid" ]] && kill -0 "$old_pid" >/dev/null 2>&1; then
-      log "stopping previous connect tunnel (pid $old_pid)"
-      kill "$old_pid" >/dev/null 2>&1 || true
-      sleep 1
-    fi
-    rm -f "$pid_path"
-  fi
-  rm -f "$log_path" "$pid_path"
-  setsid "$CA_BIN" --tools-dir "$CA_TOOLS_DIR" --state-dir "$CA_STATE_DIR" connect --service "$CA_SERVICE_ID" >"$log_path" 2>&1 &
-  printf '%s\n' "$!" >"$pid_path"
-
+  if [[ "$CA_SKIP_DEPLOY" == 1 || "$CA_START_CONNECT" != 1 ]]; then return; fi
+  local ready="$CA_READY_JSON" log_path="$CA_WORK_DIR/$CA_CONNECT_NAME.log" endpoint
+  if [[ -f "$ready" ]]; then ca_cmd connect stop --ready-json "$ready"; fi
+  ca_cmd connect start --service "$CA_SERVICE_ID" --ready-json "$ready" --log-file "$log_path" --wait-ready "$CA_CONNECT_TIMEOUT_SEC" || return
+  endpoint="$(jq -er --argjson port "$(expected_connect_guest_port)" '
+    .process.pid as $pid | .client_endpoints[] | select(.guest_port == $port) |
+    [.local_host,.local_port,$pid] | @tsv' "$ready")" || return
+  IFS=$'\t' read -r CA_CONNECT_HOST CA_CONNECT_PORT CA_CONNECT_PID <<<"$endpoint"
   local deadline=$((SECONDS + CA_CONNECT_TIMEOUT_SEC))
-  local port=""
-  local readiness_path="${CA_CONNECT_READINESS_PATH:-/openclaw}"
-  while ((SECONDS < deadline)); do
-    port="$(parse_connect_port "$log_path" || true)"
-    if [[ -n "$port" ]] && curl -fsSL --max-time 5 "http://127.0.0.1:$port$readiness_path" >/dev/null 2>&1; then
-      CA_CONNECT_PORT="$port"
-      if [[ "$CA_SERVICE_ID" == "vllm-inference" ]]; then
-        log "vLLM is reachable through connect: http://127.0.0.1:$port/v1/models"
-      else
-        log "OpenClaw Web is reachable through connect: http://127.0.0.1:$port/openclaw"
-      fi
-      return
+  until probe_connect_endpoint; do
+    if ((SECONDS >= deadline)); then
+      ca_cmd connect stop --ready-json "$ready"
+      die "service endpoint did not become ready at $CA_CONNECT_HOST:$CA_CONNECT_PORT; see $log_path"
     fi
-    if ! kill -0 "$(cat "$pid_path")" >/dev/null 2>&1; then
-      if [[ "$CA_SERVICE_ID" == "vllm-inference" ]]; then
-        die "connect process exited before vLLM became reachable; see $log_path"
-      else
-        die "connect process exited before OpenClaw became reachable; see $log_path"
-      fi
-      return
-    fi
-    sleep 3
+    sleep 2
   done
-  if [[ "$CA_SERVICE_ID" == "vllm-inference" ]]; then
-    die "connect did not become HTTP-ready (probe $readiness_path) within ${CA_CONNECT_TIMEOUT_SEC}s; see $log_path"
-  else
-    die "connect did not become HTTP-ready within ${CA_CONNECT_TIMEOUT_SEC}s; see $log_path"
-  fi
+  log "$CA_SERVICE_ID is reachable through TNG at $CA_CONNECT_HOST:$CA_CONNECT_PORT"
 }
 
 run_web_smoke() {
   if [[ -z "${CA_CONNECT_PORT:-}" ]]; then
     return
   fi
+  local host="${CA_CONNECT_HOST:-127.0.0.1}"
   local body="$CA_WORK_DIR/web-smoke.html"
   log "verifying OpenClaw control UI through connect"
-  if ! curl -fsSL --max-time 15 "http://127.0.0.1:$CA_CONNECT_PORT/openclaw" -o "$body"; then
+  if ! curl -fsSL --max-time 15 "http://$host:$CA_CONNECT_PORT/openclaw" -o "$body"; then
     warn "control UI fetch failed; see $body"
     return
   fi
@@ -478,22 +401,18 @@ run_web_smoke() {
 }
 
 stop_connect() {
-  local pid_path="$CA_WORK_DIR/${CA_CONNECT_NAME:-connect}.pid"
-  [[ -f "$pid_path" ]] || return 0
-  local pid
-  pid="$(cat "$pid_path" 2>/dev/null || true)"
-  if [[ -n "$pid" ]] && kill -0 "$pid" >/dev/null 2>&1; then
-    log "stopping local connect tunnel (pid $pid)"
-    kill "$pid" >/dev/null 2>&1 || true
+  if [[ -f "$CA_READY_JSON" ]]; then
+    ca_cmd connect stop --ready-json "$CA_READY_JSON"
   fi
-  rm -f "$pid_path"
-  CA_CONNECT_PORT=""
 }
 
 print_summary() {
-  local connect_pid=""
-  local pid_path="$CA_WORK_DIR/${CA_CONNECT_NAME:-connect}.pid"
-  [[ -f "$pid_path" ]] && connect_pid="$(cat "$pid_path" 2>/dev/null || true)"
+  local host="${CA_CONNECT_HOST:-127.0.0.1}"
+  local connect_pid="${CA_CONNECT_PID:-}"
+  local connect_name="${CA_CONNECT_NAME:-connect}"
+  local ready_json="${CA_READY_JSON:-$CA_WORK_DIR/$connect_name.json}"
+  local log_path="$CA_WORK_DIR/$connect_name.log"
+
   cat <<EOF
 
 Deployment summary
@@ -517,37 +436,34 @@ EOF
   if [[ -n "${CA_CONNECT_PORT:-}" ]]; then
     if [[ "$CA_SERVICE_ID" == "vllm-inference" ]]; then
       cat <<EOF
-  vllm:      curl http://127.0.0.1:$CA_CONNECT_PORT/v1/models
-  chat:      curl http://127.0.0.1:$CA_CONNECT_PORT/v1/chat/completions \\
+  vllm:      curl http://$host:$CA_CONNECT_PORT/v1/models
+  chat:      curl http://$host:$CA_CONNECT_PORT/v1/chat/completions \\
                  -H 'Content-Type: application/json' \\
                  -d '{"model":"$CA_VLLM_INFERENCE_SERVED_MODEL_NAME","messages":[{"role":"user","content":"hi"}]}'
-  connect:   running (pid $connect_pid, log $CA_WORK_DIR/${CA_CONNECT_NAME:-connect}.log)
+  ready:     $ready_json
+  connect:   running (pid ${connect_pid:-unknown}, log $log_path)
 EOF
     else
       cat <<EOF
-  web:       http://127.0.0.1:$CA_CONNECT_PORT/openclaw
-  ws/api:    ws://127.0.0.1:$CA_CONNECT_PORT
-  tui:       openclaw tui --url ws://127.0.0.1:$CA_CONNECT_PORT --token "$CA_GATEWAY_TOKEN"
-  connect:   running (pid $connect_pid, log $CA_WORK_DIR/${CA_CONNECT_NAME:-connect}.log)
+  web:       http://$host:$CA_CONNECT_PORT/openclaw
+  ws/api:    ws://$host:$CA_CONNECT_PORT
+  tui:       openclaw tui --url ws://$host:$CA_CONNECT_PORT --token "$CA_GATEWAY_TOKEN"
+  ready:     $ready_json
+  connect:   running (pid ${connect_pid:-unknown}, log $log_path)
 EOF
     fi
-  elif [[ -n "$connect_pid" ]] && kill -0 "$connect_pid" >/dev/null 2>&1; then
-    cat <<EOF
-  connect:   tunnel running (pid $connect_pid); probe ${CA_CONNECT_READINESS_PATH:-/openclaw} at http://127.0.0.1:<port>
-             log: $CA_WORK_DIR/${CA_CONNECT_NAME:-connect}.log
-EOF
   else
     cat <<EOF
   connect:   run this when the service is active:
-             confidential-agent connect --service $CA_SERVICE_ID
+             confidential-agent connect start --service $CA_SERVICE_ID --ready-json $ready_json
 EOF
   fi
-  if [[ -n "$connect_pid" ]]; then
+  if [[ -n "${CA_CONNECT_PORT:-}" ]]; then
     cat <<EOF
 
 Cleanup:
   confidential-agent destroy $CA_SERVICE_ID
-  kill $connect_pid  # only if connect is still running and you want to stop the local tunnel
+  confidential-agent connect stop --ready-json $ready_json  # stop local tunnel only
 
 EOF
   else
@@ -567,30 +483,6 @@ run_install_only() {
   install_confidential_agent_cli
   ensure_native_tools
   log "install-only completed"
-}
-
-run_deploy_openclaw() {
-  install_os_dependencies
-  ensure_host_openclaw_runtime
-  ensure_aliyun_credentials
-  ensure_aliyun_cli_region
-  ensure_bailian_credentials
-  ensure_dingtalk_credentials
-  resolve_allowed_cidr
-  ensure_shelter
-  build_confidential_agent
-  install_confidential_agent_cli
-  ensure_native_tools
-  prepare_openclaw_specs
-  build_openclaw_image
-  ensure_operator_peering
-  deploy_openclaw_service
-  sync_active_openclaw_resources
-  restart_active_openclaw_app
-  wait_for_live_status
-  start_connect
-  run_web_smoke
-  print_summary
 }
 
 run_deploy_openclaw_vllm() {
@@ -639,7 +531,11 @@ run_cleanup_service() {
   ensure_aliyun_credentials
   ensure_aliyun_cli_region
   ensure_shelter
-  build_confidential_agent
+  if [[ -x "$CA_BIN" ]]; then
+    log "using Confidential Agent CLI for cleanup: $CA_BIN"
+  else
+    build_confidential_agent
+  fi
   if [[ ! -d "$CA_STATE_DIR" ]]; then
     die "state dir does not exist: $CA_STATE_DIR"
   fi

@@ -13,4 +13,5 @@ for tool in attestation-challenge-client tng; do
 done
 ln -sfn /usr/libexec/shelter/bin/rekor-cli "$destination/rekor-cli"
 "$destination/tng" --version
+"$destination/oras" version >/dev/null
 "$destination/attestation-challenge-client" --help >/dev/null

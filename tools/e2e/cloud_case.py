@@ -3,6 +3,7 @@ import base64
 import json
 import os
 from pathlib import Path
+import shutil
 import signal
 import subprocess
 import threading
@@ -84,13 +85,24 @@ def eventually(probe, timeout=300, interval=5):
 
 def release_selection(directory, region):
     directory = Path(directory).resolve()
-    envelope = json.loads((directory / "image-release.json").read_text())
-    release = json.loads(base64.b64decode(envelope["payload"]))
+    path = directory / "image-release.json"
+    release = json.loads(path.read_text())
+    if "payload" in release:
+        release = json.loads(base64.b64decode(release["payload"]))
+        authentication = {"trusted_key": str(directory / "publisher.pem")}
+    else:
+        authentication = {"release_digest": (directory / "image-release.sha256").read_text().strip()}
     if not any(value["region"] == region for value in release["images"]):
-        raise ValueError("signed release has no image mapping for region " + region)
-    return {"release": str(directory / "image-release.json"),
-            "trusted_key": str(directory / "publisher.pem"),
-            "manifest": release["manifest"]["manifest_digest"]}
+        raise ValueError("release has no image mapping for region " + region)
+    return {"release": str(path), "manifest": release["manifest"]["manifest_digest"], **authentication}
+
+
+def copy_release_fixture(source, destination, region):
+    image = release_selection(source, region)
+    destination.mkdir(mode=0o700)
+    metadata = "publisher.pem" if "trusted_key" in image else "image-release.sha256"
+    for name in ["image-release.json", metadata]:
+        shutil.copyfile(source / name, destination / name)
 
 
 class Case:

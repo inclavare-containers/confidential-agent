@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Install only the checksum-verified RPM pair recorded by a binary release.
 set -euo pipefail
-version=0.2.0
+version=0.3.0
 source_dir=""
 download_only=0
 destination=""
@@ -12,7 +12,7 @@ while (($#)); do
     --download-only) download_only=1; shift ;;
     --output-dir) destination="${2:?missing directory}"; shift 2 ;;
     --help|-h)
-      printf '%s\n' 'Usage: bash install-rpm.sh [--version 0.2.0] [--from-dir DIR] [--download-only --output-dir DIR]'
+      printf '%s\n' 'Usage: bash install-rpm.sh [--version 0.3.0] [--from-dir DIR] [--download-only --output-dir DIR]'
       exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac
@@ -20,7 +20,6 @@ done
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Invalid release version' >&2; exit 2; }
 [[ "$(uname -m)" == x86_64 ]] || { echo 'This release supports x86_64 only' >&2; exit 1; }
 if [[ "$download_only" == 0 ]]; then
-  [[ "$EUID" == 0 ]] || { echo 'Run as root to install RPMs' >&2; exit 1; }
   # shellcheck disable=SC1091
   . /etc/os-release
   [[ "${VERSION_ID:-}" == 3 && ( "${ID:-}" == alinux || "${VARIANT_ID:-}" == openanolis || -n "${ALINUX_MINOR_ID:-}" ) ]] || {
@@ -60,10 +59,10 @@ PY
 }
 
 download() {
-  local name="$1" dest="$2" expected="${3:-}" url proxy
+  local name="$1" dest="$2" expected="$3" url proxy
   if [[ -n "$source_dir" ]]; then
     cp "$source_dir/$name" "$dest"
-    [[ -z "$expected" ]] || printf '%s  %s\n' "$expected" "$dest" | sha256sum -c - >&2
+    printf '%s  %s\n' "$expected" "$dest" | sha256sum -c - >&2
     return
   fi
   local urls=("$base/$name")
@@ -74,25 +73,32 @@ download() {
   fi
   for url in "${urls[@]}"; do
     if curl -fSL --retry 2 --connect-timeout 20 --max-time 600 -o "$dest" "$url"; then
-      if [[ -n "$expected" ]]; then
-        if printf '%s  %s\n' "$expected" "$dest" | sha256sum -c - >&2; then return; fi
-      elif validate_manifest "$dest" >/dev/null; then
-        return
-      fi
+      if printf '%s  %s\n' "$expected" "$dest" | sha256sum -c - >&2; then return; fi
     fi
   done
   echo "Failed to download verified $name" >&2
   return 1
 }
-download release-manifest.json "$work/release-manifest.json"
+if [[ -n "$source_dir" ]]; then
+  cp "$source_dir/release-manifest.json" "$work/"
+else
+  # This manifest supplies the trusted hashes for downloads through a mirror.
+  curl -fsSL --retry 2 -o "$work/release-manifest.json" "$base/release-manifest.json"
+fi
 validate_manifest "$work/release-manifest.json" > "$work/packages.tsv"
 packages=()
+reinstall=()
 while IFS=$'\t' read -r name digest payload; do
+  if [[ "$download_only" == 0 ]] && installed="$(rpm -q --qf '%{PAYLOADDIGEST}' "${name%.rpm}" 2>/dev/null)"; then
+    [[ "$installed" != "$payload" ]] || continue
+    reinstall+=("$work/$name")
+  else
+    packages+=("$work/$name")
+  fi
   download "$name" "$work/$name" "$digest"
   [[ "$(rpm -qp --qf '%{PAYLOADDIGEST}' "$work/$name")" == "$payload" ]] || {
     echo "RPM payload mismatch: $name" >&2; exit 1;
   }
-  packages+=("$work/$name")
 done < "$work/packages.tsv"
 if [[ "$download_only" == 1 ]]; then
   [[ -n "$destination" ]] || { echo '--download-only requires --output-dir' >&2; exit 2; }
@@ -100,7 +106,11 @@ if [[ "$download_only" == 1 ]]; then
   cp "$work/release-manifest.json" "${packages[@]}" "$destination/"
   echo "Verified RPMs saved to $destination"
 else
-  dnf install -y "${packages[@]}"
+  if ((${#packages[@]} + ${#reinstall[@]})) && [[ "$EUID" != 0 ]]; then
+    echo 'Run as root to install RPMs' >&2; exit 1
+  fi
+  if ((${#packages[@]})); then dnf install -y "${packages[@]}"; fi
+  if ((${#reinstall[@]})); then dnf reinstall -y "${reinstall[@]}"; fi
   confidential-agent --version
   rpm -q cagent shelter attestation-challenge-client libtdx-verify trusted-network-gateway
 fi

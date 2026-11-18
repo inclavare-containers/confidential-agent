@@ -33,7 +33,7 @@ run_case() {
   require_aliyun_credentials
   require_bailian_credentials
 
-  init_step_log "Confidential Agent OpenClaw/Bailian init E2E"
+  init_step_log "Confidential Agent OpenClaw/Bailian example E2E"
   install_exit_traps
   ensure_shelter
   verify_slsa_generator
@@ -46,38 +46,13 @@ run_case() {
   cosign_key="$(resolve_cosign_key)"
   export COSIGN_KEY="$cosign_key"
   record "- allowed_cidr: \`$allowed_cidr\`"
-  record "- init state_dir: \`$STATE_DIR\`"
-  record "- init output_dir: \`$INIT_OUTPUT_DIR\`"
+  record "- example state_dir: \`$STATE_DIR\`"
+  record "- example output_dir: \`$INIT_OUTPUT_DIR\`"
   record "- OpenClaw gateway token generated but not printed."
 
-  mapfile -d '' init_args < <(init_common_args "$INIT_OUTPUT_DIR" "${E2E_OPENCLAW_DISK_GB:-200}")
-  init_args+=(
-    --dashscope-api-key "$dashscope_key"
-    --gateway-token "$token"
-    --model "${DASHSCOPE_MODEL:-qwen4-max}"
-    --dashscope-base-url "${DASHSCOPE_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}"
-    --openclaw-version "${E2E_OPENCLAW_VERSION:-2026.10.3}"
-    --node-version "${E2E_OPENCLAW_NODE_VERSION:-24.21.0}"
-    --npm-registry "${E2E_NPM_REGISTRY:-https://registry.npmmirror.com/}"
-  )
-  if [[ "${E2E_OPENCLAW_DISABLE_PEP:-0}" == "1" ]]; then
-    init_args+=(--disable-pep)
-  fi
-
-  local ca_agentd_bin ca_gateway_bin ca_pep_bin
-  ca_agentd_bin="${CA_AGENTD_BIN:-$ROOT_DIR/target/debug/confidential-agentd}"
-  ca_gateway_bin="${CA_GATEWAY_BIN:-$ROOT_DIR/target/debug/cai-gateway}"
-  ca_pep_bin="${CA_PEP_BIN:-$ROOT_DIR/target/debug/cai-pep}"
-  export CA_AGENTD_BIN="$ca_agentd_bin" CA_GATEWAY_BIN="$ca_gateway_bin" CA_PEP_BIN="$ca_pep_bin"
-  if ! ca_init_capture "$STATE_DIR" "$WORK_DIR/init.out" "$WORK_DIR/init.err" openclaw "${init_args[@]}"; then
-    record_file_as_block "init stdout:" "$WORK_DIR/init.out" text
-    record_file_as_block "init stderr:" "$WORK_DIR/init.err" text
-    return 1
-  fi
-  record_file_as_block "init stdout:" "$WORK_DIR/init.out" text
-  record_file_as_block "init stderr:" "$WORK_DIR/init.err" text
+  stage_cpu_example openclaw "$OPENCLAW_DIR" "${E2E_OPENCLAW_DISK_GB:-200}" "$dashscope_key" "$token"
   assert_openclaw_gateway_config
-  assert_openclaw_init_output
+  assert_openclaw_example
 
   validate_specs "$STATE_DIR" "$OPENCLAW_DIR/openclaw.yaml"
 
@@ -130,10 +105,10 @@ run_case() {
       wait_for_ssh "$openclaw_ip" "$openclaw_key" 300
       ssh_guest "$openclaw_key" "$openclaw_ip" "systemctl list-unit-files cai-pep.service --no-legend | wc -l" >"$WORK_DIR/no-pep-unit-count.txt"
       grep -Fx '0' "$WORK_DIR/no-pep-unit-count.txt" >/dev/null
-      record "- no-PEP init guest does not install cai-pep.service."
+      record "- no-PEP example guest does not install cai-pep.service."
     fi
   else
     jq -e '.plugins.entries["cai-pep"].config.pepRequired == true' "$OPENCLAW_DIR/openclaw.json" >/dev/null
-    record "- PEP-enabled init config includes cai-pep plugin with fail-closed policy."
+    record "- PEP-enabled example config includes cai-pep plugin with fail-closed policy."
   fi
 }

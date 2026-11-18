@@ -26,15 +26,14 @@ assert_openclaw_gateway_config() {
   record "- OpenClaw gateway config uses token auth with device auth disabled for the init control UI."
 }
 
-assert_openclaw_init_output() {
+assert_openclaw_example() {
   local spec="$OPENCLAW_DIR/openclaw.yaml"
   local install_script="$OPENCLAW_DIR/install-openclaw.sh"
 
-  grep -Fq "packages: [ca-certificates, curl, findutils, git, jq, kernel, kmod, nodejs, npm, podman, tar, xz]" "$spec"
   grep -Fq "source: ./files/install-openclaw-runtime.sh" "$spec"
   grep -Fq "target: /usr/local/libexec/confidential-agent/openclaw/install-openclaw-runtime.sh" "$spec"
   grep -Fq "source: ./files/cai-a2a-plugin" "$spec"
-  grep -Fq "scripts: [./install-openclaw.sh]" "$spec"
+  grep -Fq -- "- ./install-openclaw.sh" "$spec"
   grep -Fq "image_variant: debug" "$spec"
   grep -Fq "target: /root/.openclaw/openclaw.json" "$spec"
   grep -Fq "OPENCLAW_VERSION" "$install_script"
@@ -56,7 +55,7 @@ assert_openclaw_init_output() {
     grep -Fq "source: ./files/cai-pep-plugin" "$spec"
     grep -Fq "patch-openclaw-cai-pep.js" "$spec"
   fi
-  record "- OpenClaw init output mirrors the example files and rendered PEP mode."
+  record "- OpenClaw example uses the requested PEP mode."
 }
 
 run_openclaw_gateway_token_probe() {

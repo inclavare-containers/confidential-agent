@@ -1,5 +1,5 @@
 #!/usr/bin/env python3.11
-"""Eight real harnesses on one signed image, with a clean consumer state."""
+"""Eight real harnesses on one published image, with a clean consumer state."""
 import json
 import os
 import socket
@@ -71,7 +71,7 @@ def full_hardening_smoke(case):
     assert result["ok"] and probe["expect"] in result["text"]
     case.checks.update(full_hardening_release=True, service_ssh=False, release_ssh_capabilities=False,
                        protected_http_unauthorized_rejected=True, protected_http_real_model=True,
-                       release_signature_verified=True, attested_tdx_ready=True)
+                       release_authentication="digest" if "release_digest" in image else "signature", attested_tdx_ready=True)
 
 
 def main():
@@ -129,7 +129,7 @@ def main():
                 case.checks[name] = True
         else:
             assert summary["trustee_policy_lifecycle"] and summary["trustee_destroy_refusal"]
-        case.checks.update(real_model_harnesses=[fixture.name for fixture in fixtures], signed_image_reused=True,
+        case.checks.update(real_model_harnesses=[fixture.name for fixture in fixtures], release_authentication="digest" if "release_digest" in image else "signature",
                            provider=mode, private_credentials=True)
         # Exact shared-image versions are authenticated by the runtime contract
         # and probed once; each fixture executes its selected native harness.

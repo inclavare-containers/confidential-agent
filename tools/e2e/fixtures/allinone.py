@@ -7,6 +7,8 @@ import shlex
 import shutil
 
 HARNESSES = ["codex", "claude-code", "opencode", "openclaw", "hermes", "qodercli", "pi", "dsh"]
+NETWORK = {"codex": ("app-server", 4500), "opencode": ("web", 4096), "dsh": ("web", 3080),
+           "openclaw": ("gateway", 18789), "hermes": ("gateway", 8642)}
 PROMPT = "Reply with ALLINONE_, E2E_, and OK concatenated without spaces or other text."
 
 
@@ -35,8 +37,11 @@ def generate(directory, image, mode, region, prefix, *, harnesses=None, ssh=True
             resources[name.replace(".", "_")] = {"source": str(source), "target": guest,
                                                    "mode": "0600", "mutable": mutable}
         runtime = None
+        native = {"harness": harness, "model": model, "message": PROMPT} if harness in NETWORK else None
         if harness == "codex":
             environment["OPENAI_API_KEY"] = key
+            resource("app-server-token", secrets.token_urlsafe(32), "/opt/data/allinone/home/.codex/app-server-token")
+            native["token_file"] = str(target / "app-server-token")
             resource("config.toml", f'model_provider = "Model_Studio"\nmodel = "{model}"\n[model_providers.Model_Studio]\nname = "Model_Studio"\nbase_url = "{url}"\nenv_key = "OPENAI_API_KEY"\nwire_api = "responses"\n', "/opt/data/allinone/home/.codex/config.toml")
             command = "cai-agent --ask-for-approval never exec --skip-git-repo-check --sandbox danger-full-access --json " + shlex.quote(PROMPT)
         elif harness == "claude-code":
@@ -48,11 +53,14 @@ def generate(directory, image, mode, region, prefix, *, harnesses=None, ssh=True
             resource("claude.json", {"hasCompletedOnboarding": True}, "/opt/data/allinone/home/.claude.json")
             command = "cai-agent --print " + shlex.quote(PROMPT) + " --max-turns 2 --output-format text"
         elif harness == "opencode":
+            environment["OPENCODE_SERVER_PASSWORD"] = secrets.token_hex(32)
+            native["password"] = environment["OPENCODE_SERVER_PASSWORD"]
             resource("opencode.json", {"$schema": "https://opencode.ai/config.json", "autoupdate": False,
                      "model": "bailian/"+model, "provider": {"bailian": {"npm": "@ai-sdk/openai-compatible", "name": "Bailian",
                      "options": {"baseURL": url, "apiKey": key}, "models": {model: {"name": model}}}}}, "/opt/data/allinone/home/.config/opencode/opencode.json")
             command = "cai-agent run --format json " + shlex.quote(PROMPT)
         elif harness == "openclaw":
+            native["token"] = secrets.token_hex(32)
             resource("openclaw.json", {"models": {"mode": "merge", "providers": {"bailian": {"baseUrl": url, "apiKey": key,
                      "api": "openai-completions", "models": [{"id": model, "name": model, "reasoning": False,
                      "input": ["text"], "contextWindow": 1000000, "maxTokens": 131072}]}}},
@@ -63,13 +71,15 @@ def generate(directory, image, mode, region, prefix, *, harnesses=None, ssh=True
                              "pepRequired": True, "defaultWorkdir": "/opt/data/allinone/workspace"}},
                          "cai-a2a": {"enabled": True, "config": {"peers": {}}}}},
                      "gateway": {"mode": "local", "bind": "loopback", "port": 18789,
-                     "auth": {"mode": "token", "token": secrets.token_hex(32)}}}, "/opt/data/allinone/home/.openclaw/openclaw.json")
+                     "http": {"endpoints": {"responses": {"enabled": True}}},
+                     "auth": {"mode": "token", "token": native["token"]}}}, "/opt/data/allinone/home/.openclaw/openclaw.json")
             runtime = "cai-agent health --json"
             command = "cai-agent agent --agent main --message " + shlex.quote(PROMPT) + " --json"
         elif harness == "hermes":
             environment = {"HERMES_MODEL": model,
                            "API_SERVER_ENABLED": "true", "API_SERVER_HOST": "0.0.0.0", "API_SERVER_PORT": "8642",
                            "API_SERVER_KEY": secrets.token_hex(32)}
+            native["token"] = environment["API_SERVER_KEY"]
             resource("config.yaml", {"model": {"provider": "custom", "base_url": url,
                      "api_key": key, "default": model, "model": model}}, "/opt/data/allinone/hermes/config.yaml")
             runtime = "python3.11 -c 'import urllib.request; assert urllib.request.urlopen(\"http://127.0.0.1:8642/health\",timeout=20).status == 200'"
@@ -123,25 +133,28 @@ def generate(directory, image, mode, region, prefix, *, harnesses=None, ssh=True
             settings.setdefault("general", {})["enableAutoUpdate"] = False
             resource("qoder-settings.json", settings, "/opt/data/allinone/home/.qoder/settings.json")
             command = "cai-agent --model " + shlex.quote(selected) + " -p " + shlex.quote(PROMPT)
-        resource("runtime.json", {"harness": harness, "environment": environment}, "/opt/data/allinone/runtime.json")
-        # Consumers authenticate Rekor metadata from the signed release; they
-        # do not enable build-time signing or carry a producer's cosign key.
+        runtime_config = {"harness": harness, "environment": environment}
+        if native:
+            runtime_config["mode"], runtime_config["port"] = NETWORK[harness]
+        resource("runtime.json", runtime_config, "/opt/data/allinone/runtime.json")
+        # Consumers receive the published Rekor references with the selected release.
         spec = {"schema": "confidential-agent/v1", "service": {"id": prefix+"-"+harness, "ports": [], "ssh": ssh,
                 "app_service": "cai-allinone.service"}, "deploy": {"provider": "aliyun", "region": region,
                 "zone_id": os.environ.get("E2E_ZONE_ID", "cn-beijing-i"), "instance_type": os.environ.get("E2E_INSTANCE_TYPE", "ecs.g9i.xlarge"),
                 "disk_gb": 120, "image": image}, "attestation": {"tee": "tdx", "mode": mode,
                 "reference_values": "rekor", "rekor": {
                     "slsa_generator": "/usr/libexec/shelter/slsa/slsa-generator"}}, "resources": resources}
-        if harness == "openclaw":
-            spec["service"].update(ports=[18789], connect=[])
-        elif harness == "hermes":
-            spec["service"].update(ports=[8642], connect=[8642])
-            if not ssh:
-                spec["service"]["connect"] = [{"port": 8642, "encryption": "ohttp"}]
+        if native:
+            port = runtime_config["port"]
+            spec["service"].update(ports=[port], connect=[port])
+        if not ssh:
+            spec["service"]["connect"] = [{"port": 8642, "encryption": "ohttp"}]
         (target / "appspec.json").write_text(json.dumps(spec, indent=2)+"\n")
         probe = {"command": command if ssh else None, "expect": "ALLINONE_E2E_OK",
                  "runtime_command": runtime if ssh else None,
                  "connect_http_path": "/health" if harness == "hermes" else None}
+        if native:
+            probe["native_service"] = native
         if not ssh:
             probe["http_model"] = {"token": environment["API_SERVER_KEY"], "model": model,
                                    "message": PROMPT}

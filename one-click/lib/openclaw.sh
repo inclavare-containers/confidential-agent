@@ -2,7 +2,7 @@
 
 ensure_gateway_token() {
   install -d -m 0700 "$CA_WORK_DIR/secrets"
-  local token_file="$CA_WORK_DIR/secrets/gateway.token"
+  local token_file="$CA_WORK_DIR/secrets/${1:-gateway}.token"
   if [[ -n "${CA_GATEWAY_TOKEN:-}" ]]; then
     if ((${#CA_GATEWAY_TOKEN} < 32)); then
       die "--gateway-token must be at least 32 characters"
@@ -19,7 +19,7 @@ ensure_gateway_token() {
     return
   fi
   require_cmd openssl
-  CA_GATEWAY_TOKEN="$(openssl rand -hex 20)"
+  CA_GATEWAY_TOKEN="$(openssl rand "-${2:-hex}" 32)"
   printf '%s\n' "$CA_GATEWAY_TOKEN" >"$token_file"
   chmod 0600 "$token_file"
 }
@@ -72,18 +72,6 @@ append_init_common_args() {
   fi
 }
 
-append_openclaw_bailian_args() {
-  local -n args_ref="$1"
-  args_ref+=(
-    --dashscope-api-key "$DASHSCOPE_API_KEY"
-    --dashscope-base-url "$CA_API_BASE_URL"
-    --model "$CA_MODEL"
-  )
-  if [[ "${CA_DISABLE_PEP:-0}" == "1" ]]; then
-    args_ref+=(--disable-pep)
-  fi
-}
-
 append_openclaw_vllm_args() {
   local -n args_ref="$1"
   args_ref+=(
@@ -102,18 +90,8 @@ run_confidential_agent_init() {
   export CA_BIN CA_AGENTD_BIN CA_GATEWAY_BIN CA_PEP_BIN
   install -d -m 0700 "$CA_WORK_DIR"
   log "generating $CA_SERVICE_LABEL AppSpec with confidential-agent init $target"
-  (cd "$ROOT_DIR" && "$CA_BIN" --tools-dir "$CA_TOOLS_DIR" --state-dir "$CA_STATE_DIR" init "$target" "$@")
+  (cd "$ROOT_DIR" && ca_cmd init "$target" "$@")
   [[ -f "$CA_SPEC_PATH" ]] || die "init did not create expected AppSpec: $CA_SPEC_PATH"
-}
-
-prepare_openclaw_specs() {
-  ensure_gateway_token
-  ensure_cosign_key
-  local args=()
-  append_init_common_args args
-  append_openclaw_bailian_args args
-  run_confidential_agent_init openclaw "${args[@]}"
-  log "generated OpenClaw spec at $CA_SPEC_PATH"
 }
 
 prepare_openclaw_vllm_specs() {

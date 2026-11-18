@@ -63,10 +63,11 @@ Confidential Agent resources in `claude-code.yaml`.
 
 ## Deploy
 
-Authorize your operator CIDR, then validate, build, and deploy:
+Set `OPERATOR_CIDR` to the operator network's IPv4 CIDR, then validate, build,
+and deploy:
 
 ```bash
-confidential-agent peering add --role operator --cidr <operator-cidr> --label ops
+confidential-agent peering add --role operator --cidr "$OPERATOR_CIDR" --label ops
 confidential-agent spec validate --spec examples/claude-code/claude-code.yaml
 confidential-agent build --spec examples/claude-code/claude-code.yaml
 confidential-agent deploy --spec examples/claude-code/claude-code.yaml
@@ -78,10 +79,10 @@ each command.
 
 ## SSH Operation
 
-Use the debug SSH command shown by deploy/status, then start Claude Code:
+Connect using the debug SSH command from deploy/status. In the guest, start
+Claude Code:
 
 ```bash
-ssh -i <debug-private-key> root@<guest-ip>
 cd /workspace
 claude
 ```

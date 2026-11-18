@@ -1,0 +1,45 @@
+name: Promote all-in-one image candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      digest:
+        description: OCI manifest digest of the verified all-in-one candidate
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  promote:
+    if: github.repository == 'inclavare-containers/confidential-agent' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      packages: write
+    steps:
+      - name: Install ORAS 1.3.0
+        working-directory: ${{ runner.temp }}
+        shell: bash
+        run: |
+          curl --fail --silent --show-error --location --output oras.tar.gz \
+            https://github.com/oras-project/oras/releases/download/v1.3.0/oras_1.3.0_linux_amd64.tar.gz
+          echo '6cdc692f929100feb08aa8de584d02f7bcc30ec7d88bc2adc2054d782db57c64  oras.tar.gz' | sha256sum --check
+          tar -xzf oras.tar.gz oras
+      - name: Copy the candidate and its referrers to the official package
+        shell: bash
+        env:
+          DIGEST: ${{ inputs.digest }}
+          REGISTRY_TOKEN: ${{ github.token }}
+          STAGING: ghcr.io/wdsun1008/confidential-agent-ghcr-validation
+          OFFICIAL: ghcr.io/inclavare-containers/confidential-agent/allinone
+        run: |
+          [[ "$DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo 'Expected a sha256 OCI manifest digest' >&2; exit 1; }
+          oras="$RUNNER_TEMP/oras"
+          "$oras" manifest fetch "$STAGING@$DIGEST" | jq -e '.artifactType == "application/vnd.shelter.artifact.v1"'
+          printf '%s' "$REGISTRY_TOKEN" | "$oras" login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          candidate="$OFFICIAL:candidate-${DIGEST#sha256:}"
+          "$oras" cp --recursive "$STAGING@$DIGEST" "$candidate"
+          resolved="$("$oras" resolve "$candidate")"
+          [[ "$resolved" == "$DIGEST" ]]
+          echo "$OFFICIAL@$resolved" >> "$GITHUB_STEP_SUMMARY"

@@ -2,7 +2,11 @@
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 destination="${1:?usage: packaging/fetch-native-tools.sh OUTPUT_DIR [CACHE_DIR]}"
-cache="${2:-$root/target/native-tool-downloads}"
+default_cache="$root/target/native-tool-downloads"
+if [[ ! -f "$root/Cargo.toml" ]]; then
+  default_cache="${XDG_CACHE_HOME:-${HOME:-/root}/.cache}/confidential-agent/native-tool-downloads"
+fi
+cache="${2:-$default_cache}"
 [[ "$(uname -m)" == x86_64 ]] || { echo 'Native tool pins currently support x86_64' >&2; exit 1; }
 mkdir -p "$destination" "$cache"
 work="$(mktemp -d "$cache/.fetch.XXXXXX")"
@@ -33,9 +37,9 @@ while read -r name version sha256 url; do
     done
     [[ "$downloaded" == 1 ]] || { echo "Failed to fetch verified $name $version" >&2; exit 1; }
   fi
-  if [[ "$name" == aliyun ]]; then
-    tar -xzf "$archive" -C "$work" aliyun
-    install -m 0755 "$work/aliyun" "$destination/aliyun"
+  if [[ "$name" == aliyun || "$name" == oras ]]; then
+    tar -xzf "$archive" -C "$work" "$name"
+    install -m 0755 "$work/$name" "$destination/$name"
   else
     install -m 0755 "$archive" "$destination/$name"
   fi

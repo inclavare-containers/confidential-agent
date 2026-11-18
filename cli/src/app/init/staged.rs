@@ -1,69 +1,92 @@
-//! Separate image inputs from instance resources while retaining legacy init commands.
+//! Application-centric shared CPU image and dedicated GPU initialization.
 use super::*;
 use serde_json::{json, Value};
 
-pub(super) fn resolve_interactive(args: &mut InitArgs) -> Result<()> {
-    if !args.non_interactive
-        && (args.target.is_none() || args.target == Some(InitTarget::Allinone))
-        && args.stage.is_none()
-    {
-        loop {
-            println!("1) Build a shared image\n2) Deploy an existing published image");
-            match prompt_value("Stage [build/deploy]")?.as_str() {
-                "1" | "build" => {
-                    args.stage = Some(InitStage::Build);
-                    break;
-                }
-                "2" | "deploy" => {
-                    args.stage = Some(InitStage::Deploy);
-                    break;
-                }
-                _ => println!("Enter build or deploy."),
+pub(super) fn resolve_plan_and_interactive(args: &mut InitArgs) -> Result<InitPlan> {
+    if args.non_interactive {
+        return match (args.target, args.stage) {
+            (None, Some(InitStage::Build)) => Ok(InitPlan::SharedCpuBuild),
+            (None, _) => bail!(
+                "init --non-interactive requires a target (for example `init openclaw`) or `--stage build`"
+            ),
+            (Some(target), Some(InitStage::Build)) if !target.is_gpu() => {
+                Ok(InitPlan::SharedCpuBuild)
+            }
+            (Some(target), None | Some(InitStage::Deploy)) if !target.is_gpu() => {
+                args.stage = Some(InitStage::Deploy);
+                Ok(InitPlan::SharedCpuDeploy(target))
+            }
+            (Some(target), None) => Ok(InitPlan::GpuDirect(target)),
+            (Some(target), Some(stage)) => Ok(InitPlan::GpuStaged(target, stage)),
+        };
+    }
+
+    let plan = match (args.target, args.stage) {
+        (None, Some(InitStage::Build)) => InitPlan::SharedCpuBuild,
+        (None, Some(InitStage::Deploy)) => {
+            let target = prompt_deploy_target()?;
+            args.target = Some(target);
+            if target.is_gpu() {
+                InitPlan::GpuStaged(target, InitStage::Deploy)
+            } else {
+                InitPlan::SharedCpuDeploy(target)
             }
         }
-    }
-    if args.target.is_none() && !args.non_interactive {
-        args.target = Some(prompt_target()?);
-    }
-    if args.target == Some(InitTarget::Allinone) && args.stage.is_none() {
-        args.stage = Some(InitStage::Build);
-    }
-    if args.stage == Some(InitStage::Deploy) && !args.non_interactive {
-        if args.target == Some(InitTarget::Allinone) {
-            if args.harness.is_none() {
+        (None, None) => match prompt_interactive_choice()? {
+            None => {
+                args.stage = Some(InitStage::Build);
+                InitPlan::SharedCpuBuild
+            }
+            Some(target) if target.is_gpu() => {
+                args.target = Some(target);
+                InitPlan::GpuDirect(target)
+            }
+            Some(target) => {
+                args.target = Some(target);
+                args.stage = Some(InitStage::Deploy);
+                InitPlan::SharedCpuDeploy(target)
+            }
+        },
+        (Some(target), Some(InitStage::Build)) if !target.is_gpu() => InitPlan::SharedCpuBuild,
+        (Some(target), None | Some(InitStage::Deploy)) if !target.is_gpu() => {
+            args.stage = Some(InitStage::Deploy);
+            InitPlan::SharedCpuDeploy(target)
+        }
+        (Some(target), None) => InitPlan::GpuDirect(target),
+        (Some(target), Some(stage)) => InitPlan::GpuStaged(target, stage),
+    };
+
+    if let InitPlan::SharedCpuDeploy(target) = plan {
+        if args.harness_mode.is_none() {
+            let (modes, default, explanation) = cpu_mode_choices(target);
+            if modes.len() == 1 {
+                args.harness_mode = Some(default.into());
+            } else {
+                println!("{explanation}");
                 loop {
-                    let harness = prompt_value(
-                        "Harness (openclaw/hermes/codex/claude-code/qodercli/opencode/pi/dsh)",
+                    let selected = prompt_default(
+                        &format!("Mode for {} ({})", target.command_name(), modes.join("/")),
+                        default,
                     )?;
-                    if harness_choices(&harness).is_ok() {
-                        args.harness = Some(harness);
+                    if modes.contains(&selected.as_str()) {
+                        args.harness_mode = Some(selected);
                         break;
                     }
-                    println!("Choose one of the listed harnesses.");
-                }
-            }
-            if args.harness_mode.is_none() {
-                let harness = args.harness.as_deref().unwrap();
-                let (modes, default, explanation) = harness_choices(harness)?;
-                println!("{explanation}");
-                if modes.len() == 1 {
-                    args.harness_mode = Some(default.into());
-                } else {
-                    loop {
-                        let selected = prompt_default(
-                            &format!("Mode for {harness} ({})", modes.join("/")),
-                            default,
-                        )?;
-                        if modes.contains(&selected.as_str()) {
-                            args.harness_mode = Some(selected);
-                            break;
-                        }
-                        println!("Choose {}.", modes.join(" or "));
-                    }
+                    println!("Choose {}.", modes.join(" or "));
                 }
             }
         }
-        if args.target == Some(InitTarget::VllmInference) {
+    }
+
+    let is_consumer = matches!(
+        plan,
+        InitPlan::SharedCpuDeploy(_) | InitPlan::GpuStaged(_, InitStage::Deploy)
+    );
+    if is_consumer {
+        if matches!(
+            plan,
+            InitPlan::GpuStaged(InitTarget::VllmInference, InitStage::Deploy)
+        ) {
             if args.oss_bucket.is_none() {
                 args.oss_bucket = Some(prompt_value("Encrypted model OSS bucket[:/prefix]")?);
             }
@@ -72,52 +95,36 @@ pub(super) fn resolve_interactive(args: &mut InitArgs) -> Result<()> {
             }
         }
         if args.service_id.is_none() {
-            args.service_id = Some(prompt_value("Unique instance/service ID")?);
+            let default_id = project_name(args, plan);
+            args.service_id = Some(prompt_default("Unique instance/service ID", &default_id)?);
         }
         if args.image_release.is_none() {
             args.image_release = Some(
                 if Path::new("image-release.json").is_file() {
-                    prompt_default("Signed release path", "./image-release.json")?
+                    prompt_default("Image release path", "./image-release.json")?
                 } else {
-                    prompt_value("Signed image-release.json path")?
+                    prompt_value("Image release path (image-release.json)")?
                 }
                 .into(),
             );
         }
-        if args.trusted_key.is_none() && !args.skip_signature_verification {
-            let candidate = args
-                .image_release
-                .as_ref()
-                .unwrap()
-                .parent()
-                .unwrap_or_else(|| Path::new("."))
-                .join("publisher.pem");
-            args.trusted_key = Some(
-                if candidate.is_file() {
-                    prompt_default(
-                        "Trusted publisher public key path",
-                        &candidate.display().to_string(),
-                    )?
-                } else {
-                    prompt_value("Trusted publisher public key path")?
-                }
-                .into(),
-            );
+        if args.release_digest.is_none() {
+            args.release_digest = Some(prompt_value("Trusted release digest (sha256:...)")?);
         }
-        if args.model.is_none()
-            && !matches!(
-                args.target,
-                Some(InitTarget::VllmInference | InitTarget::OpenclawVllm)
-            )
-            && args.harness.as_deref() != Some("qodercli")
-        {
-            args.model = Some(prompt_default(
-                "Model name",
-                &confidential_agent_core::software::version("bailian_model"),
-            )?);
+        if let InitPlan::SharedCpuDeploy(target) = plan {
+            if args.model.is_none() && target != InitTarget::Qodercli {
+                args.model = Some(prompt_default(
+                    "Model name",
+                    &confidential_agent_core::software::version("bailian_model"),
+                )?);
+            }
         }
     }
-    if !args.non_interactive && args.stage.is_some() {
+
+    if matches!(
+        plan,
+        InitPlan::SharedCpuBuild | InitPlan::SharedCpuDeploy(_) | InitPlan::GpuStaged(_, _)
+    ) {
         if args.region.is_none() {
             args.region = Some(prompt_default("Region", "cn-beijing")?);
         }
@@ -125,28 +132,25 @@ pub(super) fn resolve_interactive(args: &mut InitArgs) -> Result<()> {
         if args.zone_id.is_none() {
             args.zone_id = Some(prompt_default("Zone", default_zone_id(region))?);
         }
-        let target = args.target.context("select a target")?;
         if args.instance_type.is_none() {
             args.instance_type = Some(prompt_default(
                 "Instance type",
-                default_instance_type(region, target),
+                default_instance_type(region, plan),
             )?);
         }
         if args.disk_gb.is_none() {
             args.disk_gb = Some(
-                prompt_default("Disk GB", &default_disk(args, target).to_string())?
+                prompt_default("Disk GB", &default_disk(plan).to_string())?
                     .parse()
                     .context("disk size must be an integer")?,
             );
         }
-        let supports_replicas = match target {
-            InitTarget::Allinone if args.stage == Some(InitStage::Deploy) => {
-                harness_mode(args)?.2.is_some()
-            }
-            InitTarget::Claudecode => false,
-            _ => true,
+        let supports_replicas = match plan {
+            InitPlan::SharedCpuDeploy(target) => cpu_target_mode(args, target)?.1.is_some(),
+            InitPlan::GpuStaged(_, InitStage::Deploy) => true,
+            _ => false,
         };
-        if args.stage == Some(InitStage::Deploy) && args.replicas == 1 && supports_replicas {
+        if is_consumer && args.replicas == 1 && supports_replicas {
             args.replicas = prompt_default("Replicas in this service (CLI: 1)", "1")?
                 .parse()
                 .context("replicas must be an integer")?;
@@ -157,7 +161,69 @@ pub(super) fn resolve_interactive(args: &mut InitArgs) -> Result<()> {
         )?
         .into();
     }
-    Ok(())
+    Ok(plan)
+}
+
+fn prompt_interactive_choice() -> Result<Option<InitTarget>> {
+    println!("Select deployment target (or shared CPU image build):");
+    println!("  1) openclaw        (gateway, port 18789)");
+    println!("  2) hermes          (gateway, port 8642)");
+    println!("  3) codex           (app-server, port 4500)");
+    println!("  4) opencode        (web, port 4096)");
+    println!("  5) dsh             (web, port 3080)");
+    println!("  6) claude-code     (CLI over SSH)");
+    println!("  7) qodercli        (CLI over SSH)");
+    println!("  8) pi              (CLI over SSH)");
+    println!("  9) openclaw-vllm   (GPU direct build/deploy)");
+    println!(" 10) vllm-inference  (GPU direct build/deploy)");
+    println!(" 11) build           (shared CPU image builder)");
+    loop {
+        let value = prompt_default("Selection", "1")?;
+        match value.as_str() {
+            "1" | "openclaw" => return Ok(Some(InitTarget::Openclaw)),
+            "2" | "hermes" | "hermes-agent" => return Ok(Some(InitTarget::Hermes)),
+            "3" | "codex" => return Ok(Some(InitTarget::Codex)),
+            "4" | "opencode" => return Ok(Some(InitTarget::Opencode)),
+            "5" | "dsh" => return Ok(Some(InitTarget::Dsh)),
+            "6" | "claude-code" | "claudecode" => return Ok(Some(InitTarget::Claudecode)),
+            "7" | "qodercli" => return Ok(Some(InitTarget::Qodercli)),
+            "8" | "pi" => return Ok(Some(InitTarget::Pi)),
+            "9" | "openclaw-vllm" => return Ok(Some(InitTarget::OpenclawVllm)),
+            "10" | "vllm-inference" => return Ok(Some(InitTarget::VllmInference)),
+            "11" | "build" => return Ok(None),
+            _ => println!("Enter 1-11, a target name, or `build`."),
+        }
+    }
+}
+
+fn prompt_deploy_target() -> Result<InitTarget> {
+    println!("Select deployment target:");
+    println!("  1) openclaw");
+    println!("  2) hermes");
+    println!("  3) codex");
+    println!("  4) opencode");
+    println!("  5) dsh");
+    println!("  6) claude-code");
+    println!("  7) qodercli");
+    println!("  8) pi");
+    println!("  9) openclaw-vllm");
+    println!(" 10) vllm-inference");
+    loop {
+        let value = prompt_default("Target", "1")?;
+        match value.as_str() {
+            "1" | "openclaw" => return Ok(InitTarget::Openclaw),
+            "2" | "hermes" | "hermes-agent" => return Ok(InitTarget::Hermes),
+            "3" | "codex" => return Ok(InitTarget::Codex),
+            "4" | "opencode" => return Ok(InitTarget::Opencode),
+            "5" | "dsh" => return Ok(InitTarget::Dsh),
+            "6" | "claude-code" | "claudecode" => return Ok(InitTarget::Claudecode),
+            "7" | "qodercli" => return Ok(InitTarget::Qodercli),
+            "8" | "pi" => return Ok(InitTarget::Pi),
+            "9" | "openclaw-vllm" => return Ok(InitTarget::OpenclawVllm),
+            "10" | "vllm-inference" => return Ok(InitTarget::VllmInference),
+            _ => println!("Enter 1-10 or a target name."),
+        }
+    }
 }
 
 fn prompt_default(label: &str, default: &str) -> Result<String> {
@@ -171,24 +237,35 @@ fn prompt_default(label: &str, default: &str) -> Result<String> {
     })
 }
 
-pub(super) fn default_disk(args: &InitArgs, target: InitTarget) -> u32 {
-    if args.stage.is_some() && target == InitTarget::Hermes {
-        // The 30G read-only base must leave room for Cryptpilot's writable LV.
-        60
-    } else {
-        default_disk_gb(target)
+pub(super) fn default_disk(plan: InitPlan) -> u32 {
+    match plan {
+        InitPlan::SharedCpuBuild | InitPlan::SharedCpuDeploy(_) => 120,
+        InitPlan::GpuDirect(_) | InitPlan::GpuStaged(_, _) => 512,
     }
 }
 
-pub(super) fn project_name(args: &InitArgs, target: InitTarget) -> String {
-    args.service_id.clone().unwrap_or_else(|| match args.stage {
-        Some(InitStage::Build) => format!("{}-builder", target.service_id()),
-        _ => target.service_id().into(),
+pub(super) fn project_name(args: &InitArgs, plan: InitPlan) -> String {
+    args.service_id.clone().unwrap_or_else(|| match plan {
+        InitPlan::SharedCpuBuild => "allinone-builder".into(),
+        InitPlan::SharedCpuDeploy(target) | InitPlan::GpuDirect(target) => {
+            target.service_id().into()
+        }
+        InitPlan::GpuStaged(target, InitStage::Build) => format!("{}-builder", target.service_id()),
+        InitPlan::GpuStaged(target, InitStage::Deploy) => target.service_id().into(),
     })
 }
 
-pub(super) fn validate_args(args: &InitArgs, target: InitTarget) -> Result<()> {
-    let name = project_name(args, target);
+fn validate_sha256_digest(flag: &str, value: &str) -> Result<()> {
+    let digest = value.strip_prefix("sha256:").unwrap_or_default();
+    anyhow::ensure!(
+        digest.len() == 64 && digest.bytes().all(|b| b.is_ascii_hexdigit()),
+        "{flag} must be a full sha256:<64-hex> digest"
+    );
+    Ok(())
+}
+
+pub(super) fn validate_args(args: &InitArgs, plan: InitPlan) -> Result<()> {
+    let name = project_name(args, plan);
     anyhow::ensure!(
         !name.is_empty()
             && name
@@ -197,94 +274,130 @@ pub(super) fn validate_args(args: &InitArgs, target: InitTarget) -> Result<()> {
         "--service-id may contain only letters, numbers, underscores and hyphens"
     );
     anyhow::ensure!(args.replicas > 0, "--replicas must be greater than zero");
-    if args.stage.is_none() {
-        anyhow::ensure!(
-            args.service_id.is_none()
-                && args.harness.is_none()
-                && args.harness_mode.is_none()
-                && args.image_release.is_none()
-                && args.trusted_key.is_none()
-                && args.manifest.is_none()
-                && args.image_id.is_none()
-                && !args.skip_signature_verification,
-            "use --stage build or --stage deploy with image/instance options"
-        );
-        return Ok(());
+
+    match plan {
+        InitPlan::GpuDirect(_) => {
+            anyhow::ensure!(
+                args.harness_mode.is_none()
+                    && args.image_release.is_none()
+                    && args.release_digest.is_none()
+                    && args.manifest.is_none()
+                    && args.image_id.is_none(),
+                "GPU direct build/deploy does not take published image options; pass --stage deploy to reuse an image"
+            );
+            return Ok(());
+        }
+        InitPlan::SharedCpuBuild => {
+            anyhow::ensure!(
+                args.harness_mode.is_none()
+                    && args.image_release.is_none()
+                    && args.release_digest.is_none()
+                    && args.manifest.is_none()
+                    && args.image_id.is_none()
+                    && !args.enable_dingtalk
+                    && !args.disable_pep,
+                "shared CPU image build does not take instance release, mode, DingTalk, or PEP flags; configure those per deployed instance"
+            );
+            let disk = args.disk_gb.unwrap_or_else(|| default_disk(plan));
+            anyhow::ensure!(
+                disk >= 120,
+                "shared CPU image requires at least 120 GB including the encrypted writable layer"
+            );
+            return Ok(());
+        }
+        InitPlan::GpuStaged(target, InitStage::Build) => {
+            anyhow::ensure!(
+                args.harness_mode.is_none()
+                    && args.image_release.is_none()
+                    && args.release_digest.is_none()
+                    && args.manifest.is_none()
+                    && args.image_id.is_none(),
+                "build initialization does not accept published release options; use --stage deploy"
+            );
+            anyhow::ensure!(
+                args.vllm_build_variants == "release",
+                "shared-image initialization currently supports a single release variant"
+            );
+            let base_disk = if target == InitTarget::OpenclawVllm {
+                160
+            } else {
+                80
+            };
+            anyhow::ensure!(
+                args.disk_gb.unwrap_or_else(|| default_disk(plan)) > base_disk,
+                "deployment disk must be larger than the {base_disk} GB base image to leave encrypted writable space"
+            );
+            return Ok(());
+        }
+        InitPlan::SharedCpuDeploy(target) => {
+            if target != InitTarget::Openclaw {
+                anyhow::ensure!(!args.disable_pep, "--disable-pep applies only to openclaw");
+                anyhow::ensure!(
+                    !args.enable_dingtalk,
+                    "--enable-dingtalk applies only to openclaw"
+                );
+            }
+            let disk = args.disk_gb.unwrap_or_else(|| default_disk(plan));
+            anyhow::ensure!(
+                disk >= 120,
+                "shared CPU image requires at least 120 GB including the encrypted writable layer"
+            );
+            let (_, port) = cpu_target_mode(args, target)?;
+            anyhow::ensure!(
+                args.replicas == 1 || port.is_some(),
+                "CLI applications have no load-balanced port; create independent instances with distinct --service-id values"
+            );
+        }
+        InitPlan::GpuStaged(target, InitStage::Deploy) => {
+            anyhow::ensure!(
+                args.harness_mode.is_none(),
+                "--harness-mode applies only to CPU applications"
+            );
+            anyhow::ensure!(
+                args.vllm_build_variants == "release",
+                "shared-image initialization currently supports a single release variant"
+            );
+            let base_disk = if target == InitTarget::OpenclawVllm {
+                160
+            } else {
+                80
+            };
+            anyhow::ensure!(
+                args.disk_gb.unwrap_or_else(|| default_disk(plan)) > base_disk,
+                "deployment disk must be larger than the {base_disk} GB base image to leave encrypted writable space"
+            );
+        }
     }
-    if target != InitTarget::Allinone {
-        anyhow::ensure!(
-            args.harness.is_none() && args.harness_mode.is_none(),
-            "--harness and --harness-mode apply only to allinone deployment"
-        );
-    }
-    let base_disk = match target {
-        InitTarget::Allinone | InitTarget::VllmInference => 80,
-        InitTarget::OpenclawVllm => 160,
-        _ => 30,
-    };
-    anyhow::ensure!(args.disk_gb.unwrap_or_else(|| default_disk(args, target)) > base_disk,
-        "deployment disk must be larger than the {base_disk} GB base image to leave encrypted writable space");
+
+    // Consumer validation (SharedCpuDeploy and GpuStaged(_, Deploy)).
+    let release = args
+        .image_release
+        .as_ref()
+        .context("instance initialization requires --image-release")?;
     anyhow::ensure!(
-        args.vllm_build_variants == "release",
-        "shared-image initialization currently supports a single release variant"
+        release.is_file(),
+        "--image-release must be an existing file"
     );
-    if args.stage == Some(InitStage::Build) {
-        anyhow::ensure!(args.harness.is_none() && args.harness_mode.is_none() && args.image_release.is_none() && args.trusted_key.is_none() && args.manifest.is_none() && args.image_id.is_none() && !args.skip_signature_verification, "build initialization does not select an instance harness or published release; use --stage deploy");
-    } else {
-        args.service_id
-            .as_ref()
-            .context("--stage deploy requires --service-id")?;
-        for (label, path) in [
-            ("--image-release", &args.image_release),
-            ("--trusted-key", &args.trusted_key),
-        ] {
-            if label == "--trusted-key" && args.skip_signature_verification {
-                continue;
-            }
-            let path = path
-                .as_ref()
-                .with_context(|| format!("--stage deploy requires {label}"))?;
-            anyhow::ensure!(path.is_file(), "{label} must be an existing file");
-        }
-        if let Some(pin) = &args.manifest {
-            let digest = pin.strip_prefix("sha256:").unwrap_or_default();
-            anyhow::ensure!(
-                digest.len() == 64 && digest.bytes().all(|b| b.is_ascii_hexdigit()),
-                "--manifest must be a full sha256: digest from the publisher"
-            );
-        }
-        if target == InitTarget::Allinone {
-            let (_, _, port) = harness_mode(args)?;
-            anyhow::ensure!(args.replicas == 1 || port.is_some(), "CLI harnesses have no load-balanced port; create independent instances with distinct --service-id values");
-        } else if target == InitTarget::Claudecode {
-            anyhow::ensure!(
-                args.replicas == 1,
-                "Claude Code CLI has no load-balanced port; use distinct --service-id values"
-            );
-        }
-        let output = args.output_dir.join(&name);
-        if output.exists() {
-            let output = output.canonicalize()?;
-            for input in [&args.image_release, &args.trusted_key]
-                .into_iter()
-                .flatten()
-            {
-                anyhow::ensure!(!input.canonicalize()?.starts_with(&output), "release and trusted key must be outside the output directory before --force replaces it");
-            }
-        }
+    let release_digest = args
+        .release_digest
+        .as_deref()
+        .context("instance initialization requires --release-digest sha256:<digest>")?;
+    validate_sha256_digest("--release-digest", release_digest)?;
+    if let Some(pin) = &args.manifest {
+        validate_sha256_digest("--manifest", pin)?;
     }
-    if target == InitTarget::Allinone {
+    let output = args.output_dir.join(&name);
+    if args.force && output.exists() {
+        let output = output.canonicalize()?;
         anyhow::ensure!(
-            args.disk_gb.unwrap_or(120) >= 120,
-            "allinone requires at least 120 GB including the encrypted writable layer"
+            !release.canonicalize()?.starts_with(&output),
+            "--image-release must be outside the output directory before --force replaces it"
         );
-        anyhow::ensure!(!args.enable_dingtalk && !args.disable_pep, "allinone uses its image-owned runtime; configure harness options in the generated native configuration");
     }
     Ok(())
 }
 
 pub(super) fn pep_binary(args: &InitArgs) -> Result<PathBuf> {
-    // The build section is removed for consumers; they need no build-time PEP binary lookup.
     if args.stage == Some(InitStage::Deploy) {
         Ok("/usr/bin/cai-pep".into())
     } else {
@@ -292,296 +405,407 @@ pub(super) fn pep_binary(args: &InitArgs) -> Result<PathBuf> {
     }
 }
 
-fn harness_choices(harness: &str) -> Result<(&'static [&'static str], &'static str, &'static str)> {
-    match harness {
-        "openclaw" | "hermes" => Ok((
+fn cpu_mode_choices(target: InitTarget) -> (&'static [&'static str], &'static str, &'static str) {
+    match target {
+        InitTarget::Openclaw | InitTarget::Hermes => (
             &["gateway", "cli"],
             "gateway",
-            "gateway: run a network service for clients; cli: use the terminal over SSH.",
-        )),
-        "codex" => Ok((
-            &["cli", "app-server"],
-            "cli",
-            "cli: run Codex in the terminal over SSH; app-server: run Codex for remote clients.",
-        )),
-        "claude-code" | "qodercli" | "opencode" | "pi" | "dsh" => Ok((
+            "gateway: run the authenticated network service over TNG; cli: terminal over SSH.",
+        ),
+        InitTarget::Codex => (
+            &["app-server", "cli"],
+            "app-server",
+            "app-server: run authenticated Codex app-server over TNG; cli: terminal over SSH.",
+        ),
+        InitTarget::Opencode | InitTarget::Dsh => (
+            &["web", "cli"],
+            "web",
+            "web: expose authenticated Web UI via loopback TNG; cli: terminal over SSH.",
+        ),
+        InitTarget::Claudecode | InitTarget::Qodercli | InitTarget::Pi => (
             &["cli"],
             "cli",
-            "This harness uses the terminal over SSH (cli).",
-        )),
-        _ => bail!("unsupported allinone harness: {harness}"),
+            "This application runs interactively over SSH (cli).",
+        ),
+        InitTarget::OpenclawVllm | InitTarget::VllmInference => unreachable!("GPU target"),
     }
 }
 
-fn harness_mode(args: &InitArgs) -> Result<(&str, &str, Option<u16>)> {
-    let harness = args
-        .harness
-        .as_deref()
-        .context("allinone deployment requires --harness")?;
-    let (_, default, _) = harness_choices(harness)?;
-    let mode = args.harness_mode.as_deref().unwrap_or(default);
-    let port = match (harness, mode) {
+fn cpu_target_mode(args: &InitArgs, target: InitTarget) -> Result<(&'static str, Option<u16>)> {
+    let (modes, default, _) = cpu_mode_choices(target);
+    let requested = args.harness_mode.as_deref().unwrap_or(default);
+    let &mode = modes
+        .iter()
+        .find(|&&m| m == requested)
+        .with_context(|| format!("unsupported mode {requested} for {}", target.command_name()))?;
+    let port = match (target, mode) {
         (_, "cli") => None,
-        ("openclaw", "gateway") => Some(18789),
-        ("hermes", "gateway") => Some(8642),
-        ("codex", "app-server") => Some(4500),
-        _ => bail!("unsupported mode {mode} for harness {harness}"),
+        (InitTarget::Openclaw, "gateway") => Some(18789),
+        (InitTarget::Hermes, "gateway") => Some(8642),
+        (InitTarget::Codex, "app-server") => Some(4500),
+        (InitTarget::Opencode, "web") => Some(4096),
+        (InitTarget::Dsh, "web") => Some(3080),
+        _ => bail!("unsupported mode {mode} for {}", target.command_name()),
     };
-    Ok((harness, mode, port))
+    Ok((mode, port))
 }
 
-pub(super) fn write_allinone(args: &InitArgs, project: &InitProject) -> Result<()> {
+pub(super) fn write_shared_cpu_build(args: &InitArgs, project: &InitProject) -> Result<()> {
     let assets = find_assets_root()?;
     let base = assets.join("examples/allinone");
-    let mut spec: Value = serde_yaml::from_str(&fs::read_to_string(base.join(
-        if args.stage == Some(InitStage::Build) {
-            "build.yaml"
-        } else {
-            "instance.yaml"
-        },
-    ))?)?;
+    let mut spec: Value = serde_yaml::from_str(&fs::read_to_string(base.join("build.yaml"))?)?;
+    spec["service"]["id"] = json!(project.service_id);
     spec["deploy"]["region"] = json!(project.region);
     spec["deploy"]["zone_id"] = json!(project.zone_id);
     spec["deploy"]["instance_type"] = json!(project.instance_type);
     spec["deploy"]["disk_gb"] = json!(project.disk_gb);
+    spec["deploy"]["image_variant"] = json!("release");
+    spec["build"]["variants"] = json!({"release": {"enabled": true}});
+    spec["resources"] = json!({});
     spec["attestation"]["reference_values"] =
         json!(reference_values_name(project.reference_values));
-    if args.stage == Some(InitStage::Build) {
-        copy_dir(&base.join("files"), &project.dir.join("files"))?;
-        copy_dir(
-            &assets.join("examples/openclaw/files"),
-            &project.dir.join("files/openclaw"),
-        )?;
-        for name in ["install-allinone.sh", "runtime-contract.json"] {
-            fs::copy(base.join(name), project.dir.join(name))?;
-        }
-        for (source, name) in [
-            (
-                "examples/cli-agents/files/tdx-remote-attestation.SKILL.md",
-                "tdx-remote-attestation.SKILL.md",
-            ),
-            (
-                "examples/cli-agents/files/install-cli-agent-runtime.sh",
-                "install-cli-agent-runtime.sh",
-            ),
-            (
-                "examples/hermes-agent/files/install-hermes-agent-runtime.sh",
-                "install-hermes-agent-runtime.sh",
-            ),
-        ] {
-            fs::copy(assets.join(source), project.dir.join("files").join(name))?;
-        }
-        for file in spec["build"]["files"]
-            .as_array_mut()
-            .context("allinone build files missing")?
-        {
-            let source = file["source"].as_str().context("missing build source")?;
-            if file["target"] == "/usr/local/bin/cai-pep" {
-                file["source"] = json!(pep_binary(args)?);
-            } else if source.starts_with("../") {
-                let name = Path::new(source)
-                    .file_name()
-                    .context("missing source filename")?
-                    .to_string_lossy();
-                file["source"] = if source.starts_with("../openclaw/") {
-                    json!(format!("./files/openclaw/{name}"))
-                } else {
-                    json!(format!("./files/{name}"))
-                };
-            }
-        }
-        if project.reference_values == InitReferenceValues::Rekor {
-            spec["attestation"]["rekor"] = json!({"cosign_key": project.cosign_key, "slsa_generator": project.slsa_generator, "required": true});
-        }
-    } else {
-        spec["resources"] = json!({});
-        let (harness, mode, port) = harness_mode(args)?;
-        let mut runtime = json!({"harness": harness, "mode": mode, "environment": {}});
-        spec["service"]["ports"] = json!(port.into_iter().collect::<Vec<_>>());
-        spec["service"]["connect"] = spec["service"]["ports"].clone();
-        if let Some(port) = port {
-            runtime["port"] = json!(port);
-        }
-        let key = project.dashscope_key.as_deref().unwrap_or("");
-        let home = "/opt/data/allinone/home";
-        match harness {
-            "codex" => {
-                runtime["environment"]["OPENAI_API_KEY"] = json!(key);
-                let config = format!("model_provider = \"Model_Studio\"\nmodel = {}\n[model_providers.Model_Studio]\nname = \"Model_Studio\"\nbase_url = {}\nenv_key = \"OPENAI_API_KEY\"\nwire_api = \"responses\"\n", json!(project.model), json!(project.dashscope_base_url));
-                resource(
-                    project,
-                    &mut spec,
-                    "codex_config",
-                    "config.toml",
-                    &format!("{home}/.codex/config.toml"),
-                    &config,
-                )?;
-                if mode == "app-server" {
-                    let token = args
-                        .codex_app_server_token
-                        .clone()
-                        .unwrap_or_else(|| random_base64(32));
-                    resource(
-                        project,
-                        &mut spec,
-                        "codex_app_server_token",
-                        "app-server-token",
-                        &format!("{home}/.codex/app-server-token"),
-                        &format!("{token}\n"),
-                    )?;
-                }
-            }
-            "hermes" => {
-                runtime["environment"] = json!({"HERMES_MODEL": project.model});
-                if mode == "gateway" {
-                    runtime["environment"]["API_SERVER_KEY"] = json!(args
-                        .hermes_api_server_key
-                        .clone()
-                        .unwrap_or_else(|| random_hex(32)));
-                }
-                let config = serde_yaml::to_string(
-                    &json!({"model": {"provider": "custom", "base_url": project.dashscope_base_url,
-                        "api_key": key, "default": project.model, "model": project.model}}),
-                )?;
-                resource(
-                    project,
-                    &mut spec,
-                    "hermes_config",
-                    "config.yaml",
-                    "/opt/data/allinone/hermes/config.yaml",
-                    &config,
-                )?;
-            }
-            "openclaw" => {
-                // The shared image carries the same executor patch and PEP as
-                // standalone OpenClaw; its workspace is instance-specific.
-                let mut config = json!({
-                    "models": {"mode": "merge", "providers": {"bailian": {
-                        "baseUrl": project.dashscope_base_url, "apiKey": key,
-                        "api": "openai-completions", "models": [{
-                            "id": project.model, "name": project.model,
-                            "reasoning": false, "input": ["text"],
-                            "contextWindow": 262144, "maxTokens": 65536
-                        }]
-                    }}},
-                    "agents": {"defaults": {
-                        "model": {"primary": format!("bailian/{}", project.model)},
-                        "workspace": "/opt/data/allinone/workspace"
-                    }},
-                    "tools": {"profile": "full"},
-                    "plugins": {
-                        "enabled": true, "allow": ["cai-pep", "cai-a2a"],
-                        "entries": {
-                            "cai-pep": {"enabled": true, "config": {
-                                "socketPath": "/run/cai/pep.sock",
-                                "pepRequired": true,
-                                "defaultWorkdir": "/opt/data/allinone/workspace"
-                            }},
-                            "cai-a2a": {"enabled": true, "config": {"peers": {}}}
-                        }
-                    },
-                    "gateway": {
-                        "mode": "local", "bind": "loopback", "port": 18789,
-                        "auth": {"mode": "token", "token": args.gateway_token.clone().unwrap_or_else(|| random_hex(32))}
-                    }
-                });
-                config["gateway"]["http"] = json!({"endpoints":{"responses":{"enabled":true}}});
-                resource(
-                    project,
-                    &mut spec,
-                    "openclaw_config",
-                    "openclaw.json",
-                    &format!("{home}/.openclaw/openclaw.json"),
-                    &serde_json::to_string_pretty(&config)?,
-                )?;
-            }
-            "claude-code" => {
-                runtime["environment"] = json!({
-                    "ANTHROPIC_AUTH_TOKEN": key,
-                    "ANTHROPIC_BASE_URL": project.dashscope_anthropic_base_url,
-                    "ANTHROPIC_MODEL": project.model,
-                    "ANTHROPIC_DEFAULT_HAIKU_MODEL": project.model,
-                    "ANTHROPIC_DEFAULT_SONNET_MODEL": project.model,
-                    "ANTHROPIC_DEFAULT_OPUS_MODEL": project.model,
-                    "CLAUDE_CODE_SUBAGENT_MODEL": project.model,
-                    "DISABLE_AUTOUPDATER": "1"
-                });
-                resource(
-                    project,
-                    &mut spec,
-                    "claude_onboarding",
-                    "claude.json",
-                    &format!("{home}/.claude.json"),
-                    "{\"hasCompletedOnboarding\":true}\n",
-                )?;
-            }
-            "opencode" => {
-                let config = json!({"$schema":"https://opencode.ai/config.json","autoupdate":false,"provider":{"bailian":{"npm":"@ai-sdk/openai-compatible","name":"Bailian","options":{"baseURL":project.dashscope_base_url,"apiKey":key},"models":{project.model.clone():{"name":project.model}}}},"model":format!("bailian/{}",project.model)});
-                resource(
-                    project,
-                    &mut spec,
-                    "opencode_config",
-                    "opencode.json",
-                    &format!("{home}/.config/opencode/opencode.json"),
-                    &serde_json::to_string_pretty(&config)?,
-                )?;
-            }
-            "pi" => {
-                runtime["environment"]["CA_INFERENCE_API_KEY"] = json!(key);
-                let models = json!({"providers":{"inference":{
-                    "baseUrl":project.dashscope_base_url,"api":"openai-completions",
-                    "apiKey":"$CA_INFERENCE_API_KEY","models":[{"id":project.model}]
-                }}});
-                resource(
-                    project,
-                    &mut spec,
-                    "pi_models",
-                    "pi-models.json",
-                    &format!("{home}/.pi/agent/models.json"),
-                    &serde_json::to_string_pretty(&models)?,
-                )?;
-                let settings = json!({"defaultProvider":"inference","defaultModel":project.model});
-                resource(
-                    project,
-                    &mut spec,
-                    "pi_settings",
-                    "pi-settings.json",
-                    &format!("{home}/.pi/agent/settings.json"),
-                    &serde_json::to_string_pretty(&settings)?,
-                )?;
-            }
-            "dsh" => {
-                runtime["environment"]["CA_INFERENCE_API_KEY"] = json!(key);
-                let patches = json!([
-                    {"id":"llm-pi-ai","config":{"providers":{"inference":{
-                        "api":"openai-completions","baseURL":project.dashscope_base_url,
-                        "apiKeyEnv":"CA_INFERENCE_API_KEY","models":[{"id":project.model}]
-                    }}}},
-                    {"id":"agent-default-model","config":{"provider":"inference","model":project.model}}
-                ]);
-                resource(
-                    project,
-                    &mut spec,
-                    "dsh_config",
-                    "cordis.patch.yml",
-                    &format!("{home}/.dsh/cordis.patch.yml"),
-                    &serde_yaml::to_string(&patches)?,
-                )?;
-            }
-            "qodercli" => {
-                // Qoder account login is performed in the guest, not inferred from a model API key.
-            }
-            _ => unreachable!(),
-        }
-        resource(
-            project,
-            &mut spec,
-            "runtime",
-            "runtime.json",
-            "/opt/data/allinone/runtime.json",
-            &serde_json::to_string_pretty(&runtime)?,
-        )?;
+
+    copy_dir(&base.join("files"), &project.dir.join("files"))?;
+    copy_dir(
+        &assets.join("examples/openclaw/files"),
+        &project.dir.join("files/openclaw"),
+    )?;
+    for name in ["install-allinone.sh", "runtime-contract.json"] {
+        fs::copy(base.join(name), project.dir.join(name))?;
     }
+    set_mode(&project.dir.join("install-allinone.sh"), 0o755)?;
+    for (source, name) in [
+        (
+            "examples/cli-agents/files/tdx-remote-attestation.SKILL.md",
+            "tdx-remote-attestation.SKILL.md",
+        ),
+        (
+            "examples/cli-agents/files/install-cli-agent-runtime.sh",
+            "install-cli-agent-runtime.sh",
+        ),
+        (
+            "examples/hermes-agent/files/install-hermes-agent-runtime.sh",
+            "install-hermes-agent-runtime.sh",
+        ),
+    ] {
+        let dst = project.dir.join("files").join(name);
+        fs::copy(assets.join(source), &dst)?;
+        if name.ends_with(".sh") {
+            set_mode(&dst, 0o755)?;
+        }
+    }
+    for file in spec["build"]["files"]
+        .as_array_mut()
+        .context("allinone build files missing")?
+    {
+        let source = file["source"].as_str().context("missing build source")?;
+        if file["target"] == "/usr/local/bin/cai-pep" {
+            file["source"] = json!(pep_binary(args)?);
+        } else if source.starts_with("../") {
+            let name = Path::new(source)
+                .file_name()
+                .context("missing source filename")?
+                .to_string_lossy();
+            file["source"] = if source.starts_with("../openclaw/") {
+                json!(format!("./files/openclaw/{name}"))
+            } else {
+                json!(format!("./files/{name}"))
+            };
+        }
+    }
+    if project.reference_values == InitReferenceValues::Rekor {
+        spec["attestation"]["rekor"] = json!({
+            "cosign_key": project.cosign_key,
+            "slsa_generator": project.slsa_generator,
+            "required": true
+        });
+    } else {
+        spec["attestation"].as_object_mut().unwrap().remove("rekor");
+    }
+    write_file(&project.spec_path, &serde_yaml::to_string(&spec)?, 0o644)
+}
+
+pub(super) fn write_shared_cpu_deploy(
+    args: &InitArgs,
+    project: &InitProject,
+    target: InitTarget,
+) -> Result<()> {
+    let assets = find_assets_root()?;
+    let base = assets.join("examples/allinone");
+    let mut spec: Value = serde_yaml::from_str(&fs::read_to_string(base.join("instance.yaml"))?)?;
+    spec.as_object_mut().unwrap().remove("build");
+    spec["service"]["id"] = json!(project.service_id);
+    spec["service"]["ssh"] = json!(true);
+    spec["deploy"]["region"] = json!(project.region);
+    spec["deploy"]["zone_id"] = json!(project.zone_id);
+    spec["deploy"]["instance_type"] = json!(project.instance_type);
+    spec["deploy"]["disk_gb"] = json!(project.disk_gb);
+    spec["deploy"]["image_variant"] = json!("release");
+    spec["deploy"]["replicas"] = json!(args.replicas);
+    if args.replicas > 1 {
+        spec["deploy"]["slb"] = json!({"enabled": true, "slb_type": "nlb"});
+    } else {
+        spec["deploy"].as_object_mut().unwrap().remove("slb");
+    }
+    spec["attestation"]["reference_values"] =
+        json!(reference_values_name(project.reference_values));
+    spec["attestation"].as_object_mut().unwrap().remove("rekor");
+
+    let release_src = args
+        .image_release
+        .as_ref()
+        .context("missing --image-release")?;
+    let release_digest = args
+        .release_digest
+        .as_ref()
+        .context("missing --release-digest")?;
+    fs::copy(release_src, project.dir.join("image-release.json"))?;
+    let mut image = json!({
+        "release": "./image-release.json",
+        "release_digest": release_digest,
+    });
+    if let Some(pin) = &args.manifest {
+        image["manifest"] = json!(pin);
+    }
+    if let Some(id) = &args.image_id {
+        image["image_id"] = json!(id);
+    }
+    spec["deploy"]["image"] = image;
+
+    spec["resources"] = json!({});
+    let harness = target.service_id();
+    let (mode, port) = cpu_target_mode(args, target)?;
+    let mut runtime = json!({"harness": harness, "mode": mode, "environment": {}});
+    spec["service"]["ports"] = json!(port.into_iter().collect::<Vec<_>>());
+    spec["service"]["connect"] = spec["service"]["ports"].clone();
+    if let Some(port) = port {
+        runtime["port"] = json!(port);
+    }
+
+    let key = project.dashscope_key.as_deref().unwrap_or("");
+    let home = "/opt/data/allinone/home";
+    match target {
+        InitTarget::Codex => {
+            runtime["environment"]["OPENAI_API_KEY"] = json!(key);
+            let config = format!(
+                "model_provider = \"Model_Studio\"\nmodel = {}\n[model_providers.Model_Studio]\nname = \"Model_Studio\"\nbase_url = {}\nenv_key = \"OPENAI_API_KEY\"\nwire_api = \"responses\"\n",
+                json!(project.model),
+                json!(project.dashscope_base_url)
+            );
+            resource(
+                project,
+                &mut spec,
+                "codex_config",
+                "config.toml",
+                &format!("{home}/.codex/config.toml"),
+                &config,
+            )?;
+            if mode == "app-server" {
+                let token = args
+                    .codex_app_server_token
+                    .clone()
+                    .or_else(|| args.gateway_token.clone())
+                    .unwrap_or_else(|| random_base64(32));
+                resource(
+                    project,
+                    &mut spec,
+                    "codex_app_server_token",
+                    "app-server-token",
+                    &format!("{home}/.codex/app-server-token"),
+                    &format!("{token}\n"),
+                )?;
+            }
+        }
+        InitTarget::Hermes => {
+            runtime["environment"] = json!({"HERMES_MODEL": project.model});
+            if mode == "gateway" {
+                runtime["environment"]["API_SERVER_KEY"] = json!(args
+                    .hermes_api_server_key
+                    .clone()
+                    .or_else(|| args.gateway_token.clone())
+                    .unwrap_or_else(|| random_hex(32)));
+            }
+            let config = serde_yaml::to_string(&json!({
+                "model": {
+                    "provider": "custom",
+                    "base_url": project.dashscope_base_url,
+                    "api_key": key,
+                    "default": project.model,
+                    "model": project.model
+                }
+            }))?;
+            resource(
+                project,
+                &mut spec,
+                "hermes_config",
+                "config.yaml",
+                "/opt/data/allinone/hermes/config.yaml",
+                &config,
+            )?;
+        }
+        InitTarget::Openclaw => {
+            if project.disable_pep {
+                runtime["disable_pep"] = json!(true);
+            }
+            let bind = if mode == "gateway" { "lan" } else { "loopback" };
+            let config = super::openclaw_json(
+                project,
+                false,
+                Some("/opt/data/allinone/workspace"),
+                bind,
+                port.unwrap_or(18789),
+            )?;
+            resource(
+                project,
+                &mut spec,
+                "openclaw_config",
+                "openclaw.json",
+                &format!("{home}/.openclaw/openclaw.json"),
+                &serde_json::to_string_pretty(&config)?,
+            )?;
+            if mode == "gateway" {
+                spec["a2a"] = json!({
+                    "enabled": project.reference_values == InitReferenceValues::Rekor,
+                    "id": project.service_id,
+                    "name": project.service_id,
+                    "version": "1.0.0",
+                    "description": "OpenClaw confidential agent",
+                    "skills": [{
+                        "id": "chat",
+                        "name": "Chat",
+                        "description": "OpenClaw gateway chat"
+                    }]
+                });
+            }
+        }
+        InitTarget::Claudecode => {
+            runtime["environment"] = json!({
+                "ANTHROPIC_AUTH_TOKEN": key,
+                "ANTHROPIC_BASE_URL": project.dashscope_anthropic_base_url,
+                "ANTHROPIC_MODEL": project.model,
+                "ANTHROPIC_DEFAULT_HAIKU_MODEL": project.model,
+                "ANTHROPIC_DEFAULT_SONNET_MODEL": project.model,
+                "ANTHROPIC_DEFAULT_OPUS_MODEL": project.model,
+                "CLAUDE_CODE_SUBAGENT_MODEL": project.model,
+                "DISABLE_AUTOUPDATER": "1"
+            });
+            resource(
+                project,
+                &mut spec,
+                "claude_onboarding",
+                "claude.json",
+                &format!("{home}/.claude.json"),
+                "{\"hasCompletedOnboarding\":true}\n",
+            )?;
+        }
+        InitTarget::Opencode => {
+            if mode == "web" {
+                let password = project
+                    .gateway_token
+                    .as_deref()
+                    .context("OpenCode server password was not resolved")?;
+                runtime["environment"]["OPENCODE_SERVER_PASSWORD"] = json!(password);
+            }
+            let config = json!({
+                "$schema": "https://opencode.ai/config.json",
+                "autoupdate": false,
+                "provider": {
+                    "bailian": {
+                        "npm": "@ai-sdk/openai-compatible",
+                        "name": "Bailian",
+                        "options": {
+                            "baseURL": project.dashscope_base_url,
+                            "apiKey": key
+                        },
+                        "models": {
+                            project.model.clone(): {"name": project.model}
+                        }
+                    }
+                },
+                "model": format!("bailian/{}", project.model)
+            });
+            resource(
+                project,
+                &mut spec,
+                "opencode_config",
+                "opencode.json",
+                &format!("{home}/.config/opencode/opencode.json"),
+                &serde_json::to_string_pretty(&config)?,
+            )?;
+        }
+        InitTarget::Pi => {
+            runtime["environment"]["CA_INFERENCE_API_KEY"] = json!(key);
+            let models = json!({
+                "providers": {
+                    "inference": {
+                        "baseUrl": project.dashscope_base_url,
+                        "api": "openai-completions",
+                        "apiKey": "$CA_INFERENCE_API_KEY",
+                        "models": [{"id": project.model}]
+                    }
+                }
+            });
+            resource(
+                project,
+                &mut spec,
+                "pi_models",
+                "pi-models.json",
+                &format!("{home}/.pi/agent/models.json"),
+                &serde_json::to_string_pretty(&models)?,
+            )?;
+            let settings = json!({"defaultProvider": "inference", "defaultModel": project.model});
+            resource(
+                project,
+                &mut spec,
+                "pi_settings",
+                "pi-settings.json",
+                &format!("{home}/.pi/agent/settings.json"),
+                &serde_json::to_string_pretty(&settings)?,
+            )?;
+        }
+        InitTarget::Dsh => {
+            runtime["environment"]["CA_INFERENCE_API_KEY"] = json!(key);
+            let patches = json!([
+                {
+                    "id": "llm-pi-ai",
+                    "config": {
+                        "providers": {
+                            "inference": {
+                                "api": "openai-completions",
+                                "baseURL": project.dashscope_base_url,
+                                "apiKeyEnv": "CA_INFERENCE_API_KEY",
+                                "models": [{"id": project.model}]
+                            }
+                        }
+                    }
+                },
+                {
+                    "id": "agent-default-model",
+                    "config": {"provider": "inference", "model": project.model}
+                }
+            ]);
+            resource(
+                project,
+                &mut spec,
+                "dsh_config",
+                "cordis.patch.yml",
+                &format!("{home}/.dsh/cordis.patch.yml"),
+                &serde_yaml::to_string(&patches)?,
+            )?;
+        }
+        InitTarget::Qodercli => {
+            // Qoder account login is performed in the guest, not inferred from a model API key.
+        }
+        InitTarget::OpenclawVllm | InitTarget::VllmInference => unreachable!("GPU target"),
+    }
+    resource(
+        project,
+        &mut spec,
+        "runtime",
+        "runtime.json",
+        "/opt/data/allinone/runtime.json",
+        &serde_json::to_string_pretty(&runtime)?,
+    )?;
     write_file(&project.spec_path, &serde_yaml::to_string(&spec)?, 0o644)
 }
 
@@ -597,62 +821,53 @@ fn resource(
     fs::create_dir_all(&secrets)?;
     set_mode(&secrets, 0o700)?;
     write_secret_file(&secrets.join(file), content)?;
-    spec["resources"][name] =
-        json!({"source":format!("./secrets/{file}"),"target":target,"mode":"0600","required":true});
+    spec["resources"][name] = json!({"source": format!("./secrets/{file}"), "target": target, "mode": "0600", "required": true});
     Ok(())
 }
 
-pub(super) fn finish(args: &InitArgs, project: &InitProject) -> Result<()> {
-    let Some(stage) = args.stage else {
+pub(super) fn finish_gpu(args: &InitArgs, project: &InitProject) -> Result<()> {
+    let InitPlan::GpuStaged(_, stage) = project.plan else {
         return Ok(());
     };
     let mut spec: Value = serde_yaml::from_str(&fs::read_to_string(&project.spec_path)?)?;
-    spec["service"]["id"] = json!(project_name(args, project.target));
+    spec["service"]["id"] = json!(project.service_id);
     if spec["a2a"].is_object() {
         spec["a2a"]["id"] = spec["service"]["id"].clone();
         spec["a2a"]["name"] = spec["service"]["id"].clone();
-    }
-    // Published reusable images use release; debug images contain build-time SSH credentials.
-    spec["deploy"]["image_variant"] = json!("release");
-    if project.target != InitTarget::Allinone {
-        spec["service"]["ssh"] = json!(true);
-        if stage == InitStage::Build {
-            add_management_ssh(project, &mut spec)?;
+        if project.reference_values == InitReferenceValues::Sample {
+            spec["a2a"]["enabled"] = json!(false);
         }
     }
+    spec["deploy"]["image_variant"] = json!("release");
+    spec["service"]["ssh"] = json!(true);
     if stage == InitStage::Build {
-        spec["build"]["variants"] = json!({"release":{"enabled":true}});
+        add_management_ssh(project, &mut spec)?;
+        spec["build"]["variants"] = json!({"release": {"enabled": true}});
         spec["resources"] = json!({});
-        // Replicas and load-balancer selection belong to consumer deployments.
         spec["deploy"].as_object_mut().unwrap().remove("replicas");
         spec["deploy"].as_object_mut().unwrap().remove("slb");
     } else {
         spec.as_object_mut().unwrap().remove("build");
         spec["deploy"]["replicas"] = json!(args.replicas);
         if args.replicas > 1 && spec["deploy"]["slb"].is_null() {
-            // Preserve RATS-TLS/WebSocket semantics for gateway services. Inference
-            // already selects ALB + OHTTP in its template.
-            spec["deploy"]["slb"] = json!({"enabled":true,"slb_type":"nlb"});
+            spec["deploy"]["slb"] = json!({"enabled": true, "slb_type": "nlb"});
         }
         spec["attestation"].as_object_mut().unwrap().remove("rekor");
         fs::copy(
             args.image_release.as_ref().unwrap(),
             project.dir.join("image-release.json"),
         )?;
-        spec["deploy"]["image"] = json!({"release":"./image-release.json", "skip_signature_verification":args.skip_signature_verification});
+        let mut image = json!({
+            "release": "./image-release.json",
+            "release_digest": args.release_digest.as_ref().unwrap(),
+        });
         if let Some(pin) = &args.manifest {
-            spec["deploy"]["image"]["manifest"] = json!(pin);
-        }
-        if !args.skip_signature_verification {
-            fs::copy(
-                args.trusted_key.as_ref().unwrap(),
-                project.dir.join("publisher.pem"),
-            )?;
-            spec["deploy"]["image"]["trusted_key"] = json!("./publisher.pem");
+            image["manifest"] = json!(pin);
         }
         if let Some(id) = &args.image_id {
-            spec["deploy"]["image"]["image_id"] = json!(id);
+            image["image_id"] = json!(id);
         }
+        spec["deploy"]["image"] = image;
     }
     write_file(&project.spec_path, &serde_yaml::to_string(&spec)?, 0o644)
 }
@@ -675,7 +890,7 @@ fn add_management_ssh(project: &InitProject, spec: &mut Value) -> Result<()> {
         spec["build"]["files"]
             .as_array_mut()
             .context("missing build files")?
-            .push(json!({"source":format!("./management-ssh/{name}"),"target":target}));
+            .push(json!({"source": format!("./management-ssh/{name}"), "target": target}));
     }
     let packages = spec["build"]["packages"]
         .as_array_mut()
@@ -708,8 +923,20 @@ systemctl enable cai-ssh.path
 }
 
 pub(super) fn write_next_steps(cli: &Cli, args: &InitArgs, project: &InitProject) -> Result<()> {
-    let name = project_name(args, project.target);
-    let steps = if args.stage == Some(InitStage::Build) {
+    let name = &project.service_id;
+    let steps = if matches!(
+        project.plan,
+        InitPlan::SharedCpuBuild | InitPlan::GpuStaged(_, InitStage::Build)
+    ) {
+        let consumer_example = match project.plan {
+            InitPlan::GpuStaged(target, _) => {
+                format!(
+                    "confidential-agent init {} --stage deploy",
+                    target.command_name()
+                )
+            }
+            _ => "confidential-agent init openclaw".to_string(),
+        };
         format!(
             r#"# Build and publish {name}
 
@@ -720,29 +947,31 @@ Review build.yaml, then configure cloud credentials with /usr/libexec/cagent/bin
 confidential-agent spec validate --spec build.yaml
 confidential-agent build --spec build.yaml
 confidential-agent image publish {name} --spec build.yaml
-test -f publisher.key || (umask 077; openssl genpkey -algorithm ED25519 -out publisher.key)
-openssl pkey -in publisher.key -pubout -out publisher.pem
-confidential-agent image export {name} --signing-key publisher.key --output image-release.json
+confidential-agent image export {name} --output image-release.json
 ```
 
+`image export` prints `release_digest=sha256:...` for this release document.
 For an already available shared/marketplace image, add --region REGION --image-id IMAGE_ID to image export; no upload or import is performed.
-Keep publisher.key private. The manifest digest is read automatically from the authenticated release.
-Use `confidential-agent init {target} --stage deploy` with the release, independently trusted
-publisher public key. Optional --manifest pins a specific version. Each instance gets a distinct --service-id.
-For allinone, select --harness for each instance; reuse this same release without rebuilding.
-Changing software versions requires a new build and release. Changing model/provider
-configuration does not require rebuilding. Destroying a consumer preserves the shared image.
-"#,
-            target = project.target.command_name()
+Initialize instances with `{consumer_example} --image-release ./image-release.json --release-digest sha256:...` (or a digest from the versioned official Release index).
+Optional --manifest pins a specific manifest digest; --service-id sets a distinct instance name when running multiple instances.
+Reuse this same shared CPU release across openclaw, hermes, codex, claude-code, qodercli, opencode, pi, and dsh without rebuilding.
+Changing software versions requires a new build and release. Changing model/provider configuration does not require rebuilding.
+Destroying a consumer preserves the shared image.
+"#
         )
     } else {
+        let access = match project.plan {
+            InitPlan::SharedCpuDeploy(target) => cpu_access_steps(args, target, name)?,
+            _ => format!(
+                "```bash\nconfidential-agent ssh {name} --tty\nconfidential-agent connect start --service {name}\n```\n"
+            ),
+        };
         format!(
-            r#"# Deploy {name} from an existing image
+            r#"# Deploy {name} from a published image
 
 Run these commands from this directory. Review instance.yaml and private files in secrets/.
-The release signature is verified by default; --skip-signature-verification explicitly opts out.
-Runtime compatibility and runtime attestation checks remain enabled.
-Do not run build for this project. For Qoder, complete its official login/model wizard via SSH.
+CA authenticates image-release.json against deploy.image.release_digest and verifies runtime TDX attestation.
+Use the published image to deploy this project.
 
 ```bash
 confidential-agent peering add --role operator --cidr YOUR_PUBLIC_IP/32 --label operator
@@ -752,28 +981,14 @@ confidential-agent status --live
 confidential-agent report --json
 ```
 
-Management SSH uses credentials delivered after attestation, not a baked-in debug key.
-For allinone:
-```bash
-confidential-agent ssh {name} -- cai-agent --check
-confidential-agent ssh {name} --tty -- cai-agent
-```
+Management SSH uses credentials delivered after attestation.
 
-For a configured gateway/app-server, use `confidential-agent connect start --service {name}`.
-Readiness is not a model test: send an actual model request after configuring credentials.
+{access}
+Send a model request to check the configured provider after the application is ready.
 Run init again with a different --service-id to create an independent instance from the same release.
-Gateway/app-server --replicas N creates a load-balanced service with shared service configuration;
-CLI harnesses use distinct service IDs instead. Simultaneously running different harnesses use different service IDs.
-Replicas share a service identity; independent services have independent credentials and SSH keys.
-Use `confidential-agent ssh SERVICE --instance-id INSTANCE_ID` to address a recorded physical replica.
-Parallel local tunnels need separate --ready-json/--log-file paths. CA selects available local
-ports; read client_endpoints from each ready JSON instead of assuming the guest port is free.
-To switch an existing allinone CLI instance to another CLI harness, generate its configuration
-with the same --service-id in a new output directory, using the same release and infrastructure settings.
-Use `confidential-agent inject --spec instance.yaml --target-ip INSTANCE_IP` with that new configuration.
-The instance ID and its existing data remain; no rebuild or new deploy is needed.
-Use inject to update resources of an existing instance;
-port/mode changes also affect deployment topology, so create a new instance for those changes.
+Network services support --replicas N for load-balanced replicas; CLI applications use distinct --service-id values instead.
+Use `confidential-agent inject --spec instance.yaml --target-ip INSTANCE_IP` to update resources on an existing instance;
+port/mode changes affect deployment topology, so create a new instance for those changes.
 
 ```bash
 confidential-agent destroy {name}
@@ -784,62 +999,107 @@ confidential-agent destroy {name}
     write_project_next_steps(cli, project, &steps)
 }
 
+fn cpu_access_steps(args: &InitArgs, target: InitTarget, name: &str) -> Result<String> {
+    let (mode, port) = cpu_target_mode(args, target)?;
+    let mut steps = format!("```bash\nconfidential-agent ssh {name} -- cai-agent --check\n```\n");
+    if port.is_some() {
+        steps.push_str(&format!(
+            "\nStart the tunnel and set `LOCAL_PORT` to the mapped port it reports.\n\n```bash\nconfidential-agent connect start --service {name}\n```\n"
+        ));
+    }
+    steps.push_str(&match (target, mode) {
+        (InitTarget::Openclaw, "gateway") => r#"
+Open `http://127.0.0.1:LOCAL_PORT/openclaw` and use the gateway token from `secrets/openclaw.json`.
+
+```bash
+openclaw tui --url "ws://127.0.0.1:$LOCAL_PORT" --token "$(jq -r .gateway.auth.token secrets/openclaw.json)"
+```
+"#.into(),
+        (InitTarget::Hermes, "gateway") => "\nSend requests to `http://127.0.0.1:LOCAL_PORT/v1/chat/completions` with the `API_SERVER_KEY` from `secrets/runtime.json` as a Bearer token.\n".into(),
+        (InitTarget::Codex, "app-server") => r#"
+```bash
+CODEX_REMOTE_TOKEN="$(cat secrets/app-server-token)" codex --remote "ws://127.0.0.1:$LOCAL_PORT" --remote-auth-token-env CODEX_REMOTE_TOKEN
+```
+"#.into(),
+        (InitTarget::Opencode, "web") => r#"
+Open `http://127.0.0.1:LOCAL_PORT` and sign in as `opencode` with `OPENCODE_SERVER_PASSWORD` from `secrets/runtime.json`, or attach from a terminal.
+
+```bash
+OPENCODE_SERVER_USERNAME=opencode OPENCODE_SERVER_PASSWORD="$(jq -r .environment.OPENCODE_SERVER_PASSWORD secrets/runtime.json)" opencode attach "http://127.0.0.1:$LOCAL_PORT"
+```
+"#.into(),
+        (InitTarget::Dsh, "web") => format!(
+            "\nOpen the login URL returned by this SSH command.\n\n```bash\nconfidential-agent ssh {name} -- cai-agent --web-url --port \"$LOCAL_PORT\"\n```\n"
+        ),
+        (InitTarget::Dsh, "cli") => format!(
+            "\n```bash\nconfidential-agent ssh {name} -- cai-agent headless 'Your task'\n```\n"
+        ),
+        _ => format!("\n```bash\nconfidential-agent ssh {name} --tty -- cai-agent\n```\n"),
+    });
+    if target == InitTarget::Qodercli {
+        steps.push_str("\nSign in to Qoder and complete its `/model` wizard in the guest.\n");
+    }
+    Ok(steps)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use clap::Parser;
 
-    fn run(temp: &Path, target: &str, stage: &str, extra: &[&str]) -> Result<PathBuf> {
+    fn run_args(temp: &Path, args_slice: &[&str]) -> Result<PathBuf> {
         let output = temp.join("projects");
         let mut argv = vec![
             "cagent",
             "init",
-            target,
-            "--stage",
-            stage,
             "--non-interactive",
             "--reference-values",
             "sample",
             "--output-dir",
             output.to_str().unwrap(),
         ];
-        argv.extend(extra);
+        argv.extend(args_slice);
         let cli = Cli::try_parse_from(argv)?;
         let Commands::Init(args) = &cli.command else {
             unreachable!()
         };
+        let mut resolved = args.clone();
+        let plan = resolve_plan_and_interactive(&mut resolved)?;
         cmd_init(&cli, args)?;
-        Ok(output.join(project_name(args, args.target.unwrap())))
+        Ok(output.join(project_name(&resolved, plan)))
     }
 
     #[test]
-    fn harness_choices_only_offer_supported_modes() {
-        assert_eq!(harness_choices("codex").unwrap().0, &["cli", "app-server"]);
-        assert_eq!(harness_choices("hermes").unwrap().0, &["gateway", "cli"]);
-        assert_eq!(harness_choices("claude-code").unwrap().0, &["cli"]);
-        assert!(harness_choices("unknown").is_err());
+    fn cpu_mode_choices_match_standard_application_modes() {
+        assert_eq!(cpu_mode_choices(InitTarget::Openclaw).1, "gateway");
+        assert_eq!(cpu_mode_choices(InitTarget::Hermes).1, "gateway");
+        assert_eq!(cpu_mode_choices(InitTarget::Codex).1, "app-server");
+        assert_eq!(cpu_mode_choices(InitTarget::Opencode).1, "web");
+        assert_eq!(cpu_mode_choices(InitTarget::Dsh).1, "web");
+        assert_eq!(cpu_mode_choices(InitTarget::Claudecode).0, &["cli"]);
+        assert_eq!(cpu_mode_choices(InitTarget::Qodercli).0, &["cli"]);
+        assert_eq!(cpu_mode_choices(InitTarget::Pi).0, &["cli"]);
     }
 
     #[test]
-    fn skipped_signature_init_has_no_key_or_uid_and_next_steps_preserve_state_directory() {
+    fn release_digest_init_writes_authenticated_digest_and_preserves_state_dir_in_next_steps() {
         let temp = tempfile::tempdir().unwrap();
         let release = temp.path().join("release.json");
         fs::write(&release, "fixture").unwrap();
+        let digest = format!("sha256:{}", "b".repeat(64));
         let state = temp.path().join("state with spaces and 'quote");
-        let output = run(
+        let output = run_args(
             temp.path(),
-            "allinone",
-            "deploy",
             &[
+                "codex",
                 "--service-id",
                 "portable-consumer",
                 "--dashscope-api-key",
                 "test-model-key",
-                "--harness",
-                "codex",
                 "--image-release",
                 release.to_str().unwrap(),
-                "--skip-signature-verification",
+                "--release-digest",
+                &digest,
                 "--image-id",
                 "m-marketplace",
                 "--state-dir",
@@ -849,148 +1109,103 @@ mod tests {
         .unwrap();
         let spec = AgentSpec::from_path(&output.join("instance.yaml")).unwrap();
         let image = spec.deploy.image.unwrap();
-        assert!(image.skip_signature_verification);
+        assert_eq!(image.release_digest.as_deref(), Some(digest.as_str()));
+        assert!(!image.skip_signature_verification);
         assert!(image.manifest.is_none());
         assert!(image.trusted_key.as_os_str().is_empty());
         assert_eq!(image.image_id.as_deref(), Some("m-marketplace"));
+        assert_eq!(spec.service.ports, vec![4500]);
         assert!(!output.join("publisher.pem").exists());
         let yaml = fs::read_to_string(output.join("instance.yaml")).unwrap();
+        assert!(!yaml.contains("trusted_key"));
+        assert!(!yaml.contains("skip_signature_verification"));
         assert!(!yaml.contains("account_id"));
-        assert!(!yaml.contains("manifest:"));
         let steps = fs::read_to_string(output.join("NEXT_STEPS.md")).unwrap();
         assert!(steps.contains(&format!("cd {}", shell_path(&output))));
         assert!(steps.contains(&format!(
             "confidential-agent --state-dir {} deploy --spec instance.yaml",
             shell_path(&state)
         )));
-        assert!(!steps.contains("account ID"));
     }
 
     #[test]
-    fn all_builders_have_complete_inputs_and_no_instance_secrets() {
+    fn untargeted_and_targeted_cpu_builders_generate_the_same_shared_image_builder() {
         let _guard = super::super::tests::ENV_LOCK.lock().unwrap();
         let temp = tempfile::tempdir().unwrap();
         let pep = temp.path().join("pep");
         fs::write(&pep, "fake guest asset").unwrap();
         let prev = std::env::var_os("CA_PEP_BIN");
         std::env::set_var("CA_PEP_BIN", &pep);
-        for target in [
-            "allinone",
-            "openclaw",
-            "openclaw-vllm",
+
+        let untargeted = run_args(temp.path(), &["--stage", "build"]).unwrap();
+        assert_eq!(untargeted.file_name().unwrap(), "allinone-builder");
+        let spec = AgentSpec::from_path(&untargeted.join("build.yaml")).unwrap();
+        assert_eq!(spec.service.id, "allinone-builder");
+        assert!(spec.resources.is_empty());
+        assert!(spec.service.ssh);
+        assert!(spec.deploy.image.is_none());
+        assert!(!untargeted.join("secrets").exists());
+        assert_eq!(spec.image_variant(), "release");
+        assert!(spec.build.variants.debug.is_none());
+        for home in [
+            "home/.agents",
+            "home/.claude",
+            "home/.qoder",
+            "home/.config/opencode",
+            "home/.pi/agent",
+            "home/.dsh",
+            "home/.openclaw",
             "hermes",
-            "codex",
-            "claudecode",
-            "vllm-inference",
         ] {
-            let dir = run(temp.path(), target, "build", &[]).unwrap();
-            let spec = AgentSpec::from_path(&dir.join("build.yaml")).unwrap();
-            if target != "vllm-inference" {
-                assert!(
-                    spec.build
-                        .files
-                        .iter()
-                        .any(|f| f.target == "/usr/local/bin/cai-pep"),
-                    "{target} needs its TDX attestation helper"
-                );
-                assert!(
-                    spec.build.files.iter().any(|f| f
-                        .target
-                        .ends_with("/skills/tdx-remote-attestation/SKILL.md")),
-                    "{target} needs its native TDX skill"
-                );
-            }
-            if target == "allinone" {
-                for home in [
-                    "home/.agents",
-                    "home/.claude",
-                    "home/.qoder",
-                    "home/.config/opencode",
-                    "home/.pi/agent",
-                    "home/.dsh",
-                    "home/.openclaw",
-                    "hermes",
-                ] {
-                    let dest =
-                        format!("/opt/data/allinone/{home}/skills/tdx-remote-attestation/SKILL.md");
-                    assert!(spec.build.files.iter().any(|f| f.target == dest), "{home}");
-                }
-            }
-            if ["allinone", "openclaw", "openclaw-vllm"].contains(&target) {
-                for name in [
-                    "patch-openclaw-cai-pep.js",
-                    "cai-pep-plugin",
-                    "cai-pep-default-policy.json",
-                ] {
-                    assert!(
-                        spec.build.files.iter().any(|f| f.target.ends_with(name)),
-                        "{target}: {name}"
-                    );
-                }
-            } else {
-                assert!(!spec
-                    .build
-                    .files
-                    .iter()
-                    .any(|f| f.target.contains("cai-pep-plugin")));
-            }
-            if ["allinone", "codex"].contains(&target) {
-                assert!(
-                    spec.build.packages.iter().any(|p| p == "procps-ng"),
-                    "{target} needs ps for interactive Codex"
-                );
-                let skill_target = if target == "allinone" {
-                    "/opt/data/allinone/home/.agents/skills/tdx-remote-attestation/SKILL.md"
-                } else {
-                    "/root/.agents/skills/tdx-remote-attestation/SKILL.md"
-                };
-                assert!(
-                    spec.build.files.iter().any(|f| f.target == skill_target),
-                    "{target} needs the TDX skill in its actual home"
-                );
-                assert!(
-                    spec.build
-                        .files
-                        .iter()
-                        .any(|f| f.target == "/usr/local/bin/cai-pep"),
-                    "{target} needs the attestation helper used by its skill"
-                );
-            }
-            assert!(spec.resources.is_empty(), "{target}");
-            assert!(spec.service.ssh);
-            assert!(spec.deploy.image.is_none());
-            assert!(!dir.join("secrets").exists());
-            assert!(!dir.join("openclaw.json").exists());
-            assert_eq!(spec.image_variant(), "release");
-            assert!(spec.build.variants.debug.is_none());
-            let base: u32 = spec
-                .build
-                .resize
-                .as_ref()
-                .unwrap()
-                .trim_end_matches('G')
-                .parse()
-                .unwrap();
-            assert!(
-                spec.deploy.disk_gb.unwrap() > base,
-                "{target} has no writable disk headroom"
-            );
-            for file in &spec.build.files {
-                assert!(
-                    file.source.exists(),
-                    "{}: {}",
-                    target,
-                    file.source.display()
-                );
-            }
-            for file in &spec.build.scripts {
-                assert!(file.exists(), "{}: {}", target, file.display());
-            }
-            if let Some(contract) = spec.build.runtime_contract {
-                assert!(contract.is_file());
-            }
+            let dest = format!("/opt/data/allinone/{home}/skills/tdx-remote-attestation/SKILL.md");
+            assert!(spec.build.files.iter().any(|f| f.target == dest), "{home}");
         }
-        assert!(run(temp.path(), "hermes", "build", &["--disk-gb", "30"]).is_err());
+        for name in [
+            "install-openclaw-runtime.sh",
+            "patch-openclaw-cai-pep.js",
+            "cai-pep-plugin",
+            "cai-a2a-plugin",
+            "cai-pep-default-policy.json",
+        ] {
+            assert!(
+                spec.build.files.iter().any(|f| f.target.ends_with(name)),
+                "missing {name}"
+            );
+        }
+        for file in &spec.build.files {
+            assert!(file.source.exists(), "{}", file.source.display());
+        }
+        for file in &spec.build.scripts {
+            assert!(file.exists(), "{}", file.display());
+        }
+        assert!(spec.build.runtime_contract.as_ref().unwrap().is_file());
+
+        // Targeted CPU `--stage build` selects the exact same shared build.
+        let targeted = run_args(
+            temp.path(),
+            &[
+                "openclaw",
+                "--stage",
+                "build",
+                "--service-id",
+                "shared-cpu-builder",
+            ],
+        )
+        .unwrap();
+        let targeted_spec = AgentSpec::from_path(&targeted.join("build.yaml")).unwrap();
+        assert_eq!(targeted_spec.build.image_name, "allinone");
+        assert_eq!(targeted_spec.service.id, "shared-cpu-builder");
+
+        // GPU staged builders remain dedicated to their GPU images.
+        for gpu in ["openclaw-vllm", "vllm-inference"] {
+            let gpu_dir = run_args(temp.path(), &[gpu, "--stage", "build"]).unwrap();
+            let gpu_spec = AgentSpec::from_path(&gpu_dir.join("build.yaml")).unwrap();
+            assert_ne!(gpu_spec.build.image_name, "allinone");
+            assert!(gpu_spec.resources.is_empty());
+        }
+
+        assert!(run_args(temp.path(), &["--stage", "build", "--disk-gb", "80"]).is_err());
+
         if let Some(prev) = prev {
             std::env::set_var("CA_PEP_BIN", prev);
         } else {
@@ -999,132 +1214,184 @@ mod tests {
     }
 
     #[test]
-    fn consumers_reuse_one_release_with_isolated_resources_and_no_build_inputs() {
+    fn cpu_applications_default_to_app_service_ids_and_standard_modes() {
         let temp = tempfile::tempdir().unwrap();
         let release = temp.path().join("release.json");
-        let key = temp.path().join("publisher.pem");
-        let model_key = temp.path().join("model.key");
-        fs::write(&release, "signed release fixture").unwrap();
-        fs::write(&key, "public key fixture").unwrap();
-        fs::write(&model_key, "model-passphrase").unwrap();
-        let digest = format!("sha256:{}", "a".repeat(64));
-        let base = [
-            "--image-release",
-            release.to_str().unwrap(),
-            "--trusted-key",
-            key.to_str().unwrap(),
-            "--manifest",
-            &digest,
-            "--dashscope-api-key",
-            "test-private-model-key",
-            "--model-key-file",
-            model_key.to_str().unwrap(),
-            "--oss-bucket",
-            "test-bucket:/model",
+        fs::write(&release, "release-bytes").unwrap();
+        let release_digest = format!("sha256:{}", "c".repeat(64));
+        let manifest_digest = format!("sha256:{}", "a".repeat(64));
+
+        let expected: &[(&str, &str, Option<u16>)] = &[
+            ("openclaw", "gateway", Some(18789)),
+            ("hermes", "gateway", Some(8642)),
+            ("codex", "app-server", Some(4500)),
+            ("opencode", "web", Some(4096)),
+            ("dsh", "web", Some(3080)),
+            ("claude-code", "cli", None),
+            ("qodercli", "cli", None),
+            ("pi", "cli", None),
         ];
-        let mut hermes_tokens = Vec::new();
-        for (id, target, harness, mode, replicas) in [
-            ("hermes-a", "allinone", "hermes", "gateway", "1"),
-            ("hermes-b", "allinone", "hermes", "gateway", "1"),
-            ("hermes-cluster", "allinone", "hermes", "gateway", "2"),
-            ("hermes-cli", "allinone", "hermes", "cli", "1"),
-            ("openclaw-a", "allinone", "openclaw", "gateway", "2"),
-            ("openclaw-cli", "allinone", "openclaw", "cli", "1"),
-            ("codex-cli", "allinone", "codex", "cli", "1"),
-            ("codex-server", "allinone", "codex", "app-server", "2"),
-            ("claude-a", "allinone", "claude-code", "cli", "1"),
-            ("qoder-a", "allinone", "qodercli", "cli", "1"),
-            ("opencode-a", "allinone", "opencode", "cli", "1"),
-            ("pi-a", "allinone", "pi", "cli", "1"),
-            ("dsh-a", "allinone", "dsh", "cli", "1"),
-            ("standalone-openclaw", "openclaw", "", "", "2"),
-            ("standalone-gpu", "openclaw-vllm", "", "", "1"),
-            ("standalone-hermes", "hermes", "", "", "1"),
-            ("standalone-codex", "codex", "", "", "1"),
-            ("standalone-claude", "claudecode", "", "", "1"),
-            ("inference-cluster", "vllm-inference", "", "", "2"),
-        ] {
-            let mut extra = base.to_vec();
-            extra.extend(["--service-id", id, "--replicas", replicas]);
-            if target == "allinone" {
-                extra.extend(["--harness", harness, "--harness-mode", mode]);
-            }
-            let dir = run(temp.path(), target, "deploy", &extra).unwrap();
+
+        for &(target, expected_mode, expected_port) in expected {
+            let dir = run_args(
+                temp.path(),
+                &[
+                    target,
+                    "--image-release",
+                    release.to_str().unwrap(),
+                    "--release-digest",
+                    &release_digest,
+                    "--manifest",
+                    &manifest_digest,
+                    "--dashscope-api-key",
+                    "test-private-model-key",
+                    "--gateway-token",
+                    "0123456789abcdef0123456789abcdef",
+                ],
+            )
+            .unwrap();
+            assert_eq!(dir.file_name().unwrap(), target);
             let spec = AgentSpec::from_path(&dir.join("instance.yaml")).unwrap();
-            assert_eq!(spec.service.id, id);
-            assert_eq!(spec.deploy.replicas.to_string(), replicas);
+            assert_eq!(spec.service.id, target);
             assert!(spec.build.image_name.is_empty());
-            assert!(spec.build.files.is_empty() && spec.build.scripts.is_empty());
             assert!(!dir.join("files").exists());
             assert!(spec.service.ssh);
             assert_eq!(
-                fs::read(&spec.deploy.image.as_ref().unwrap().release).unwrap(),
-                fs::read(&release).unwrap()
+                spec.deploy
+                    .image
+                    .as_ref()
+                    .unwrap()
+                    .release_digest
+                    .as_deref(),
+                Some(release_digest.as_str())
             );
-            for resource in spec.resources.values() {
-                assert!(
-                    resource.source.is_file(),
-                    "{}: {}",
-                    id,
-                    resource.source.display()
-                );
-                assert_eq!(resource.source.metadata().unwrap().mode() & 0o777, 0o600);
-            }
-            if target == "allinone" {
-                let runtime: Value =
-                    serde_json::from_slice(&fs::read(&spec.resources["runtime"].source).unwrap())
-                        .unwrap();
-                assert_eq!(runtime["harness"], harness);
-                assert_eq!(runtime["mode"], mode);
-                assert_eq!(spec.service.ports.is_empty(), mode == "cli");
-                if id == "hermes-a" || id == "hermes-b" {
-                    hermes_tokens.push(runtime["environment"]["API_SERVER_KEY"].clone());
-                }
-                if harness == "openclaw" {
-                    let config: Value = serde_json::from_slice(
-                        &fs::read(&spec.resources["openclaw_config"].source).unwrap(),
-                    )
+            assert_eq!(
+                spec.service.ports,
+                expected_port.into_iter().collect::<Vec<_>>(),
+                "{target}"
+            );
+            let runtime: Value =
+                serde_json::from_slice(&fs::read(&spec.resources["runtime"].source).unwrap())
                     .unwrap();
-                    assert_eq!(config["plugins"]["enabled"], true);
-                    assert_eq!(
-                        config["plugins"]["entries"]["cai-pep"]["config"]["pepRequired"],
-                        true
-                    );
-                    assert_eq!(config["gateway"]["bind"], "loopback");
-                }
+            assert_eq!(runtime["harness"], target);
+            assert_eq!(runtime["mode"], expected_mode);
+
+            if target == "openclaw" {
+                let config: Value = serde_json::from_slice(
+                    &fs::read(&spec.resources["openclaw_config"].source).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(config["gateway"]["controlUi"]["basePath"], "/openclaw");
+                assert_eq!(config["gateway"]["bind"], "lan");
+                assert_eq!(
+                    config["plugins"]["entries"]["cai-pep"]["config"]["pepRequired"],
+                    true
+                );
             }
-            if replicas == "2" {
-                assert!(spec.deploy.slb.as_ref().unwrap().enabled);
+            if target == "opencode" {
+                assert_eq!(
+                    runtime["environment"]["OPENCODE_SERVER_PASSWORD"],
+                    "0123456789abcdef0123456789abcdef"
+                );
+            }
+            if target == "dsh" {
+                let steps = fs::read_to_string(dir.join("NEXT_STEPS.md")).unwrap();
+                assert!(steps.contains("cai-agent --web-url"));
             }
         }
-        assert_ne!(hermes_tokens[0], hermes_tokens[1]);
-        assert!(run(
+
+        // OpenClaw default reference_values is Rekor and enables A2A AgentCard; --disable-pep works per-instance.
+        let rekor_dir = {
+            let output = temp.path().join("rekor-projects");
+            let cli = Cli::try_parse_from([
+                "cagent",
+                "init",
+                "openclaw",
+                "--stage",
+                "deploy",
+                "--non-interactive",
+                "--output-dir",
+                output.to_str().unwrap(),
+                "--service-id",
+                "claw-no-pep",
+                "--disable-pep",
+                "--enable-dingtalk",
+                "--dingtalk-client-id",
+                "dt-id",
+                "--dingtalk-client-secret",
+                "dt-secret",
+                "--image-release",
+                release.to_str().unwrap(),
+                "--release-digest",
+                &release_digest,
+                "--dashscope-api-key",
+                "sk-test",
+            ])
+            .unwrap();
+            let Commands::Init(args) = &cli.command else {
+                unreachable!()
+            };
+            cmd_init(&cli, args).unwrap();
+            output.join("claw-no-pep")
+        };
+        let rekor_spec = AgentSpec::from_path(&rekor_dir.join("instance.yaml")).unwrap();
+        let a2a = rekor_spec.a2a.expect("OpenClaw gateway enables A2A");
+        assert!(a2a.enabled);
+        assert_eq!(a2a.id, "claw-no-pep");
+        let runtime: Value =
+            serde_json::from_slice(&fs::read(&rekor_spec.resources["runtime"].source).unwrap())
+                .unwrap();
+        assert_eq!(runtime["disable_pep"], true);
+        let claw_cfg: Value = serde_json::from_slice(
+            &fs::read(&rekor_spec.resources["openclaw_config"].source).unwrap(),
+        )
+        .unwrap();
+        assert!(claw_cfg["plugins"]["entries"].get("cai-pep").is_none());
+        assert_eq!(claw_cfg["channels"]["dingtalk"]["clientId"], "dt-id");
+
+        // Reject --disable-pep on non-OpenClaw targets and replicas > 1 on CLI mode.
+        assert!(run_args(
             temp.path(),
-            "allinone",
-            "deploy",
             &[
-                &base[..],
-                &[
-                    "--service-id",
-                    "invalid-cli-cluster",
-                    "--harness",
-                    "codex",
-                    "--replicas",
-                    "2"
-                ]
-            ]
-            .concat()
+                "codex",
+                "--disable-pep",
+                "--image-release",
+                release.to_str().unwrap(),
+                "--release-digest",
+                &release_digest,
+                "--dashscope-api-key",
+                "sk-test",
+            ],
         )
         .is_err());
-        assert!(run(
+        assert!(run_args(
             temp.path(),
-            "allinone",
-            "deploy",
             &[
-                &base[..],
-                &["--service-id", "../escape", "--harness", "codex"]
-            ]
-            .concat()
+                "claude-code",
+                "--replicas",
+                "2",
+                "--image-release",
+                release.to_str().unwrap(),
+                "--release-digest",
+                &release_digest,
+                "--dashscope-api-key",
+                "sk-test",
+            ],
+        )
+        .is_err());
+        assert!(run_args(
+            temp.path(),
+            &[
+                "codex",
+                "--service-id",
+                "../escape",
+                "--image-release",
+                release.to_str().unwrap(),
+                "--release-digest",
+                &release_digest,
+                "--dashscope-api-key",
+                "sk-test",
+            ],
         )
         .is_err());
     }

@@ -117,4 +117,6 @@ jobs:
       - name: Publish the tested draft release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 packaging/publish-release.py release-files
+        run: |
+          tar -xOzf release-files/cagent-*-build-inputs.tar.gz SOURCES/cagent-native-tools.tar.gz | tar -xz native-tools/oras
+          PATH="$PWD/native-tools:$PATH" python3 packaging/publish-release.py release-files

@@ -21,7 +21,7 @@ class ReleaseDownloadTests(unittest.TestCase):
         cls.temp = tempfile.TemporaryDirectory()
         cls.base = Path(cls.temp.name)
         cls.rpms = {}
-        for name, version, release in [('shelter','0.3.2','2.al8'),('cagent','0.2.0','1.al8')]:
+        for name, version, release in [('shelter','0.3.2','3.al8'),('cagent','0.3.0','1.al8')]:
             specfile = cls.base/(name+'.spec')
             specfile.write_text(f'''Name: {name}
 Version: {version}
@@ -41,7 +41,7 @@ printf fixture > %{{buildroot}}/usr/share/release-fixture/{name}
             cls.rpms[name] = cls.base/'build/RPMS/x86_64'/f'{name}-{version}-{release}.x86_64.rpm'
         cls.manifest = {'file':cls.rpms['shelter'].name,'sha256':fetch.digest(cls.rpms['shelter']),
                         'payload_sha256':subprocess.check_output(['rpm','-qp','--qf','%{PAYLOADDIGEST}',str(cls.rpms['shelter'])],text=True),
-                        'url':'https://github.com/example/project/releases/download/v0.2.0/'+cls.rpms['shelter'].name}
+                        'url':'https://github.com/example/project/releases/download/v0.3.0/'+cls.rpms['shelter'].name}
 
     @classmethod
     def tearDownClass(cls):
@@ -110,7 +110,7 @@ printf fixture > %{{buildroot}}/usr/share/release-fixture/{name}
             version,release=subprocess.check_output(['rpm','-qp','--qf','%{VERSION}\n%{RELEASE}',str(path)],text=True).splitlines()
             packages.append({'name':name,'version':version,'release':release,'arch':'x86_64','file':path.name,
                              'sha256':fetch.digest(path),'payload_sha256':subprocess.check_output(['rpm','-qp','--qf','%{PAYLOADDIGEST}',str(path)],text=True)})
-        (source/'release-manifest.json').write_text(json.dumps({'schema':'confidential-agent/binary-release/v1','version':'0.2.0','tag':'v0.2.0','platform':'alinux3-x86_64','packages':packages}))
+        (source/'release-manifest.json').write_text(json.dumps({'schema':'confidential-agent/binary-release/v1','version':'0.3.0','tag':'v0.3.0','platform':'alinux3-x86_64','packages':packages}))
         return source
 
     def test_offline_installer_verifies_pair_and_rejects_tampering(self):
@@ -131,7 +131,7 @@ import os,pathlib,shutil,sys
 args=sys.argv[1:];url=args[-1];name=url.rsplit('/',1)[-1];proxy=url.startswith('https://proxy.invalid/')
 with open(os.environ['ATTEMPT_LOG'],'a') as f:f.write(('proxy' if proxy else 'direct')+' '+name+'\\n')
 mode=os.environ['FAIL_MODE'];out=pathlib.Path(args[args.index('-o')+1])
-if (mode=='proxy_down' and proxy) or (mode=='direct_down' and not proxy):sys.exit(28)
+if name != 'release-manifest.json' and ((mode=='proxy_down' and proxy) or (mode=='direct_down' and not proxy)):sys.exit(28)
 if mode=='proxy_corrupt' and proxy:out.write_text('<html>proxy error</html>')
 else:shutil.copy2(pathlib.Path(os.environ['FIXTURE_RELEASE'])/name,out)
 """)
@@ -150,9 +150,10 @@ else:shutil.copy2(pathlib.Path(os.environ['FIXTURE_RELEASE'])/name,out)
                 result=subprocess.run(cmd,env=env,capture_output=True,text=True)
                 self.assertEqual(result.returncode,0,result.stderr)
                 attempts=log.read_text().splitlines()
-                self.assertEqual(len(attempts),6 if two_attempts else 3)
+                self.assertEqual(len(attempts),5 if two_attempts else 3)
                 expected_first='proxy' if first=='1' and proxy else 'direct'
-                self.assertTrue(attempts[0].startswith(expected_first+' '))
+                self.assertEqual(attempts[0], 'direct release-manifest.json')
+                self.assertTrue(attempts[1].startswith(expected_first+' '))
                 self.assertEqual(fetch.digest(out/self.rpms['shelter'].name),self.manifest['sha256'])
 
 

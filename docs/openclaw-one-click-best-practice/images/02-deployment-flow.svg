@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="560" viewBox="0 0 1280 560" role="img" aria-labelledby="title desc">
   <title id="title">Confidential Agent 一键部署流程</title>
-  <desc id="desc">展示从部署机执行一键脚本到创建 TDX ECS、注入资源和建立 TNG 访问通道的流程。</desc>
+  <desc id="desc">展示从部署机执行一键脚本、校验并导入预构建镜像（或本地构建）、创建 TDX ECS、远程证明注入资源到建立 TNG 可信访问的流程。</desc>
   <defs>
     <style>
       .bg { fill: #f7f8fb; }
@@ -21,52 +21,52 @@
   </defs>
   <rect class="bg" width="1280" height="560"/>
   <text class="text title" x="46" y="58">一键部署使用流程</text>
-  <text class="text body" x="46" y="86">curl | sh 后自动完成构建、部署、证明、注入和可信访问</text>
+  <text class="text body" x="46" y="86">默认复用官方预构建镜像（或 --image-source build 构建），自动完成导入、部署、远程证明、注入与可信接入</text>
 
   <rect class="primary" x="46" y="132" width="176" height="146"/>
   <text class="text num" x="70" y="164">1</text>
   <text class="text h" x="100" y="164">部署机</text>
   <text class="text body" x="70" y="198">Alibaba Cloud Linux 3</text>
-  <text class="text body" x="70" y="224">执行 one-click 脚本</text>
-  <text class="text body" x="70" y="250">安装依赖与构建源码</text>
+  <text class="text body" x="70" y="224">选择 harness 与接入方式</text>
+  <text class="text body" x="70" y="250">按需安装依赖与客户端</text>
 
   <rect class="box" x="272" y="132" width="176" height="146"/>
   <text class="text num" x="296" y="164">2</text>
   <text class="text h" x="326" y="164">可信镜像</text>
-  <text class="text body" x="296" y="198">OpenClaw + CA daemon</text>
+  <text class="text body" x="296" y="198">预构建镜像 / 本地构建</text>
   <text class="text body" x="296" y="224">FDE / dm-verity / UKI</text>
-  <text class="text body" x="296" y="250">生成参考值</text>
+  <text class="text body" x="296" y="250">校验 release_digest</text>
 
   <rect class="secure" x="498" y="132" width="176" height="146"/>
   <text class="text num" x="522" y="164">3</text>
-  <text class="text h" x="552" y="164">Rekor</text>
+  <text class="text h" x="552" y="164">Rekor / TDX</text>
   <text class="text body" x="522" y="198">SLSA provenance</text>
-  <text class="text body" x="522" y="224">签名并上传</text>
-  <text class="text body" x="522" y="250">公开参考值</text>
+  <text class="text body" x="522" y="224">公开参考值独立校验</text>
+  <text class="text body" x="522" y="250">启动链度量验证</text>
 
   <rect class="cloud" x="724" y="132" width="176" height="146"/>
   <text class="text num" x="748" y="164">4</text>
   <text class="text h" x="778" y="164">阿里云资源</text>
-  <text class="text body" x="748" y="198">OSS / 自定义镜像</text>
+  <text class="text body" x="748" y="198">导入或复用自定义镜像</text>
   <text class="text body" x="748" y="224">VPC / 安全组</text>
-  <text class="text body" x="748" y="250">TDX ECS</text>
+  <text class="text body" x="748" y="250">TDX / GPU TEE ECS</text>
 
   <rect class="secure" x="950" y="132" width="176" height="146"/>
   <text class="text num" x="974" y="164">5</text>
   <text class="text h" x="1004" y="164">资源注入</text>
-  <text class="text body" x="974" y="198">远程证明通过</text>
-  <text class="text body" x="974" y="224">注入 API Key</text>
+  <text class="text body" x="974" y="198">TDX 远程证明通过</text>
+  <text class="text body" x="974" y="224">注入磁盘密钥与 API Key</text>
   <text class="text body" x="974" y="250">注入 Token / 钉钉凭据</text>
 
   <rect class="primary" x="382" y="360" width="240" height="112"/>
-  <text class="text h" x="414" y="395">TNG connect</text>
-  <text class="text body" x="414" y="424">RATS-TLS 可信通道</text>
-  <text class="text body" x="414" y="448">127.0.0.1:18789</text>
+  <text class="text h" x="414" y="395">TNG connect / SSH</text>
+  <text class="text body" x="414" y="424">RATS-TLS 隧道或认证 SSH</text>
+  <text class="text body" x="414" y="448">127.0.0.1:18789 等本地入口</text>
 
   <rect class="secure" x="702" y="360" width="240" height="112"/>
-  <text class="text h" x="734" y="395">OpenClaw 访问</text>
-  <text class="text body" x="734" y="424">Web / Desktop / TUI</text>
-  <text class="text body" x="734" y="448">DingTalk Bot</text>
+  <text class="text h" x="734" y="395">应用访问</text>
+  <text class="text body" x="734" y="424">Web / TUI / HTTP / WS</text>
+  <text class="text body" x="734" y="448">DingTalk Bot / CLI 会话</text>
 
   <path class="arrow" d="M222 205 L272 205"/>
   <path class="arrow" d="M448 205 L498 205"/>
@@ -75,5 +75,5 @@
   <path class="arrow" d="M1038 278 C1038 330 930 338 880 360"/>
   <path class="arrow" d="M702 416 L622 416"/>
   <path class="arrow" d="M622 416 L702 416"/>
-  <text class="text body" x="478" y="520">部署完成后，脚本自动输出 Web URL、WebSocket URL、Gateway Token 和清理命令。</text>
+  <text class="text body" x="450" y="520">部署完成后，脚本自动输出本地访问入口、鉴权凭据和资源清理命令。</text>
 </svg>

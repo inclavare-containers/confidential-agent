@@ -51,24 +51,7 @@ run_case() {
   export COSIGN_KEY="$cosign_key"
   export COSIGN_KEY INSTANCE_TYPE DISK_GB DASHSCOPE_BASE_URL DASHSCOPE_MODEL CODEX_REMOTE_PORT
 
-  mapfile -d '' init_args < <(init_common_args "$INIT_OUTPUT_DIR" "$DISK_GB")
-  init_args+=(
-    --dashscope-api-key "$dashscope_key"
-    --dashscope-base-url "$DASHSCOPE_BASE_URL"
-    --model "$DASHSCOPE_MODEL"
-    --codex-app-server-token "$remote_token"
-    --node-version "${E2E_CLI_AGENT_NODE_VERSION:-24.21.0}"
-    --npm-registry "${E2E_CLI_AGENT_NPM_REGISTRY:-${E2E_NPM_REGISTRY:-https://registry.npmmirror.com/}}"
-    --codex-version "${E2E_CODEX_VERSION:-$(ca_software_version codex)}"
-  )
-  export CA_PEP_BIN="${CA_PEP_BIN:-$ROOT_DIR/target/debug/cai-pep}"
-  if ! ca_init_capture "$STATE_DIR" "$WORK_DIR/init.out" "$WORK_DIR/init.err" codex "${init_args[@]}"; then
-    record_file_as_block "init stdout:" "$WORK_DIR/init.out" text
-    record_file_as_block "init stderr:" "$WORK_DIR/init.err" text
-    return 1
-  fi
-  record_file_as_block "init stdout:" "$WORK_DIR/init.out" text
-  record_file_as_block "init stderr:" "$WORK_DIR/init.err" text
+  stage_cpu_example codex "$CODEX_DIR" "$DISK_GB" "$dashscope_key" "$remote_token"
   assert_codex_secret_rendering "$dashscope_key" "$remote_token"
   record "- allowed_cidr: \`$allowed_cidr\`"
   record "- Codex npm version: \`${E2E_CODEX_VERSION:-$(ca_software_version codex)}\`."

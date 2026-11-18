@@ -11,7 +11,7 @@ assert_claude_code_secret_rendering() {
     fi
   done
   grep -Fq "packages: [ca-certificates, curl, git, jq, nodejs, npm, tar, xz]" "$spec"
-  grep -Fq "source: ./files/install-cli-agent-runtime.sh" "$spec"
+  grep -Fq "source: $ROOT_DIR/examples/cli-agents/files/install-cli-agent-runtime.sh" "$spec"
   grep -Fq "target: /usr/local/libexec/confidential-agent/cli-agent/install-cli-agent-runtime.sh" "$spec"
   grep -Fq "target: /root/.claude/settings.json" "$spec"
   grep -Fq "target: /root/.claude/skills/tdx-remote-attestation/SKILL.md" "$spec"
@@ -171,24 +171,7 @@ run_case() {
   export COSIGN_KEY="$cosign_key"
   export COSIGN_KEY INSTANCE_TYPE DISK_GB DASHSCOPE_BASE_URL DASHSCOPE_ANTHROPIC_BASE_URL DASHSCOPE_MODEL
 
-  mapfile -d '' init_args < <(init_common_args "$INIT_OUTPUT_DIR" "$DISK_GB")
-  init_args+=(
-    --dashscope-api-key "$dashscope_key"
-    --dashscope-base-url "$DASHSCOPE_BASE_URL"
-    --dashscope-anthropic-base-url "$DASHSCOPE_ANTHROPIC_BASE_URL"
-    --model "$DASHSCOPE_MODEL"
-    --node-version "${E2E_CLI_AGENT_NODE_VERSION:-24.21.0}"
-    --npm-registry "${E2E_CLI_AGENT_NPM_REGISTRY:-${E2E_NPM_REGISTRY:-https://registry.npmmirror.com/}}"
-    --claude-code-version "${E2E_CLAUDE_CODE_VERSION:-$(ca_software_version claude-code)}"
-  )
-  export CA_PEP_BIN="${CA_PEP_BIN:-$ROOT_DIR/target/debug/cai-pep}"
-  if ! ca_init_capture "$STATE_DIR" "$WORK_DIR/init.out" "$WORK_DIR/init.err" claudecode "${init_args[@]}"; then
-    record_file_as_block "init stdout:" "$WORK_DIR/init.out" text
-    record_file_as_block "init stderr:" "$WORK_DIR/init.err" text
-    return 1
-  fi
-  record_file_as_block "init stdout:" "$WORK_DIR/init.out" text
-  record_file_as_block "init stderr:" "$WORK_DIR/init.err" text
+  stage_cpu_example claude-code "$CLAUDE_CODE_DIR" "$DISK_GB" "$dashscope_key"
   assert_claude_code_secret_rendering "$dashscope_key"
   record "- allowed_cidr: \`$allowed_cidr\`"
   record "- Claude Code npm version: \`${E2E_CLAUDE_CODE_VERSION:-$(ca_software_version claude-code)}\`."

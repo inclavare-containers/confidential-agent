@@ -1,283 +1,183 @@
-# Shared allinone image
+# 共享预构建镜像（allinone）
 
-Build one release image containing OpenClaw, Hermes, QoderCLI, OpenCode, Codex,
-Claude Code, Pi, and DeepSeek Harness (DSH). Each deployed VM selects one harness using the image's
-`runtime.json`. CA accepts ordinary AppSpecs and resources for both this image
-and custom images; it has no allinone harness enum or model flags.
+本目录定义一个共享 CPU `release` 机密镜像，内置 **OpenClaw、Hermes、Codex、OpenCode、DeepSeek Harness (DSH)、Claude Code、QoderCLI、Pi** 八种 Agent harness。每台部署的 TDX 虚拟机在远程证明通过后接收各自的 `/opt/data/allinone/runtime.json` 与原生配置文件，按实例激活其中一种 harness 及对应运行模式。
 
-The existing CA FDE policy protects the root filesystem's integrity and encrypts
-the writable delta. CA continues to verify TDX evidence and release keys and
-resources through challenge or Trustee. This example uses challenge/sample;
-Rekor and Trustee require their usual operator configuration.
+根文件系统启用 dm-verity 完整性保护，可写增量层由 CryptPilot / LUKS2 加密（基础镜像 `80G`，实例系统盘至少 `120G` 以预留加密可写空间）。`service.ssh: true` 为每个实例生成独立的客户端与主机 Ed25519 密钥并通过远程证明下发，共享镜像内不内置任何 SSH 密钥或模型凭据。本地 `confidential-agent` CLI 不会在宿主机自动安装任何应用客户端。
 
-## Initialize from the installed RPM
+## 信任模型
 
-Run `confidential-agent init` for the interactive build/deploy wizard, or:
+镜像交付完整性与运行时远程证明相互独立、分层生效：
 
-```bash
-confidential-agent init allinone --stage build --non-interactive
-cd confidential-agent-init/allinone-builder
-```
+1. **镜像交付**。以官方 GitHub Release 的 `image-index.json` 或本机 `image export` 提供的 SHA-256 校验 `image-release.json` 的完整字节。`image publish --artifact` 校验产物 manifest、磁盘摘要及大小。镜像站用于传输产物。
+2. **实例启动**。`deploy` 校验镜像描述和运行时契约。实例启动时通过 TDX Quote 和 Rekor 参考值验证后，challenge 或 Trustee 才释放磁盘密钥与实例资源。开发自测可选 `sample` 参考值。
 
-The generated directory is self-contained and includes `NEXT_STEPS.md` for
-building, publishing and exporting a signed release. No model credentials are
-needed for image initialization. Software versions stay in runtime-contract.json.
+<a id="build-and-publish"></a>
 
-For each consumer, run `confidential-agent init allinone --stage deploy`: choose a unique
-service ID, the signed release and trusted publisher key, then a harness and mode. The manifest digest is read automatically; `--manifest` is an optional version pin. Use the same release for multiple independent
-services, including different harnesses. Initialization does not create cloud
-resources. Generated consumer projects have no build inputs.
-See [RPM walkthrough](../../docs/rpm.md) for the non-interactive commands.
+## 构建、导入与多场景复用
 
-Mode choices depend on the selected harness:
+构建端使用 `confidential-agent init --stage build` 生成共享镜像配置，云端导入显式使用 `image publish`，实例端直接按具体应用名称运行 `confidential-agent init <app>`。根据手头已有的产物状态选择对应路径：
 
-| Harness | Mode | How to use it |
-| --- | --- | --- |
-| Codex | `cli` (default) | SSH into the instance and run `cai-agent` in a terminal |
-| Codex | `app-server` | Connect a remote Codex client through the CA tunnel to the guest Codex server |
-| OpenClaw / Hermes | `gateway` (default) | Run a persistent network service for clients |
-| OpenClaw / Hermes | `cli` | Run the harness through SSH |
-| Claude Code / QoderCLI / OpenCode | `cli` | Run the harness through SSH; init selects this automatically |
-| Pi | `cli` | Use its terminal UI or `cai-agent --print 'Your task'` through SSH |
-| DSH | `cli` | Run `cai-agent headless 'Your task'`; the headless profile runs one task and exits |
-
-Codex has no `gateway` mode in this project. The separately installed
-`cai-gateway` handles CA mesh traffic and is not a Codex mode.
-For ordinary terminal use of Codex, accept `cli`.
-
-Every harness includes the `tdx-remote-attestation` skill and uses
-`/usr/local/bin/cai-pep attest collect-and-verify` to verify TDX evidence.
-The native skill directories are:
-
-| Harness | Skill directory |
+| 当前已有条件 | 需要执行的步骤 |
 | --- | --- |
-| Codex | `/opt/data/allinone/home/.agents/skills/tdx-remote-attestation` |
-| Claude Code | `/opt/data/allinone/home/.claude/skills/tdx-remote-attestation` |
-| QoderCLI | `/opt/data/allinone/home/.qoder/skills/tdx-remote-attestation` |
-| OpenCode | `/opt/data/allinone/home/.config/opencode/skills/tdx-remote-attestation` |
-| Pi | `/opt/data/allinone/home/.pi/agent/skills/tdx-remote-attestation` |
-| DSH | `/opt/data/allinone/home/.dsh/skills/tdx-remote-attestation` |
-| Hermes | `/opt/data/allinone/hermes/skills/tdx-remote-attestation` |
-| OpenClaw | `/opt/data/allinone/home/.openclaw/skills/tdx-remote-attestation` |
+| **1. 从零构建镜像** | `init --stage build` 生成 `build.yaml` → `build` 生成完整 Shelter 产物 → `image export` 导出描述与 `release_digest` → `image publish` 导入 ECS |
+| **2. 本机已构建好产物** | 跳过 `build`，直接对已有构建执行 `image export` 获取 `release_digest`，再执行 `image publish` 导入目标地域 ECS |
+| **3. 按不可变 OCI 引用拉取** | 从官方 Release 获取 `image-index.json` 与 `image-release.json`，运行 `image publish --artifact <oci_reference@sha256> --image-release ... --release-digest ... --region ...` 显式拉取校验并导入 ECS |
+| **4. 镜像产物已下载到本地** | 运行 `image publish --artifact <本地产物目录或artifact-manifest.json> --image-release ... --release-digest ... --region ...` 校验本地大文件并导入 ECS |
+| **5. 当前地域已有 ECS 镜像 ID** | 跳过构建和 `image publish`，直接运行 `init <app> --image-release ... --release-digest ... --image-id <m-xxxx> --service-id <id>` 后 `deploy` |
+| **6. 同一镜像再起新实例** | 云镜像已就绪，无需重新下载或导入；更换新的 `--service-id` 运行 `init <app>`（可选相同或不同应用）后直接 `deploy` |
 
-OpenClaw includes the executor patch, PEP plugin, policy service and Podman
-sandbox, as do the standalone OpenClaw and OpenClaw-vLLM examples. Selecting
-OpenClaw starts its PEP service; startup fails if that service cannot start.
-The other harnesses use only the attestation helper and native skill loading;
-they have no PEP execution hooks or patches. The existing build-time download
-adapters for domestic mirrors are retained.
-
-The image also installs `procps-ng`: interactive Codex uses `ps`
-to manage its background app-server, even when the selected harness mode is `cli`.
-These files are image build inputs. Updating the controller RPM does not add
-them to an existing image; rebuild, publish and export a new signed release.
-
-## Use a prebuilt image
-
-Obtain the signed release and an independently trusted publisher public key.
-Copy `instance.yaml` and configure its release/key paths and region. Use a
-different `service.id` for every VM. Configure operator peering with SSH scope
-before deploying. `service.ssh: true` creates unique client and host keys;
-CA delivers them as attested resources and pins the host key for `confidential-agent ssh`.
-The image starts SSH only after those resources arrive. No SSH key is baked
-into the shared image.
-Keep `service.ssh: true` in the build specification too: it selects Cryptpilot's
-SSH-preserving hardening mode while retaining disk encryption and integrity.
-The default SSH service and socket stay disabled.
+### 1. 从零构建与导出（或复用本机已构建产物）
 
 ```bash
-confidential-agent spec validate --spec instance.yaml
-confidential-agent deploy --spec instance.yaml
-confidential-agent ssh allinone-codex -- cai-agent --version
-confidential-agent ssh allinone-codex --tty -- cai-agent
-confidential-agent destroy allinone-codex
+confidential-agent init --stage build --non-interactive --output-dir ~/cagent-work
+BUILD_SPEC="$HOME/cagent-work/allinone-builder/build.yaml"
+
+confidential-agent spec validate --spec "$BUILD_SPEC"
+confidential-agent build --spec "$BUILD_SPEC"
+
+IMAGE_RELEASE=./image-release.json
+confidential-agent image export allinone-builder --output "$IMAGE_RELEASE"
+RELEASE_DIGEST="sha256:$(sha256sum "$IMAGE_RELEASE" | awk '{print $1}')"
+
+# 显式上传并导入为当前账号目标地域的阿里云自定义镜像
+confidential-agent image publish allinone-builder \
+  --spec "$BUILD_SPEC" \
+  --region cn-beijing \
+  --output ./published.json
 ```
 
-Consumer destruction preserves the shared cloud image. `image list` shows builders
-and their publications; `status` shows instances. `image rm BUILDER` removes local
-image payloads while retaining publication records. Use `forget INSTANCE` only
-after destroying the instance to remove its local management records. The publisher owns
-`image unpublish` and its import snapshots. Each consumer owns its Terraform
-state, gateway identity, SSH keys, disk passphrase, resources and writable data.
-The example deploys a 120 GB disk for the 80 GB base image: Cryptpilot allocates
-the remaining volume-group space to the encrypted writable delta. Keep this
-headroom when choosing the deployment disk size.
+若直接在本仓库根目录构建示例配置，可执行 `confidential-agent build --spec examples/allinone/build.yaml`，随后同样运行 `image export allinone-builder --output ./image-release.json`。
 
-Cleanup checks all consumers and imported releases visible in the publisher's
-workspace. Exporting a signed release records retention: even `image prune --all`
-keeps that cloud image. Before retiring a release, stop distributing it, allow
-your advertised retention period to expire, and confirm that local and remote
-consumers no longer need it for creation or recovery. Then explicitly run
-`image unpublish SERVICE --image-id IMAGE_ID --force`. The publisher cannot
-discover consumers in another workspace or on another host. Cleanup failures
-return a nonzero exit status and retain failed entries for retry.
+阿里云凭证优先读取环境变量（`ALICLOUD_ACCESS_KEY` / `ALICLOUD_SECRET_KEY` 等），其次读取宿主机 `aliyun configure` 配置的 AK 或 StsToken profile（可通过 `ALIBABA_CLOUD_PROFILE` / `ALICLOUD_PROFILE` 选择命名 profile，或通过 `ALIBABA_CLOUD_CREDENTIALS_FILE` / `ALICLOUD_SHARED_CREDENTIALS_FILE` 指定凭证文件）。`CA_IMAGE_OSS_ENDPOINT` 默认 `auto`，同地域 ECS 内网可达时自动走内网 HTTPS，否则走公网。
 
-## Image configuration
+### 2. 导入官方预构建镜像（OCI 引用或本地已下载产物）
 
-`runtime.json` accepts `harness` (`openclaw`, `hermes`, `qodercli`, `opencode`,
-`codex`, `claude-code`, `pi`, `dsh`), an optional `mode`, an optional listening `port`,
-and a map of string environment variables. Existing configurations retain their
-default mode: gateway for OpenClaw/Hermes and CLI for the other harnesses.
-Deliver it to `/opt/data/allinone/runtime.json`. API credentials may be included
-in this private resource or in the harness's native configuration. Models,
-provider URLs and authentication use the harness's official configuration:
-
-| Harness | Native configuration under the encrypted instance data |
-|---|---|
-| OpenClaw | `/opt/data/allinone/home/.openclaw/openclaw.json`; gateway defaults to 18789; `port` overrides it |
-| Hermes | `/opt/data/allinone/hermes/config.yaml` and `.env`; service runs `hermes gateway run` |
-| QoderCLI | `/opt/data/allinone/home/.qoder`; optional `QODER_PERSONAL_ACCESS_TOKEN` in environment |
-| OpenCode | `/opt/data/allinone/home/.config/opencode/opencode.json` |
-| Codex | `/opt/data/allinone/home/.codex/config.toml`; `OPENAI_API_KEY` in environment |
-| Claude Code | `/opt/data/allinone/home/.claude/settings.json` and its supported provider environment |
-| Pi | `/opt/data/allinone/home/.pi/agent/models.json` and `settings.json`; `PI_CODING_AGENT_DIR` points to this directory |
-| DSH | `/opt/data/allinone/home/.dsh/cordis.patch.yml`; `DSH_HOME` points to this directory |
-
-Pi and DSH use the generated `inference` provider with an OpenAI Chat Completions
-endpoint and the selected model. Their API key is delivered in `runtime.json`
-as `CA_INFERENCE_API_KEY`, referenced by the native provider configuration.
-These resources are instance-specific and stay out of the shared image.
-For DSH, use its native `headless` profile for one-shot tasks; the packaged CLI
-does not ship a terminal chat UI. For example:
+按不可变 OCI 引用发布，或选择同一镜像的本地产物目录：
 
 ```bash
-confidential-agent ssh allinone-pi -- cai-agent --print 'Describe this workspace'
-confidential-agent ssh allinone-dsh -- cai-agent headless 'Describe this workspace'
+# 从已安装 RPM 解析并校验官方 Release 的 image-index.json 与 image-release.json
+/usr/share/cagent/hack/resolve-release-image.sh --output-dir ./prebuilt
+OCI_REF="$(jq -er '.oci_reference' ./prebuilt/image-index.json)"
+RELEASE_DIGEST="$(jq -er '.release_digest' ./prebuilt/image-index.json)"
+IMAGE_RELEASE=./prebuilt/image-release.json
+
+# 情况 A：按不可变 @sha256 OCI 引用拉取、校验并导入 ECS
+confidential-agent image publish \
+  --artifact "$OCI_REF" \
+  --image-release "$IMAGE_RELEASE" \
+  --release-digest "$RELEASE_DIGEST" \
+  --region cn-beijing \
+  --output ./published.json
+
+# 情况 B：产物目录（含 artifact-manifest.json 与磁盘文件）已下载到本地
+confidential-agent image publish \
+  --artifact ./local-shelter-artifact \
+  --image-release "$IMAGE_RELEASE" \
+  --release-digest "$RELEASE_DIGEST" \
+  --region cn-beijing \
+  --output ./published.json
 ```
 
-Change the resource entries and application ports in `instance.yaml` to match
-the selected harness. CLI harnesses use SSH and `service.ports: []`; their
-readiness unit stays active while interactive commands run through `cai-agent`.
-`app_ready` reports the unit and declared listening ports; it does not certify
-model credentials or a successful model request. Run the image-local
-`cai-agent --check` for configuration/port checks and an explicit model smoke
-test for model connectivity. Application logs stay in the guest volatile journal
-and are lost on reboot. They are not forwarded to the cloud console.
-The daemon supplies the application runtime context after verifying and applying
-the selected provider's resources. The launcher does not read challenge or
-Trustee caches. Management SSH starts independently when its own attested
-credentials are ready, so application configuration errors can be diagnosed
-with `confidential-agent ssh SERVICE -- journalctl -u cai-allinone.service --no-pager`.
-OpenClaw and Hermes run only the selected gateway. All per-harness units from
-individual installers remain disabled.
+### 3. 初始化应用实例、部署与同镜像多实例复用
 
-Resource `mutable` selects content ownership. The default `false` is
-operator-managed: the daemon restores guest edits to the delivered content.
-`true` is guest-managed after initialization: re-injecting an updated source
-does not replace an existing target. Keep `runtime.json` operator-managed;
-choose guest-managed native configuration only when an in-guest wizard owns it.
-
-Local `deployed` confirms infrastructure. `activating` records pending resource,
-mesh and application readiness work; retry it with the original `deploy --resume`.
-`active` is committed only after every replica reports application readiness. Inspect `confidential-agent report --json`
-for instance attestation and daemon resource state, and `confidential-agent status --live` for
-application readiness. A model request is a separate explicit check. No local
-phase or readiness flag implies that a paid model request succeeded.
-
-To expose the Hermes API through `service.connect`, set `API_SERVER_ENABLED=true`,
-`API_SERVER_HOST=0.0.0.0`, and `API_SERVER_PORT=8642` in its resource configuration.
-This lets the API accept TNG forwarding; keep its API key configured as in the
-[Hermes example](../hermes-agent/README.md).
-
-For [Qoder BYOK](https://docs.qoder.com/cli/custom-models), use the official
-`/model` wizard and the provider catalog enabled for the account. A generic
-OpenAI API key is not a Qoder account credential. Do not invent a BYOK
-`settings.json` format. [OpenCode configuration](https://opencode.ai/docs/config/)
-uses its native JSON schema. Set Qoder `general.enableAutoUpdate: false` and
-OpenCode `autoupdate: false` for a fixed release image.
-
-The installer reads fixed application versions and the Hermes commit from the
-staged `runtime-contract.json`. Change that contract and rebuild to publish a
-software update. Actual installed versions are recorded in
-`/usr/local/share/confidential-agent/allinone-versions.txt`. Application pins do
-not alone promise bit-for-bit reproducibility of every dependency.
-
-The build removes npm and inactive Node download caches, and hard-links
-identical application files only when their permissions, ownership and extended
-attributes match. It retains Hermes frontend build dependencies for development
-and rebuild commands. Hermes uses the official stripped Python archive from the
-same pinned Python build; its download digest is still verified by Hermes PM.
-The image records these selections in
-`/usr/local/lib/cai-hermes/compact-python.json` and reclaimed file storage in
-`/usr/local/share/confidential-agent/allinone-compaction.json`.
-
-## Runtime modes and instance maintenance
-
-Codex supports `mode: "cli"` and `mode: "app-server"`. For app-server, set
-`port: 4500`, declare `service.ports: [4500]` and `service.connect: [4500]`, and
-deliver a required `0600` token resource to
-`/opt/data/allinone/home/.codex/app-server-token`. The selected allinone unit
-starts the authenticated app-server; the independent Codex unit stays disabled.
-Use `confidential-agent connect start --service SERVICE` with the native Codex remote client.
-
-OpenClaw supports `mode: "gateway"` with `port: 18789`. Hermes supports gateway
-mode; specifying `port: 8642` enables its HTTP API on `0.0.0.0`. Keep native API
-authentication configured. A listening port must match `service.ports`; CLI mode
-requires an empty port list. Unsupported modes and mismatches fail startup.
-
-Different instances can retain the same native service port in one CA workspace.
-Mesh client port collisions are mapped to independent loopback endpoints listed
-by service ID in `/etc/cai/service-directory.json`; use that directory rather
-than assuming a peer's local endpoint always equals its native port. Endpoint
-assignments persist across topology changes and reboots within the same guest;
-removed endpoints are reserved and never assigned to a different service.
-Changing a local application port to a reserved client endpoint is rejected.
-Every receiving guest, including client-only instances, must support stable
-mesh endpoints before overlapping ports can be introduced. Legacy guests must
-be rebuilt first. Local `confidential-agent connect` tunnels still need separate local
-listening ports when kept running concurrently.
-
-Background mesh and peering maintenance uses the saved deployment snapshot;
-editing or moving the original AppSpec does not update an existing instance.
-For resource delivery interrupted after infrastructure deployment completed,
-restore the original input and run `confidential-agent deploy --resume --spec instance.yaml`.
-Resume checks the original canonical AppSpec/resource paths, resource contents,
-disk secret and instance identities, and delivers the recorded private resource
-copies. Changing a referenced file while keeping the YAML unchanged is rejected.
-Use explicit `confidential-agent inject` to apply current resources to an existing instance.
-This keeps the recorded instance and identities. An interrupted infrastructure
-operation has unknown results and is not replayed by `--resume`; inspect its
-saved Shelter status before cleanup. `confidential-agent destroy` removes instance resources.
-Reboot persistence does not imply data preservation across destroy/rebuild or
-image replacement; those migrations are not implemented by this example.
-Destroy leaves local identity material in the CA state directory; redeploying the
-same service ID can reuse it. Use a new service ID for an independent identity.
-
-## Build and publish
-
-For publishing, CA uses AccessKey environment variables first, then the active
-host Aliyun CLI profile (`aliyun configure`). AK and StsToken profiles are
-supported. Select a named profile with `ALIBABA_CLOUD_PROFILE` / `ALICLOUD_PROFILE`,
-or a custom CLI config file with `ALIBABA_CLOUD_CREDENTIALS_FILE` /
-`ALICLOUD_SHARED_CREDENTIALS_FILE`. CA passes resolved credentials to both the
-native cloud CLI and OSS uploader. No tools container or separate login is needed.
-Role-based profiles must supply resolved temporary credentials through the
-environment. Incomplete environment credentials are rejected rather than mixed
-with another profile's keys.
+使用上一步的 `IMAGE_RELEASE`、`RELEASE_DIGEST` 和 `published.json`。若已有当前地域可用的 ECS 镜像，将 `IMAGE_ID` 设为该 ID，并采用与该镜像对应的描述和可信摘要。若在同一 `--state-dir` 下已将该产物导入当前账号和地域，也可省略 `--image-id`。
 
 ```bash
-confidential-agent build --spec examples/allinone/build.yaml
-confidential-agent image publish allinone-builder --spec examples/allinone/build.yaml
-test -f publisher.key || (umask 077; openssl genpkey -algorithm ED25519 -out publisher.key)
-openssl pkey -in publisher.key -pubout -out publisher.pem
-confidential-agent image export allinone-builder \
-  --signing-key publisher.key --output image-release.json
+export DASHSCOPE_API_KEY="<YOUR_DASHSCOPE_API_KEY>"
+IMAGE_ID="$(jq -er '.image_id' ./published.json)"
+
+# 实例 1：部署 OpenClaw Gateway
+confidential-agent init openclaw \
+  --non-interactive \
+  --image-release "$IMAGE_RELEASE" \
+  --release-digest "$RELEASE_DIGEST" \
+  --image-id "$IMAGE_ID" \
+  --service-id openclaw-01 \
+  --region cn-beijing \
+  --output-dir ~/cagent-work
+
+confidential-agent peering add --role operator --cidr "<OPERATOR_IPV4>/32" --label ops
+confidential-agent spec validate --spec ~/cagent-work/openclaw-01/instance.yaml
+confidential-agent deploy --spec ~/cagent-work/openclaw-01/instance.yaml
+
+# 实例 2：复用同一云镜像再起一个 Codex 实例（无需重建或再次 image publish）
+confidential-agent init codex \
+  --non-interactive \
+  --image-release "$IMAGE_RELEASE" \
+  --release-digest "$RELEASE_DIGEST" \
+  --image-id "$IMAGE_ID" \
+  --service-id codex-01 \
+  --region cn-beijing \
+  --output-dir ~/cagent-work
+
+confidential-agent deploy --spec ~/cagent-work/codex-01/instance.yaml
 ```
 
-Transfer `image-release.json` and
-the independently trusted `publisher.pem` to the deployment host. Keep the
-signing private key on the publisher. The deployment host needs CA and its
-bundled Shelter RPM, cloud credentials, and instance resource files; it does
-not need publisher state, build sources, or a local QCOW2.
+## 支持的 Harness 与接入模式
 
-For shared or marketplace images already available in a region, use `image export
-allinone-builder --region REGION --image-id IMAGE_ID --signing-key publisher.key
---output image-release.json`. This signs metadata from the existing build without
-uploading an image. Consumers can override `deploy.image.image_id` for their
-region; runtime references stay unchanged. No deployment account UID is required.
+| Harness | 支持模式（`--harness-mode`） | 默认端口 | 接入与使用方式 |
+| --- | --- | --- | --- |
+| `openclaw` | `gateway`（默认）/ `cli` | `18789` | 原生 OpenClaw Gateway（经 `connect` 隧道提供 Web `/openclaw`、WebSocket/TUI，支持 `--enable-dingtalk` 与 A2A）；或经 SSH 运行 CLI |
+| `hermes` | `gateway`（默认）/ `cli` | `8642` | 原生 Hermes HTTP API（经 `connect` 隧道提供带 `API_SERVER_KEY` 鉴权的 HTTP 接口）；或经 SSH 运行 CLI |
+| `codex` | `app-server`（默认）/ `cli` | `4500` | 原生带能力令牌鉴权的 WebSocket `app-server`（本地 `codex --remote ws://127.0.0.1:<port> --remote-auth-token-env ...` 经 `connect` 接入）；或经 SSH 运行终端 CLI |
+| `opencode` | `web`（默认）/ `cli` | `4096` | 原生带 `OPENCODE_SERVER_PASSWORD` 鉴权的 Web 服务（浏览器访问或本地 `opencode attach` 经 `connect` 接入）；或经 SSH 运行 CLI |
+| `dsh` | `web`（默认）/ `cli` | `3080` | 原生带鉴权 Web 服务（经 `connect` 映射端口，并通过 `confidential-agent ssh <id> -- cai-agent --web-url --port <本地端口>` 获取带运行期 `?token=` 的登录地址）；或经 SSH 执行 `cai-agent headless '任务'` |
+| `claude-code` | `cli` | 无 | 认证管理 SSH：`confidential-agent ssh <id> --tty -- cai-agent` |
+| `qodercli` | `cli` | 无 | 认证管理 SSH：`confidential-agent ssh <id> --tty -- cai-agent`，进入后登录 Qoder 账户并使用官方 `/model` 向导 |
+| `pi` | `cli` | 无 | 认证管理 SSH：`confidential-agent ssh <id> --tty -- cai-agent` 或 `cai-agent --print '任务'` |
 
-Signatures are checked by default. `deploy --skip-signature-verification` explicitly
-skips only the release signature and permits omitting the publisher key. It keeps
-runtime reference/compatibility checks and attestation. `init --stage deploy`
-accepts the same flag to record it in the generated spec. See the RPM walkthrough
-for directory ownership and state retention.
+所有网络服务模式的监听端口必须与 `instance.yaml` 中的 `service.ports` 一致；`cli` 模式要求 `service.ports: []`。通过 TNG 建立本地隧道示例：
+
+```bash
+confidential-agent connect start --service openclaw-01 --ready-json ./connect-ready.json
+# 使用完成后停止本地隧道
+confidential-agent connect stop --ready-json ./connect-ready.json
+```
+
+通过实例级认证 SSH 检查配置或进入交互会话：
+
+```bash
+confidential-agent ssh codex-01 -- cai-agent --check
+confidential-agent ssh codex-01 --tty -- cai-agent
+```
+
+## 实例级 PEP 控制与远程证明 Skill
+
+共享镜像为全部 8 种 harness 预装 `tdx-remote-attestation` skill 及 `/usr/local/bin/cai-pep` 远程证明辅助工具：
+
+| Harness | Guest 内 Skill 目录 |
+| --- | --- |
+| `openclaw` | `/opt/data/allinone/home/.openclaw/skills/tdx-remote-attestation` |
+| `hermes` | `/opt/data/allinone/hermes/skills/tdx-remote-attestation` |
+| `codex` | `/opt/data/allinone/home/.agents/skills/tdx-remote-attestation` |
+| `opencode` | `/opt/data/allinone/home/.config/opencode/skills/tdx-remote-attestation` |
+| `dsh` | `/opt/data/allinone/home/.dsh/skills/tdx-remote-attestation` |
+| `claude-code` | `/opt/data/allinone/home/.claude/skills/tdx-remote-attestation` |
+| `qodercli` | `/opt/data/allinone/home/.qoder/skills/tdx-remote-attestation` |
+| `pi` | `/opt/data/allinone/home/.pi/agent/skills/tdx-remote-attestation` |
+
+- **OpenClaw 实例级 `--disable-pep`**：共享镜像内置 OpenClaw 执行器补丁、`cai-pep` 插件、Podman 无网只读沙箱以及预编译的 `dingtalk` 与 `cai-a2a` 扩展。OpenClaw 实例默认启动 `cai-pep.service` 强制拦截高危 `exec` 调用；初始化 OpenClaw 实例时若传入 `--disable-pep`（对应 `runtime.json` 中 `"disable_pep": true` 且不启用 `cai-pep` 插件），仅关闭该实例的 `exec` 策略沙箱控制，**TDX 运行时远程证明与 `cai-pep attest collect-and-verify` 证明能力完整保留**。
+- 其他 7 种 harness 不挂载 `cai-pep` 命令拦截服务，仅使用 `/usr/local/bin/cai-pep attest collect-and-verify` 执行本机 TDX 证据采集与校验。
+
+## 镜像内运行时配置路径
+
+`/opt/data/allinone/runtime.json` 支持字段 `harness`、可选 `mode`、可选 `port`、可选布尔值 `disable_pep`（仅 `openclaw`）及字符串映射 `environment`。各 harness 在加密可写层下的原生配置位置如下：
+
+| Harness | 加密可写层内的原生配置路径 |
+| --- | --- |
+| `openclaw` | `/opt/data/allinone/home/.openclaw/openclaw.json`（Gateway 默认端口 `18789`，要求至少 32 字符的 `gateway.auth.token`） |
+| `hermes` | `/opt/data/allinone/hermes/config.yaml` 与 `.env`（HTTP API 默认端口 `8642`，要求 `API_SERVER_KEY`） |
+| `codex` | `/opt/data/allinone/home/.codex/config.toml`、`OPENAI_API_KEY`；`app-server` 额外要求 `0600` 的 `app-server-token` |
+| `opencode` | `/opt/data/allinone/home/.config/opencode/opencode.json`；`web` 模式要求 `OPENCODE_SERVER_PASSWORD` |
+| `dsh` | `/opt/data/allinone/home/.dsh/cordis.patch.yml`（`DSH_HOME` 指向该目录） |
+| `claude-code` | `/opt/data/allinone/home/.claude/settings.json` 与 `.claude.json` |
+| `qodercli` | `/opt/data/allinone/home/.qoder`（自动固定 `general.enableAutoUpdate: false`） |
+| `pi` | `/opt/data/allinone/home/.pi/agent/models.json` 与 `settings.json`（`PI_CODING_AGENT_DIR` 指向该目录） |
+
+镜像内软件版本由 [`runtime-contract.json`](runtime-contract.json) 固定，实际安装结果记录在 `/usr/local/share/confidential-agent/allinone-versions.txt`，去重与缓存清理统计记录在 `/usr/local/share/confidential-agent/allinone-compaction.json`。
+
+## 运维与资源清理
+
+- `app_ready` 仅表示 systemd 服务与声明端口就绪，不代表外部付费模型请求已成功；配置检查可执行 `confidential-agent ssh <id> -- cai-agent --check`，排障日志可查看 `confidential-agent ssh <id> -- journalctl -u cai-allinone.service --no-pager`。
+- `confidential-agent destroy <service-id>` 仅销毁该实例的 ECS、VPC、安全组等运行资源，保留共享云镜像。
+- 确认当前地域不再有任何实例依赖该云镜像后，按构建服务名或 Shelter manifest 摘要执行 `confidential-agent image unpublish <allinone-builder | sha256:manifest摘要> --region cn-beijing`（已导出的保留镜像需显式加 `--force`）清理云镜像与导入快照。

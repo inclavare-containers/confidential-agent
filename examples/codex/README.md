@@ -65,10 +65,11 @@ Confidential Agent resources in `codex.yaml`.
 
 ## Deploy
 
-Authorize your operator CIDR, then validate, build, and deploy:
+Set `OPERATOR_CIDR` to the operator network's IPv4 CIDR, then validate, build,
+and deploy:
 
 ```bash
-confidential-agent peering add --role operator --cidr <operator-cidr> --label ops
+confidential-agent peering add --role operator --cidr "$OPERATOR_CIDR" --label ops
 confidential-agent spec validate --spec examples/codex/codex.yaml
 confidential-agent build --spec examples/codex/codex.yaml
 confidential-agent deploy --spec examples/codex/codex.yaml
@@ -80,10 +81,10 @@ each command.
 
 ## SSH Operation
 
-Use the debug SSH command shown by deploy/status, then start Codex:
+Connect using the debug SSH command from deploy/status. In the guest, start
+Codex:
 
 ```bash
-ssh -i <debug-private-key> root@<guest-ip>
 cd /workspace
 set -a
 . /root/.config/confidential-agent/codex/codex.env
@@ -123,7 +124,8 @@ local Codex CLI to it with the app-server token resource:
 
 ```bash
 export CODEX_REMOTE_TOKEN="$(cat examples/codex/secrets/app-server-token)"
-codex --remote ws://127.0.0.1:<mapped-port> \
+CONNECT_PORT="$(jq -er '.client_endpoints[0].local_port' ./codex-connect-ready.json)"
+codex --remote "ws://127.0.0.1:$CONNECT_PORT" \
   --remote-auth-token-env CODEX_REMOTE_TOKEN
 ```
 

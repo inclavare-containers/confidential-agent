@@ -855,6 +855,17 @@ fn app_service_ready_requires_service_port_to_accept_connections() {
     drop(listener);
     bootstrap.ports = vec![ready_port];
     assert!(!ensure_app_service_ready(&bootstrap));
+
+    // Transparent TNG egress dials the original destination address for connect ports.
+    let nic = "127.0.0.2".parse::<IpAddr>().unwrap();
+    let listener = TcpListener::bind((nic, 0)).unwrap();
+    let ready_port = listener.local_addr().unwrap().port();
+    bootstrap.ports = vec![ready_port];
+    assert!(!app_ports_ready(&bootstrap, nic));
+    bootstrap.connect = vec![confidential_agent_core::spec::ConnectPort::Plain(
+        ready_port,
+    )];
+    assert!(app_ports_ready(&bootstrap, nic));
 }
 
 #[test]

@@ -1,4 +1,6 @@
 """Check the image configuration and selected process without installing agents."""
+from contextlib import redirect_stdout
+import io
 import json
 import os
 from pathlib import Path
@@ -153,6 +155,115 @@ class AllinoneRuntimeTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 configure("qodercli", {})
             self.assertEqual(path.read_bytes(), before)
+
+    def test_opencode_web_requires_server_password_and_binds_tng_port(self):
+        namespace = runpy.run_path(str(RUNTIME))
+        load = namespace["load_configuration"]
+        main = namespace["main"]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cfg = root / "runtime.json"
+            cfg.write_text(json.dumps({"harness": "opencode", "mode": "web"}))
+            self.assertEqual(load(cfg)[:3], ("opencode", "web", 4096))
+            main.__globals__.update(
+                HOME=root / "home",
+                WORKSPACE=root / "workspace",
+                load_configuration=lambda: ("opencode", "web", 4096, {}),
+                validate_declared_ports=lambda port: None,
+            )
+            with patch("sys.argv", ["cai-agent", "--check"]), \
+                 patch("shutil.which", return_value="/usr/local/bin/opencode"):
+                with self.assertRaisesRegex(ValueError, "OPENCODE_SERVER_PASSWORD"):
+                    main()
+            main.__globals__["load_configuration"] = lambda: (
+                "opencode",
+                "web",
+                4096,
+                {"OPENCODE_SERVER_PASSWORD": "0123456789abcdef0123456789abcdef"},
+            )
+            with patch("sys.argv", ["cai-agent", "--serve"]), \
+                 patch("shutil.which", return_value="/usr/local/bin/opencode"), \
+                 patch("os.chdir"), patch("os.execvpe") as execute:
+                main()
+            args = execute.call_args.args
+            self.assertEqual(args[1], ["opencode", "web", "--hostname", "0.0.0.0", "--port", "4096"])
+            self.assertEqual(args[2]["OPENCODE_SERVER_PASSWORD"], "0123456789abcdef0123456789abcdef")
+            self.assertEqual(args[2]["BROWSER"], "/bin/true")
+
+    def test_openclaw_per_instance_disable_pep_skips_pep_service_and_checks_config(self):
+        namespace = runpy.run_path(str(RUNTIME))
+        load = namespace["load_configuration"]
+        main = namespace["main"]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cfg = root / "runtime.json"
+            cfg.write_text(json.dumps({"harness": "codex", "disable_pep": True}))
+            with self.assertRaisesRegex(ValueError, "OpenClaw"):
+                load(cfg)
+            cfg.write_text(json.dumps({"harness": "openclaw", "disable_pep": True}))
+            harness, mode, port, env = load(cfg)
+            self.assertEqual((harness, mode, port, env["CA_DISABLE_PEP"]), ("openclaw", "gateway", 18789, "1"))
+
+            home = root / "home"
+            claw_cfg = home / ".openclaw/openclaw.json"
+            claw_cfg.parent.mkdir(parents=True)
+            claw_cfg.write_text(json.dumps({
+                "plugins": {"enabled": True, "allow": ["cai-a2a"], "entries": {"cai-a2a": {"enabled": True}}},
+                "gateway": {"auth": {"mode": "token", "token": "0123456789abcdef0123456789abcdef"}},
+            }))
+            main.__globals__.update(
+                HOME=home,
+                WORKSPACE=root / "workspace",
+                load_configuration=lambda: ("openclaw", "gateway", 18789, {"CA_DISABLE_PEP": "1"}),
+                validate_declared_ports=lambda port: None,
+            )
+            with patch("sys.argv", ["cai-agent", "--serve"]), \
+                 patch("shutil.which", return_value="/usr/local/bin/openclaw"), \
+                 patch("subprocess.run") as service, \
+                 patch("os.chdir"), patch("os.execvpe") as execute:
+                main()
+            service.assert_called_once_with(["systemctl", "stop", "cai-pep.service"], check=False)
+            self.assertEqual(execute.call_args.args[1], ["openclaw", "gateway", "run", "--port", "18789"])
+
+            # Conflicting cai-pep plugin when disable_pep=true is rejected.
+            claw_cfg.write_text(json.dumps({
+                "plugins": {"enabled": True, "allow": ["cai-pep"], "entries": {"cai-pep": {"enabled": True}}},
+                "gateway": {"auth": {"mode": "token", "token": "0123456789abcdef0123456789abcdef"}},
+            }))
+            with patch("sys.argv", ["cai-agent", "--check"]), \
+                 patch("shutil.which", return_value="/usr/local/bin/openclaw"):
+                with self.assertRaisesRegex(ValueError, "disable_pep"):
+                    main()
+
+    def test_dsh_launch_url_is_private_and_supports_the_mapped_port(self):
+        namespace = runpy.run_path(str(RUNTIME))
+        load = namespace["load_configuration"]
+        resolve = namespace["dsh_web_url"]
+        serve = namespace["serve_dsh_web"]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cfg = root / "runtime.json"
+            cfg.write_text(json.dumps({"harness": "dsh", "mode": "web"}))
+            self.assertEqual(load(cfg)[:3], ("dsh", "web", 3080))
+            state = root / "dsh-web-url"
+            token = "testLaunchToken_0123456789abcdef"
+            url = f"http://127.0.0.1:3080/?token={token}"
+            log = io.StringIO()
+
+            def check_ready():
+                self.assertEqual(state.stat().st_mode & 0o777, 0o600)
+                self.assertEqual(resolve([], state), url)
+                self.assertEqual(resolve(["--port", "49152"], state), url.replace(":3080/", ":49152/"))
+                return 0
+
+            with patch("subprocess.Popen") as popen, redirect_stdout(log):
+                process = popen.return_value
+                process.stdout = [f"dsh web: {url}\n"]
+                process.wait.side_effect = check_ready
+                self.assertEqual(serve(["dsh"], 3080, "192.0.2.2", {}, state), 0)
+            self.assertNotIn(token, log.getvalue())
+            with self.assertRaisesRegex(ValueError, "not ready"):
+                resolve([], state)
 
 
 if __name__ == "__main__":

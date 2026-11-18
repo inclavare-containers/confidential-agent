@@ -107,47 +107,13 @@ PY
 }
 
 prepare_openclaw_fixture() {
-  local -a init_args=()
-  mapfile -d '' init_args < <(init_common_args "$OPENCLAW_INIT_OUTPUT_DIR" "$OPENCLAW_DISK_GB")
-  init_args+=(
-    --dashscope-api-key "$DASHSCOPE_KEY_VALUE"
-    --gateway-token "$OPENCLAW_TOKEN"
-    --model "$DASHSCOPE_MODEL"
-    --dashscope-base-url "$DASHSCOPE_BASE_URL"
-    --openclaw-version "${E2E_OPENCLAW_VERSION:-2026.10.3}"
-    --node-version "${E2E_OPENCLAW_NODE_VERSION:-24.21.0}"
-    --npm-registry "${E2E_NPM_REGISTRY:-https://registry.npmmirror.com/}"
-  )
-  if ! ca_init_capture "$STATE_DIR" "$WORK_DIR/openclaw-init.out" "$WORK_DIR/openclaw-init.err" openclaw "${init_args[@]}"; then
-    record_file_as_block "OpenClaw init stdout:" "$WORK_DIR/openclaw-init.out" text
-    record_file_as_block "OpenClaw init stderr:" "$WORK_DIR/openclaw-init.err" text
-    return 1
-  fi
-  record_file_as_block "OpenClaw init stdout:" "$WORK_DIR/openclaw-init.out" text
-  record_file_as_block "OpenClaw init stderr:" "$WORK_DIR/openclaw-init.err" text
+  stage_cpu_example openclaw "$OPENCLAW_DIR" "$OPENCLAW_DISK_GB" "$DASHSCOPE_KEY_VALUE" "$OPENCLAW_TOKEN"
   assert_openclaw_gateway_config
-  assert_openclaw_init_output
+  assert_openclaw_example
 }
 
 prepare_codex_fixture() {
-  local -a init_args=()
-  mapfile -d '' init_args < <(init_common_args "$CODEX_INIT_OUTPUT_DIR" "$CODEX_DISK_GB")
-  init_args+=(
-    --dashscope-api-key "$DASHSCOPE_KEY_VALUE"
-    --dashscope-base-url "$DASHSCOPE_BASE_URL"
-    --model "$DASHSCOPE_MODEL"
-    --codex-app-server-token "$CODEX_REMOTE_TOKEN_VALUE"
-    --node-version "${E2E_CLI_AGENT_NODE_VERSION:-24.21.0}"
-    --npm-registry "${E2E_CLI_AGENT_NPM_REGISTRY:-${E2E_NPM_REGISTRY:-https://registry.npmmirror.com/}}"
-    --codex-version "${E2E_CODEX_VERSION:-$(ca_software_version codex)}"
-  )
-  if ! ca_init_capture "$STATE_DIR" "$WORK_DIR/codex-init.out" "$WORK_DIR/codex-init.err" codex "${init_args[@]}"; then
-    record_file_as_block "Codex init stdout:" "$WORK_DIR/codex-init.out" text
-    record_file_as_block "Codex init stderr:" "$WORK_DIR/codex-init.err" text
-    return 1
-  fi
-  record_file_as_block "Codex init stdout:" "$WORK_DIR/codex-init.out" text
-  record_file_as_block "Codex init stderr:" "$WORK_DIR/codex-init.err" text
+  stage_cpu_example codex "$CODEX_DIR" "$CODEX_DISK_GB" "$DASHSCOPE_KEY_VALUE" "$CODEX_REMOTE_TOKEN_VALUE"
   assert_codex_secret_rendering "$DASHSCOPE_KEY_VALUE" "$CODEX_REMOTE_TOKEN_VALUE"
 }
 
@@ -641,5 +607,5 @@ run_case() {
   trustee_capture_diagnostics "complete" || record "- WARNING: final Trustee diagnostics capture failed."
   destroy_trustee_infra
   assert_trustee_cloud_zero 600
-  record "- checked-in and init-generated defaults remained challenge; only disposable copies used Trustee."
+  record "- checked-in examples use Challenge mode and staged copies used Trustee."
 }

@@ -235,7 +235,10 @@ pub(super) fn validated_injection_spec(
                 &committed.source.trusted_key,
             ),
         ] {
-            if name == "publisher key" && committed.source.skip_signature_verification {
+            if name == "publisher key"
+                && (committed.source.skip_signature_verification
+                    || committed.source.release_digest.is_some())
+            {
                 continue;
             }
             let frozen_digest = sha256_file(frozen)

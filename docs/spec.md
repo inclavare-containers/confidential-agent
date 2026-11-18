@@ -183,7 +183,7 @@ deploy:
 |---|---|:-:|---|
 | `provider` | enum | ✅ | 当前仅 `aliyun` |
 | `instance_type` | string | ✅ | 非空 |
-| `image_variant` | string | ❌ | `release` (默认) 或 `debug`；本地构建要求对应 `build.variants` 已启用；发布镜像要求与签名运行时元数据中的变体一致 |
+| `image_variant` | string | ❌ | `release` (默认) 或 `debug`；本地构建要求对应 `build.variants` 已启用；预构建镜像要求与 `image-release.json` 运行时元数据中的变体一致 |
 | `disk_gb` | u32 | ❌ | 未设置时请求至少 32 GiB，并按 `build.resize` 向上调整；显式值不得小于 20 GiB 或构建镜像容量。已发布镜像必须显式设置并满足镜像最低容量 |
 | `region` | string | ✅ | 非空 |
 | `zone_id` | string | ✅ | 非空。可写成 `availability_zone` 别名 |
@@ -192,9 +192,13 @@ deploy:
 
 `deploy` 不再包含 `security.allowed_cidr` / `security.a2a_peer_cidrs`。所有入向安全组规则都从 `<state-dir>/peerings.yaml` 派生，由 `confidential-agent peering ...` 管理；旧字段会被严格模式拒绝，可用 `confidential-agent migrate <spec>` 迁移。`build` 阶段只产出镜像和 build artifact，不读取 `peerings.yaml`；operator peering 应在 build 完成后、首次 deploy 前添加。
 
-部署时会将 `CA_DEPLOYER_CIDR` 保存到部署快照，并传给本地镜像和发布镜像两条运行配置渲染路径。后续 `deploy --resume` 与 `peering apply` 使用该记录，不依赖新进程仍设置这个环境变量；旧部署可从已保存的运行配置恢复该值。
+部署时会将 `CA_DEPLOYER_CIDR` 保存到部署快照，并传给本地镜像和预构建镜像两条运行配置渲染路径。后续 `deploy --resume` 与 `peering apply` 使用该记录，不依赖新进程仍设置这个环境变量。
 
-若先执行 `confidential-agent image publish <service> --spec <path>`，CLI 会在本地 service state 中记录 published image。后续 `deploy` 仅在 provider、region、variant、build id 和镜像内容 hash 均匹配，且本地发布状态为 `available` 时复用该 `image_id`，并在 Shelter deploy 配置中跳过本地镜像上传和 ImportImage。Published image 不由 `destroy` 统一删除；使用 `image unpublish` 删除指定服务的发布镜像，或使用 `image prune --dry-run --all` 审计后清理旧 build/failed 发布记录。
+`confidential-agent image publish` 将镜像导入为阿里云自定义镜像：
+1. 本地构建记录：`confidential-agent image publish <service> --spec <path> [--region <region>] [--output <published.json>]`
+2. 预构建产物或不可变 OCI 引用：`confidential-agent image publish --artifact <Shelter产物目录 | artifact-manifest.json | OCI引用@sha256:...> --image-release <file> --release-digest sha256:<64位摘要> --region <region> [--output <published.json>]`
+
+导入完成后，CLI 按 `manifest_digest`、当前阿里云账号和地域记录已就绪的 `image_id`。`--output` 写出该发布记录，包括 `account_id`、`manifest_digest`、`region`、`image_id`。使用 `image unpublish <service | sha256:manifest摘要> --region <region>` 退役所选发布及自有导入快照。
 
 镜像与实例分别管理：`image list` 列出本地构建和云端发布（不包含消费者实例）；`status` / `tui` 展示实例（不包含仅构建的 builder）。镜像状态包括 `built`、`publishing`、`published`、`retiring`、`failed`、`local-missing`；发布状态是带时间戳的本地记录，不宣称实时云端状态。`image list --json` 返回完整 `publications`，包括各地域的状态、错误、所有权和待清理标记。本地文件缺失不会隐藏云镜像；`CURRENT` 按当前构建的所有 variant 判断。
 
@@ -206,17 +210,16 @@ deploy:
 |---|---|---|
 | `destroy INSTANCE` | 该实例管理的基础设施 | 共享云镜像、本地记录 |
 | `image rm BUILDER` | 本地镜像文件及其硬链接 | 发布台账、构建元数据、管理身份 |
-| `image unpublish BUILDER` | 所选发布的云镜像、自有导入快照及剩余中转对象 | 本地产物、实例记录 |
+| `image unpublish <BUILDER \| sha256:MANIFEST>` | 所选发布的云镜像、自有导入快照及剩余中转对象 | 本地产物、实例记录 |
 | `forget SERVICE` | 无运行资源、无发布台账的本地管理目录 | 不调用云端删除 |
 
-`image prune --dry-run` 预览旧发布和中转对象清理；默认保留当前所有 variant、消费者引用和已导出的镜像，`--all` 仍不绕过引用/导出保护。OSS 中转对象清理独立于云镜像退休，失败后可通过再次 publish 或 prune 重试。自动发现并接管的已有镜像是引用，不自动取得删除权限；只有显式 `unpublish --force` 才能删除它。发布失败与退休进度分别记录，`publish` 不会隐式删除旧云镜像。导入请求使用持久化 ClientToken，响应丢失时复用同一个请求身份。自有导入快照在删除镜像前记录，逐个清理并保存进度；快照清理失败不会丢失台账。普通删除使用云平台的引用检查，显式 `--force` 才强制删除镜像；快照删除仍不强制绕过使用保护。
+`image prune --dry-run` 预览当前账号的 builder 发布和中转对象清理。默认保留各 variant 的当前镜像，`--all` 仍保留消费者引用和已导出的镜像。通过 `--artifact` 导入的镜像按 manifest 摘要显式退役。OSS 中转对象清理失败后可再次执行 publish 重试。删除自动发现并复用的已有镜像需要 `unpublish --force`。导入请求使用持久化 ClientToken，响应丢失时复用同一个请求身份。删除镜像前记录自有导入快照，逐个清理并保存进度。普通删除使用云平台的引用检查，`--force` 只对镜像删除生效。
 
+清理会检查当前工作区内服务的部署和导入引用。`image export --image-id` 会为描述映射中的本地发布记录保留标记，`image prune` 保留这些镜像。确认无本机和跨主机消费者后，通过 `image unpublish ... --force` 退役已导出的镜像。部分云删除失败会返回非零退出码，并保留记录供重试。
 
-清理会检查当前工作区所有服务的部署和导入引用，不只检查发布者自身。`image export` 会记录保留标记，自动 `prune`（包括 `--all`）不再删除该镜像；旧版本已经导出的 release 没有此标记，升级后应重新 export 以登记保留。跨主机消费者无法由本地 state 自动发现。发布者应停止分发、遵守已公布的保留期并确认消费者不再依赖创建或恢复后，才通过 `image unpublish --image-id <id> --force` 显式退役。部分云删除失败会返回非零退出码，并保留失败记录供重试。
+镜像上传的端点由 `CA_IMAGE_OSS_ENDPOINT` 控制，默认 `auto`：只有带 token 的 ECS 元数据确认同地域且内网 HTTPS 探测成功时使用内网，否则使用公网。可显式设置 `public`、`internal` 或 HTTPS 端点；显式配置不自动回退。CA 的 `image publish` 和 Shelter 的本地镜像部署上传都支持该设置。模型下载使用的 `CA_OSS_ENDPOINT` / `--oss-endpoint` 与镜像上传独立。
 
-镜像上传的端点由 `CA_IMAGE_OSS_ENDPOINT` 控制，默认 `auto`：只有带 token 的 ECS 元数据确认同地域且内网 HTTPS 探测成功时使用内网，否则使用公网。可显式设置 `public`、`internal` 或 HTTPS 端点；显式配置不自动回退。CA 的 `image publish` 和新版 Shelter 的本地镜像部署上传都支持该设置。模型下载使用的 `CA_OSS_ENDPOINT` / `--oss-endpoint` 与镜像上传独立。
-
-独立部署端可以省略 `build`，通过 `deploy.image` 选择发布者签名的镜像：
+部署端可以省略 `build`，通过 `deploy.image` 使用预构建镜像描述：
 
 ```yaml
 deploy:
@@ -224,14 +227,19 @@ deploy:
   region: cn-beijing
   zone_id: cn-beijing-i
   instance_type: ecs.g9i.xlarge
-  disk_gb: 80
+  disk_gb: 120
   image:
     release: ./image-release.json
-    trusted_key: ./publisher.pem
+    release_digest: sha256:<完整的64位image-release.json摘要>
+    # 可选：image_id: m-xxxxxxxx
     # 可选：manifest: sha256:<完整的64位manifest摘要>
 ```
 
-发布端先运行 `image publish`，再运行 `image export <service> --signing-key <Ed25519 PKCS8 PEM> --output image-release.json`。消费者仅需要 release、独立认可的发布者公钥以及自己的 AppSpec 和资源文件，不需要生产端 state、构建输入或 QCOW2。CA 在创建资源前验证签名和地域映射，自动读取并保存 manifest 摘要，将验证过的参考值交给现有 challenge/Trustee 流程。可选的 `manifest` 字段用于额外固定版本；显式指定但不匹配会失败。每个 service 使用自己的身份、磁盘口令和 Terraform state；`destroy` 不删除共享镜像。该模式同时支持 `release` 和 `debug` 变体，通过 `deploy.image_variant` 选择，消费者仍省略全部构建输入。debug 镜像的签名运行时元数据必须明确标记 `image_variant: debug`。
+构建端完成 `build` 后，运行 `image export <service> --output image-release.json` 导出通用描述及整个文件的 SHA-256 摘要。指定 `--image-id` 时才写入云镜像映射。官方预构建镜像从 GitHub Release 的 `image-index.json` 获取 `oci_reference` 和可信 `release_digest`。`image publish --artifact` 按已验证的描述核对产物的 manifest 和磁盘摘要及大小。
+
+若当前 `state-dir` 已通过 `image publish` 在当前账号和目标地域导入过该 `manifest_digest`，CA 会自动解析对应的 `image_id`；若用户直接持有当前地域可用的自定义镜像、共享镜像或云市场镜像 ID，可通过 `deploy.image.image_id`、`init --image-id` 或 `deploy --image-id` 显式指定，无需重复执行 `image publish`（发布元数据不绑定特定云账号）。如需使用公钥签名分发流程，也可配置 `trusted_key`（配合 `image export --signing-key`）。
+
+**信任分层**：`release_digest` 用于校验镜像描述与导入产物字节的一致性；运行时远程证明（TDX Quote 与 `attestation.reference_values` 指定的 Rekor / sample 参考值校验）与之相互独立，始终在释放磁盘密钥和应用资源前强制执行。消费者无需生产端 state、构建输入或本地 QCOW2；每个实例拥有独立的 `service.id`、磁盘口令、网关身份、认证管理 SSH 密钥和 Terraform state，`destroy` 不会删除共享云镜像。该模式同时支持 `release` 和 `debug` 变体（`debug` 变体的运行时元数据须标记 `image_variant: debug`）。
 
 复用 debug 镜像会沿用镜像中原有的调试 SSH 公钥；各消费者不会自动获得、重新生成或替换相应私钥。需要 SSH 时，操作员单独提供原构建私钥，不将其加入签名发布包或交付给 guest：
 
@@ -309,8 +317,8 @@ attestation:
 |---|---|:-:|---|
 | `tee` | enum | ✅ | `tdx` |
 | `mode` | enum | ✅ | `challenge` 或 `trustee`；Trustee URL 是 CLI 全局运行时配置，不写入 AppSpec 或镜像 |
-| `reference_values` | enum | ❌ | 默认 `sample`；可选 `rekor`。若选 `rekor` 则 `attestation.rekor` 必填 |
-| `rekor` | object | 条件必填 | `artifact_type` 与 `rekor_url` 非空；`required=true` 时 `cosign_key` 必填 |
+| `reference_values` | enum | ❌ | 默认 `sample`；可选 `rekor`。本地构建选 `rekor` 时 `attestation.rekor` 必填；`deploy.image` 复用预构建镜像时从已验证的 `image-release.json` 读取 Rekor 参考值元数据，消费者 spec 无需填写 `attestation.rekor` |
+| `rekor` | object | 条件必填 | 本地构建启用 Rekor 时使用：`artifact_type` 与 `rekor_url` 非空；`required=true` 时 `cosign_key` 必填 |
 
 可用 CLI 生成本地 Rekor 签名 key，部署机不需要安装 host 版 `cosign`：
 
@@ -501,7 +509,7 @@ OpenClaw A2A 插件不再从配置里读取对端 URL/端口，而是从 `/etc/c
 
 ## 10. 路径解析规则
 
-所有路径字段（`build.scripts[]`, `build.files[].source`, `build.variants.debug.ssh_public_key`, `secrets.disk_passphrase`, `resources.*.source`, `attestation.rekor.cosign_key`, `attestation.rekor.slsa_generator`）都遵循：
+所有路径字段（`build.runtime_contract`, `build.scripts[]`, `build.files[].source`, `build.variants.debug.ssh_public_key`, `deploy.image.release`, `deploy.image.trusted_key`, `secrets.disk_passphrase`, `resources.*.source`, `attestation.rekor.cosign_key`, `attestation.rekor.slsa_generator`）都遵循：
 
 1. 如果是绝对路径 → 直接使用。
 2. 如果是相对路径 → 相对于 **spec YAML 所在目录** 解析。
@@ -579,52 +587,8 @@ resources:
 
 如果手动编辑了 state 文件，注意保持 schema 字符串完全匹配——CLI 会显式校验，不一致直接拒绝。
 
-Published CA images carry an authenticated `confidential-agent/image-runtime/v1`
-contract. CA checks guest/bootstrap capabilities, root integrity, encrypted
-writable storage with CA key release, minimum disk size, application service and
-instance SSH support before creating infrastructure. `build.runtime_contract`
-optionally selects an image-owned JSON contract; it is captured at build time.
-The guest binary reports its protocol capabilities through `describe-runtime`.
-Older image exports without this contract require rebuilding before using the
-published-image entry point; ordinary local artifact deployment remains available.
+导出的预构建镜像携带经过认证的 `confidential-agent/image-runtime/v1` 运行时契约（可通过 `build.runtime_contract` 在构建时捕获，Guest 二进制通过 `describe-runtime` 报告协议能力）。CA 在创建云基础设施前会校验 Guest/bootstrap 协议能力、rootfs 完整性、带 CA 远程证明取密的可写层加密、最小磁盘容量、`app_service` 以及实例级管理 SSH 支持情况。
 
-`ca deploy --resume` resumes resource delivery only for confirmed `deployed`
-infrastructure with the original configuration at its canonical path. Deployment
-records canonical resource paths and digests and delivers private snapshots of
-user resources and the disk secret. Resume rejects changed resource contents,
-retargeted paths, or changed instance credentials; restore the original inputs
-before resuming. Run the candidate host CLI's `upgrade check` against the existing
-state directory before upgrading or rebooting; one-click performs this check
-before replacing installed binaries. Legacy deployments without frozen inputs
-require explicit `upgrade bind-inputs --service SERVICE`. This reads unchanged
-committed configuration, verifies disk bytes against historical Trustee disk/data
-digests, verifies recorded gateway and SSH identities, and saves a private input
-snapshot without changing remote resources. A missing or conflicting historical
-binding is not replaced by current files. Legacy challenge deployments without
-disk evidence must retain the previous host toolchain for resource delivery and
-back up/export data before migration; destroying data-bearing instances is not
-an upgrade procedure. Resume does not apply Terraform or
-replay an interrupted infrastructure operation. Same-service build/deploy/inject/
-destroy operations are mutually exclusive; independent services may proceed in
-parallel. `ca ssh --tty SERVICE -- COMMAND` explicitly allocates a terminal;
-script execution retains its existing output and exit-code behavior.
+`confidential-agent deploy --resume` 仅对基础设施已确认 `deployed` 的实例继续完成资源注入，并校验原始规范路径下的配置、资源摘要、磁盘密钥和实例身份快照（它不会重新执行 Terraform 或重放中断的基础设施创建）。普通 `inject` 允许移动未改动的密钥或项目目录，复用已保存的镜像授权与已提交的磁盘口令更新业务资源，不改动构建或云基础设施。同一服务的 `build`/`deploy`/`inject`/`destroy` 互斥执行，不同服务可并行运行。`confidential-agent ssh --tty <service> -- <command>` 显式分配交互终端；不带 `--tty` 的脚本命令保持标准输出和退出码行为。升级宿主机二进制或重启实例前可执行 `confidential-agent upgrade check` 检查现有状态目录。
 
-Ordinary `inject` permits moving unchanged secret files and project directories.
-It compares secret contents and instance identity, uses saved release/public-key
-authorization and the committed disk copy, and never applies build or infrastructure
-changes. Supplied release/key files that still exist must match saved copies;
-their original download locations need not remain available. `--resume` retains
-its stricter original-path requirement.
-
-If persistent guest daemon state is unreadable, the daemon enters
-`management-recovery`: it stops business and mesh services, leaves endpoint state
-untouched, and only installs provider-specific, hash-verified management credentials.
-Failed stop requests are reported without withholding authenticated SSH. The daemon
-does not start or reconfigure business services during recovery. Instance SSH can
-restore the original state after a cold boot.
-Status reports both application and mesh unready. Restoring valid state lets the
-daemon resume with the saved endpoint reservations.
-
-发布元数据不绑定部署账号。`deploy.image.image_id` 可覆盖地域中的镜像位置（共享或云市场镜像），不改变参考值。
-默认校验 release 签名；显式设置 `deploy.image.skip_signature_verification: true` 或传 `deploy --skip-signature-verification` 后可省略 `trusted_key`。
-该选项不关闭运行时证明和资源释放策略。已有 UID 字段兼容读取并忽略。
+若 Guest 持久化 daemon 状态不可读，daemon 会进入 `management-recovery` 模式：停止业务和 mesh 服务，保留已记录的端点预留，仅安装通过哈希校验的实例管理凭据，使运维可通过认证后的实例 SSH 恢复状态；恢复期间 `status` 会将 `app_ready` 和 `mesh_ready` 报告为未就绪。

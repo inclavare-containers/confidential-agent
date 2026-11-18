@@ -5,6 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+RuntimeDirectory=cai-allinone
+RuntimeDirectoryMode=0700
 ExecStart=/usr/local/bin/cai-agent --serve
 Restart=on-failure
 RestartSec=5

@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """Upload a tested binary release, preserving already uploaded asset contents."""
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -9,17 +8,11 @@ import subprocess
 import sys
 import tempfile
 
+from release_files import digest, write_manifest
+
 
 def gh(*args):
     return subprocess.check_output(['gh', *args], text=True)
-
-
-def digest(path):
-    h = hashlib.sha256()
-    with path.open('rb') as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def main():
@@ -41,6 +34,22 @@ def main():
     release = json.loads(gh('api', release_url))
     assert release['draft'], 'Published releases are immutable in this workflow'
     existing = {a['name']: a for a in release['assets']}
+    with tempfile.TemporaryDirectory() as tmp:
+        gh('release', 'download', tag, '--repo', repo, '--pattern', 'image-index.json',
+           '--pattern', 'image-release.json', '--dir', tmp)
+        resolver = Path(__file__).resolve().parents[1] / 'hack/fetch-release-image.py'
+        index = json.loads(subprocess.check_output([
+            sys.executable, resolver, '--from-dir', tmp, '--output-dir', directory, '--version', manifest['version']]))
+        assert index['source_commit'] == commit, 'Image and RPMs were built from different commits'
+        config = Path(tmp) / 'anonymous.json'
+        config.write_text('{"auths":{}}')
+        oci = json.loads(subprocess.check_output([
+            'oras', 'manifest', 'fetch', '--registry-config', str(config), index['oci_reference']]))
+        raw = json.loads((directory / 'image-release.json').read_text())
+        assert oci['artifactType'] == 'application/vnd.shelter.artifact.v1'
+        assert oci['annotations']['io.shelter.manifest.digest'] == raw['expected']['manifest_digest'], \
+            'Official OCI artifact differs from image-release.json'
+    write_manifest(directory, manifest)
     for path in sorted(directory.iterdir()):
         assert path.is_file() and path.stat().st_size < 2 * 1024**3
         if path.name in existing:

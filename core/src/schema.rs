@@ -76,6 +76,10 @@ pub struct LocalDebugSshKey {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PublishedImage {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub account_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub manifest_digest: String,
     pub provider: String,
     pub region: String,
     pub variant: String,

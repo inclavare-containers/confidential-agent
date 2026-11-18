@@ -59,7 +59,9 @@ pub(super) fn import(cli: &Cli, spec: &AgentSpec) -> Result<BuildManifest> {
     // Authenticate the snapshots that this deployment will use, including on
     // later reconciliation. Never copy producer state or private signing keys.
     copy_metadata(&source.release, &release, 16 * 1024 * 1024)?;
-    if !source.skip_signature_verification {
+    if source.release_digest.is_some() {
+        source.trusted_key = PathBuf::new();
+    } else if !source.skip_signature_verification {
         copy_metadata(&source.trusted_key, &trusted_key, 64 * 1024)?;
         source.trusted_key = trusted_key;
     } else {
@@ -76,10 +78,15 @@ pub(super) fn import(cli: &Cli, spec: &AgentSpec) -> Result<BuildManifest> {
     if let Some(digest) = &source.manifest {
         command.arg("--expect-manifest").arg(digest);
     }
-    if source.skip_signature_verification {
+    if let Some(digest) = &source.release_digest {
+        command.arg("--release-digest").arg(digest);
+    } else if source.skip_signature_verification {
         command.arg("--skip-signature-verification");
     } else {
         command.arg("--trusted-key").arg(&source.trusted_key);
+    }
+    if source.image_id.is_none() {
+        source.image_id = publish::published_override(cli, &source, &spec.deploy.region)?;
     }
     if let Some(id) = &source.image_id {
         command.arg("--image-id").arg(id);
@@ -203,14 +210,14 @@ pub(super) fn export(
     cli: &Cli,
     service: &str,
     image_id: Option<&str>,
-    signing_key: &Path,
+    signing_key: Option<&Path>,
     output: &Path,
     region: Option<&str>,
     variant: Option<&str>,
 ) -> Result<()> {
     let _operation = lock_service_operation(&cli.state_dir, service)?;
     let paths = context_paths(&cli.state_dir, service);
-    let mut state = read_service_state_file(&paths.service_state)?
+    let state = read_service_state_file(&paths.service_state)?
         .context("image export requires existing build metadata")?;
     let manifest = read_build_manifest(&paths.manifest)?;
     anyhow::ensure!(
@@ -221,38 +228,23 @@ pub(super) fn export(
     let region = region.unwrap_or(&spec.deploy.region);
     let variant = variant.unwrap_or(&state.build.variant);
     let built = manifest.variant(variant, Some(&state.build.variant))?;
-    let publication = state
-        .build
-        .published
-        .iter()
-        .find(|(_, entry)| {
-            entry.provider == "aliyun"
-                && entry.region == region
-                && entry.variant == variant
-                && entry.build_id == built.shelter_build_id
-                && entry.status == "available"
-                && !entry.retiring
-                && image_id.map_or(true, |id| entry.image_id.as_deref() == Some(id))
+    let publication = if let Some(id) = image_id {
+        publish::build_publication(cli, &state, &built, variant, region, Some(id), || {
+            publish::caller_account(cli, region)
+        })?
+    } else {
+        None
+    };
+    let _lease = image_id
+        .map(|id| {
+            anyhow::ensure!(
+                !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'),
+                "invalid cloud image ID"
+            );
+            lock_image_operation(&cli.state_dir, region, id, true)
         })
-        .map(|(key, entry)| (key.clone(), entry.clone()));
-    let selected_image = image_id.map(str::to_owned)
-        .or_else(|| publication.as_ref().and_then(|(_, entry)| entry.image_id.clone()))
-        .context("no available publication; publish first or specify --image-id for an existing shared/marketplace image")?;
-    anyhow::ensure!(
-        !selected_image.is_empty()
-            && selected_image
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'-'),
-        "invalid cloud image ID"
-    );
-    let _lease = lock_image_operation(&cli.state_dir, region, &selected_image, true)?;
+        .transpose()?;
     let result = read_shelter_build_result(&built.build_result, &built.shelter_build_id)?;
-    if let Some((_, published)) = &publication {
-        anyhow::ensure!(
-            sha256_file(&result.image_path)? == published.source_sha256,
-            "published image no longer matches the local artifact"
-        );
-    }
     let mapping = paths.artifacts_dir.join("image-mapping.json");
     let runtime_metadata = paths.artifacts_dir.join("image-runtime.json");
     let mut contract = export_runtime_contract(&manifest, &built, variant)?;
@@ -269,36 +261,37 @@ pub(super) fn export(
         contract.set_rekor_entry_uuids(uuids)?;
     }
     write_json_atomic(&runtime_metadata, &contract)?;
-    write_json_atomic(
-        &mapping,
-        &serde_json::json!([{
-            "provider": "terraform-alicloud",
-            "region": region, "image_id": selected_image,
-        }]),
-    )?;
+    let mut args: Vec<OsString> = vec![
+        "--work-dir".into(),
+        manifest.shelter_work_dir.into_os_string(),
+        "image".into(),
+        "release".into(),
+        built.shelter_build_id.into(),
+        "--output".into(),
+        output.into(),
+        "--runtime-metadata".into(),
+        runtime_metadata.into_os_string(),
+    ];
+    if let Some(key) = signing_key {
+        args.extend(["--signing-key".into(), key.into()]);
+    }
+    if let Some(id) = image_id {
+        write_json_atomic(
+            &mapping,
+            &serde_json::json!([{
+                "provider": "terraform-alicloud", "region": region, "image_id": id,
+            }]),
+        )?;
+        args.extend(["--mapping".into(), mapping.into_os_string()]);
+    }
     // Record retention before producing a distributable release. Even if export
     // is interrupted, automatic pruning must not delete a possibly shared image.
-    if let Some((publication_key, _)) = publication {
-        publish::mark_exported(cli, &mut state, &publication_key)?;
+    if let Some((receipt, entry)) = publication {
+        receipt.mark_exported(cli, entry)?;
     }
-    run_shelter(
-        cli,
-        &mut [
-            "--work-dir".into(),
-            manifest.shelter_work_dir.into_os_string(),
-            "image".into(),
-            "release".into(),
-            built.shelter_build_id.into(),
-            "--mapping".into(),
-            mapping.into_os_string(),
-            "--signing-key".into(),
-            signing_key.as_os_str().to_os_string(),
-            "--output".into(),
-            output.as_os_str().to_os_string(),
-            "--runtime-metadata".into(),
-            runtime_metadata.into_os_string(),
-        ],
-    )
+    run_shelter(cli, &mut args)?;
+    println!("[ca] release_digest=sha256:{}", sha256_file(output)?);
+    Ok(())
 }
 
 fn export_runtime_contract(

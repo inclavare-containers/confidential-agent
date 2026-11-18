@@ -293,6 +293,9 @@ fn default_slb_type() -> SlbType {
 #[serde(deny_unknown_fields)]
 pub struct PublishedImageSpec {
     pub release: PathBuf,
+    /// SHA-256 of the complete release document from the publisher or local build.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_digest: Option<String>,
     #[serde(default)]
     pub trusted_key: PathBuf,
     /// Optional publisher manifest pin; otherwise use the authenticated release.
@@ -587,9 +590,18 @@ impl AgentSpec {
         }
         if let Some(image) = &self.deploy.image {
             if image.release.as_os_str().is_empty()
-                || (!image.skip_signature_verification && image.trusted_key.as_os_str().is_empty())
+                || (image.release_digest.is_none()
+                    && !image.skip_signature_verification
+                    && image.trusted_key.as_os_str().is_empty())
             {
-                bail!("deploy.image requires release and a trusted_key unless skip_signature_verification is explicit");
+                bail!("deploy.image requires release and its release_digest or a trusted_key");
+            }
+            if let Some(pin) = &image.release_digest {
+                if !pin.strip_prefix("sha256:").is_some_and(|hex| {
+                    hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit())
+                }) {
+                    bail!("deploy.image.release_digest must be the full sha256 of the release document");
+                }
             }
             if let Some(manifest) = &image.manifest {
                 let digest = manifest.strip_prefix("sha256:").unwrap_or_default();

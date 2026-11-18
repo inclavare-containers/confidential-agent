@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ffi::{CString, OsString};
 use std::fs;
 use std::io::{Read, Write};
-use std::net::{IpAddr, TcpListener, TcpStream};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{chown, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::io::{AsRawFd, RawFd};
@@ -1778,6 +1778,7 @@ fn write_application_runtime_context(bootstrap: &BootstrapConfig) -> Result<()> 
             "service_id": bootstrap.service_id,
             "ports": bootstrap.ports,
             "app_service": bootstrap.app_service,
+            "connect_host": application_connect_host(bootstrap)?,
         }),
     )
 }
@@ -3710,7 +3711,13 @@ fn ensure_app_service_ready(bootstrap: &BootstrapConfig) -> bool {
         return false;
     }
     match service_is_active(service) {
-        Ok(true) => app_ports_ready(&bootstrap.ports),
+        Ok(true) => match application_connect_host(bootstrap) {
+            Ok(host) => app_ports_ready(bootstrap, host),
+            Err(err) => {
+                eprintln!("app service address resolution failed: {err:#}");
+                false
+            }
+        },
         Ok(false) => false,
         Err(err) => {
             eprintln!("app service status check failed: {err:#}");
@@ -3719,8 +3726,28 @@ fn ensure_app_service_ready(bootstrap: &BootstrapConfig) -> bool {
     }
 }
 
-fn app_ports_ready(ports: &[u16]) -> bool {
-    ports.iter().all(|port| local_tcp_port_ready(*port))
+fn application_connect_host(bootstrap: &BootstrapConfig) -> Result<IpAddr> {
+    if bootstrap.connect.is_empty() {
+        return Ok(Ipv4Addr::LOCALHOST.into());
+    }
+    // UDP connect selects the interface that reaches ECS metadata without sending a packet.
+    let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))?;
+    socket.connect((Ipv4Addr::new(100, 100, 100, 200), 80))?;
+    Ok(socket.local_addr()?.ip())
+}
+
+fn app_ports_ready(bootstrap: &BootstrapConfig, connect_host: IpAddr) -> bool {
+    bootstrap.ports.iter().all(|&port| {
+        if bootstrap
+            .connect
+            .iter()
+            .any(|connect| connect.port() == port)
+        {
+            tcp_port_ready(SocketAddr::new(connect_host, port))
+        } else {
+            local_tcp_port_ready(port)
+        }
+    })
 }
 
 fn mesh_ports_ready(peer_ports: &[u16]) -> bool {
@@ -3784,7 +3811,10 @@ fn restart_backoff_active(last_restart_unix: Option<u64>) -> bool {
 }
 
 fn local_tcp_port_ready(port: u16) -> bool {
-    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    tcp_port_ready(SocketAddr::from(([127, 0, 0, 1], port)))
+}
+
+fn tcp_port_ready(addr: SocketAddr) -> bool {
     TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok()
 }
 

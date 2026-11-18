@@ -356,7 +356,9 @@ pub(super) fn cmd_deploy(cli: &Cli, args: &DeployArgs) -> Result<()> {
             .as_ref()
             .context("deploy requires a local build; run build first")?;
         let variant = current_manifest.variant(&deploy_variant, Some(&state.build.variant))?;
-        let published = publish::published_image_for_deploy(state, &spec, &variant);
+        let published = publish::published_image_for_deploy(cli, state, &spec, &variant, || {
+            publish::caller_account(cli, &spec.deploy.region)
+        })?;
         ensure_build_variant_present(state, &deploy_variant, &variant, published.is_some())?;
         (variant, published)
     };
@@ -1285,7 +1287,7 @@ pub(super) fn cmd_image(cli: &Cli, args: &ImageArgs) -> Result<()> {
             cli,
             service,
             image_id.as_deref(),
-            signing_key,
+            signing_key.as_deref(),
             output,
             region.as_deref(),
             variant.as_deref(),
@@ -1384,15 +1386,15 @@ fn cmd_forget(cli: &Cli, args: &DestroyArgs) -> Result<()> {
 }
 
 pub(super) fn collect_image_entries(state_dir: &Path) -> Result<Vec<ImageListEntry>> {
+    let mut entries = publish::imported_image_entries(state_dir)?;
     let services_dir = state_dir.join("services");
     if !services_dir.exists() {
-        return Ok(Vec::new());
+        return Ok(entries);
     }
     let states = read_service_states(state_dir)?
         .into_iter()
         .map(|state| (state.service_id.clone(), state))
         .collect::<BTreeMap<_, _>>();
-    let mut entries = Vec::new();
     for directory in fs::read_dir(&services_dir)? {
         let directory = directory?;
         if !directory.file_type()?.is_dir() {
@@ -1534,7 +1536,7 @@ fn print_image_table(entries: &[ImageListEntry]) {
     if has_published {
         println!(
             "{:<18} {:<9} {:<7} {:<30} {:<12} {:<28} IMAGE",
-            "BUILDER", "STATE", "CURRENT", "BUILD_ID", "LOCAL SIZE", "PUBLISHED"
+            "BUILDER / ARTIFACT", "STATE", "CURRENT", "BUILD_ID", "LOCAL SIZE", "PUBLISHED"
         );
     } else {
         println!(
@@ -1589,7 +1591,8 @@ fn published_info_for_build(
                 _ => "?",
             };
             format!(
-                "{}:{}({})",
+                "{}/{}:{}({})",
+                entry.account_id,
                 entry.region,
                 entry.image_id.as_deref().unwrap_or("-"),
                 status
@@ -2706,7 +2709,9 @@ pub(super) fn deploy_shelter_args(prepared: &PreparedConfig) -> Vec<OsString> {
         if let Some(pin) = &image.source.manifest {
             args.extend(["--expect-manifest".into(), pin.into()]);
         }
-        if image.source.skip_signature_verification {
+        if let Some(digest) = &image.source.release_digest {
+            args.extend(["--release-digest".into(), digest.into()]);
+        } else if image.source.skip_signature_verification {
             args.push("--skip-signature-verification".into());
         } else {
             args.extend([

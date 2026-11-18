@@ -1,6 +1,7 @@
 """CPU lane consolidation must retain independent failure and model probes."""
 import base64
 import copy
+import hashlib
 import importlib.util
 import json
 import os
@@ -167,11 +168,10 @@ class CpuMatrixTests(unittest.TestCase):
     def test_strict_consumer_validates_with_native_schema(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, DASHSCOPE_API_KEY='fixture'):
             root = Path(directory)
-            release, key = root / 'release.json', root / 'public.pem'
+            release = root / 'release.json'
             release.write_text('{}')
-            key.write_text('schema fixture')
-            fixture, = generate(root / 'fixtures', {'release': str(release), 'trusted_key': str(key),
-                'manifest': 'sha256:' + 'a' * 64}, 'challenge', 'cn-beijing', 'strict', harnesses=['hermes'], ssh=False)
+            image = {'release': str(release), 'release_digest': 'sha256:' + hashlib.sha256(release.read_bytes()).hexdigest()}
+            fixture, = generate(root / 'fixtures', image, 'challenge', 'cn-beijing', 'strict', harnesses=['hermes'], ssh=False)
             result = subprocess.run([os.environ['CA_BIN'], 'spec', 'validate', '--spec', str(fixture / 'appspec.json')],
                                     capture_output=True, text=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stderr)
