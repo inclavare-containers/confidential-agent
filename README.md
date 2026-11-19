@@ -81,7 +81,7 @@ flowchart TB
 
 ## 快速开始 (Quick Start)
 
-只安装原生工具时，推荐从 [v0.2.0 Release](https://github.com/inclavare-containers/confidential-agent/releases/tag/v0.2.0) 下载 `install-rpm.sh`，运行 `sudo bash install-rpm.sh --version 0.2.0`。它安装 cagent 和配套 Shelter RPM，无需编译 CA；支持 Alibaba Cloud Linux 3 x86_64，详见 [RPM 安装说明](docs/rpm.md)。
+只安装原生工具时，从 [最新正式 Release](https://github.com/inclavare-containers/confidential-agent/releases/latest) 下载 `install-rpm.sh`，并按该版本的安装说明运行。它安装 cagent 和配套 Shelter RPM，无需编译 CA，支持 Alibaba Cloud Linux 3 x86_64。当前分支的源码构建方法见 [RPM 安装说明](docs/rpm.md)。
 
 完整构建部署可使用 one-click installer。它会在本机安装依赖、下载并校验清单固定的 Shelter RPM、构建当前源码、生成 OpenClaw 配置、交互式选择 operator CIDR，然后通过 Shelter 在阿里云上创建一台 TDX/GPU TEE ECS。需要逐步控制每个 CLI 动作时，参考 [OpenClaw CLI 分步部署示例](docs/openclaw-cli-step-by-step.md)；需要百炼 API 与本地 vLLM 双场景文档时，参考 [OpenClaw one-click 最佳实践](docs/openclaw-one-click-best-practice/README.md)。
 

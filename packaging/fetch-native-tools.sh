@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-destination="${1:?usage: packaging/fetch-native-tools.sh OUTPUT_DIR [CACHE_DIR]}"
+destination="${1:?usage: packaging/fetch-native-tools.sh OUTPUT_DIR [CACHE_DIR] [oras]}"
 cache="${2:-$root/target/native-tool-downloads}"
+pins="$root/packaging/native-tools.tsv"
+if [[ "${3:-}" == oras ]]; then
+  pins="$root/packaging/companion-tools.tsv"
+fi
 [[ "$(uname -m)" == x86_64 ]] || { echo 'Native tool pins currently support x86_64' >&2; exit 1; }
 mkdir -p "$destination" "$cache"
 work="$(mktemp -d "$cache/.fetch.XXXXXX")"
@@ -33,11 +37,11 @@ while read -r name version sha256 url; do
     done
     [[ "$downloaded" == 1 ]] || { echo "Failed to fetch verified $name $version" >&2; exit 1; }
   fi
-  if [[ "$name" == aliyun ]]; then
-    tar -xzf "$archive" -C "$work" aliyun
-    install -m 0755 "$work/aliyun" "$destination/aliyun"
+  if [[ "$name" == aliyun || "$name" == oras ]]; then
+    tar -xzf "$archive" -C "$work" "$name"
+    install -m 0755 "$work/$name" "$destination/$name"
   else
     install -m 0755 "$archive" "$destination/$name"
   fi
-done < "$root/packaging/native-tools.tsv"
-install -m 0644 "$root/packaging/native-tools.tsv" "$destination/SOURCES.tsv"
+done < "$pins"
+install -m 0644 "$pins" "$destination/SOURCES.tsv"

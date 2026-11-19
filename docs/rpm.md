@@ -6,27 +6,7 @@ PEP，仍可以使用 Guest 自己的容器隔离。
 
 ## 从 Release 安装
 
-v0.2.0 的正式入口是 [GitHub Release](https://github.com/inclavare-containers/confidential-agent/releases/tag/v0.2.0)。可从附件下载 `install-rpm.sh`，或在 Bash 中使用代理优先、官方回退的方式下载：
-
-```bash
-set -euo pipefail
-INSTALL_URL="https://github.com/inclavare-containers/confidential-agent/releases/download/v0.2.0/install-rpm.sh"
-INSTALL_SCRIPT="$(mktemp)"
-PROXY_URL="${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}"
-FIRST_URL="${PROXY_URL:+${PROXY_URL%/}/}${INSTALL_URL}"
-SECOND_URL="$INSTALL_URL"
-if [[ "${CA_GITHUB_PROXY_FIRST:-1}" == 0 ]]; then
-  SECOND_URL="$FIRST_URL"
-  FIRST_URL="$INSTALL_URL"
-fi
-if ! curl -fL --connect-timeout 10 --max-time 90 "$FIRST_URL" -o "$INSTALL_SCRIPT" ||
-   [[ "$(head -c 2 "$INSTALL_SCRIPT")" != '#!' ]]; then
-  curl -fL --connect-timeout 10 --max-time 90 "$SECOND_URL" -o "$INSTALL_SCRIPT"
-fi
-[[ "$(head -c 2 "$INSTALL_SCRIPT")" == '#!' ]]
-sudo --preserve-env=CA_GITHUB_PROXY_URL,CA_GITHUB_PROXY_FIRST bash "$INSTALL_SCRIPT" --version 0.2.0
-confidential-agent --version
-```
+从 [最新正式 Release](https://github.com/inclavare-containers/confidential-agent/releases/latest) 下载 `install-rpm.sh`，并按该版本的安装说明运行。当前分支的 v0.2.0 可以按下文从源码构建 RPM。
 
 安装器下载并校验 cagent 和配套 Shelter 两个 RPM，再通过 DNF 一起安装。无需先克隆源码或编译 CA。该方式需要联网访问 Release 和 Alinux3 软件源；`--download-only --output-dir DIR` 可只下载已校验的两个包和清单，`--from-dir DIR` 可安装本地包。后者仍可能从软件源获取系统依赖，不等于完全离线安装。
 
@@ -58,8 +38,8 @@ one-click 的 cleanup 使用已安装的 Shelter，只预检实例删除和剩�
 清理不会因 Cryptpilot 构建工具版本不同而被拒绝，也不会在删除前自动替换 Shelter 包；
 构建和部署仍执行配套 RPM 与 Cryptpilot 版本预检。
 Shelter RPM 显式依赖 `zstd`，安装时由 DNF 自动解析，以支持默认的 Zstd initrd 压缩。
-`hack/shelter-rpm.json` 记录固定 Release URL、源码提交、RPM SHA-256 和 payload 摘要。
-`hack/resolve-shelter-rpm.sh` 按该记录解析包，缺少时下载到 `target/dependencies/shelter/`（可用 `CA_SHELTER_RPM_CACHE` 覆盖），并校验两个摘要。Shelter RPM 通过 GitHub Releases 分发。准备 cagent 源码包时也会核对实际 Shelter RPM。
+`hack/shelter-rpm.json` 记录 GHCR 仓库、源码提交、RPM SHA-256 和 payload 摘要。
+缓存中缺包时，`hack/resolve-shelter-rpm.sh` 获取固定版本的 ORAS，从公开 GHCR 按 RPM SHA-256 匿名下载并校验两个摘要，再写入 `target/dependencies/shelter/`（可用 `CA_SHELTER_RPM_CACHE` 覆盖）。
 
 `CAGENT_BUILD_JOBS` 控制打包并行度，默认 4。公开发布不同 payload 时递增
 RPM 的 Release；当前 cagent 为 `0.2.0-1`，并依赖 `shelter >= 0.3.2-2`。
@@ -246,7 +226,7 @@ CLI 覆盖选项会记录到部署快照；使用原 spec 恢复同一部署时�
 
 ## GitHub 下载与大陆网络
 
-首个安装脚本、one-click 的源码拉取、Shelter RPM 和固定原生工具下载均支持代理优先及官方回退。下载器校验 RPM 的 SHA256 和 payload 摘要；校验失败时尝试下一个下载地址。
+首个安装脚本、one-click 的源码拉取和固定原生工具下载支持代理优先及官方回退。源码构建使用 GHCR 匿名下载配套 Shelter RPM。
 
 ```bash
 # 默认：代理优先，失败回退官方；可替换为自己可信且支持对应资源类型的代理。
@@ -267,7 +247,7 @@ export CA_GITHUB_PROXY_URL=""
 `.github/workflows/binary-release.yml` 使用 GitHub 托管的 Ubuntu runner 和固定摘要的 Alinux3 容器。分支和 PR 执行版本检查、下载与升级测试、RPM 构建及全新安装测试；`vX.Y.Z` 标签在这些检查通过后发布对应的 draft Release。
 
 1. 更新工作区、RPM、安装器及安装测试中的版本，更新 `Cargo.lock`，并在 `docs/releases/vX.Y.Z.md` 编写发布说明。运行 `python3.11 packaging/check-version.py` 检查版本一致性。
-2. 更新 Shelter 时，先发布其独立 RPM Release，再更新 `hack/shelter-rpm.json` 中的 URL、源码提交和摘要。构建任务从该 URL 下载配套包，cagent Release 同时附带这份 RPM。
+2. 更新 Shelter 时，将原样 RPM 作为 OCI 文件上传到公开的 cagent GHCR 包 `ghcr.io/inclavare-containers/confidential-agent/shelter-rpm`，用 Shelter 版本和发行号作为标签。核对匿名按 RPM SHA-256 下载的字节后，更新 `hack/shelter-rpm.json` 的源码提交和摘要。cagent Release 同时附带这份 RPM。
 3. 提交代码，在主仓库创建对应版本的 draft Release，然后创建并推送 `vX.Y.Z` 标签。CI 验证标签、版本和产物源码提交，上传附件后公开 Release。
 
 构建和测试任务使用 `contents: read`；发布任务使用 GitHub 内置的 `GITHUB_TOKEN` 和 `contents: write`。如果附件上传中断，重跑失败的发布任务可继续上传；已有同名附件的摘要必须一致。
