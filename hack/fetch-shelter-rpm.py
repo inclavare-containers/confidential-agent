@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Resolve the exact companion RPM from a verified cache or release asset."""
+"""Resolve the exact companion RPM from a verified cache or public GHCR blob."""
 import argparse
 import hashlib
 import json
@@ -9,7 +9,6 @@ import re
 import subprocess
 import sys
 import tempfile
-from urllib.parse import urlparse, unquote
 
 
 def digest(path):
@@ -44,33 +43,18 @@ def resolve(manifest_path, cache):
         if path.is_file():
             verify(path, manifest)
             return path.resolve()
-    url = manifest['url']
-    parsed = urlparse(url)
-    if parsed.scheme != 'https' or parsed.username or parsed.password:
-        raise ValueError('Shelter release URL must use HTTPS without credentials')
-    if unquote(parsed.path.rsplit('/', 1)[-1]) != name:
-        raise ValueError('Release URL does not match the pinned package name')
+    reference = f"{manifest['oci_repository']}@sha256:{manifest['sha256']}"
+    fetch_tools = Path(__file__).resolve().parents[1] / 'packaging/fetch-native-tools.sh'
     target.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='.fetch-', dir=target.parent) as temp:
-        partial = Path(temp) / name
-        proxy = os.environ.get('CA_GITHUB_PROXY_URL', 'https://gh-proxy.org/')
-        urls = [url]
-        if parsed.netloc == 'github.com' and proxy:
-            proxied = proxy.rstrip('/') + '/' + url
-            urls = [proxied, url] if os.environ.get('CA_GITHUB_PROXY_FIRST', '1') == '1' else [url, proxied]
-        for candidate in urls:
-            result = subprocess.run(['curl', '-fSL', '--retry', '2', '--connect-timeout', '20',
-                                     '--max-time', '600', '-o', str(partial), candidate], stdout=sys.stderr)
-            if result.returncode:
-                continue
-            try:
-                verify(partial, manifest)
-            except (ValueError, subprocess.CalledProcessError) as error:
-                print(str(error), file=sys.stderr)
-                continue
-            break
-        else:
-            raise ValueError('Unable to download the pinned Shelter RPM')
+        work = Path(temp)
+        partial = work / name
+        config = work / 'anonymous.json'
+        config.write_text('{"auths":{}}')
+        subprocess.run([fetch_tools, work, '', 'oras'], check=True, stdout=sys.stderr)
+        subprocess.run([work / 'oras', 'blob', 'fetch', '--registry-config', config,
+                        '--output', partial, reference], check=True, stdout=sys.stderr)
+        verify(partial, manifest)
         os.replace(partial, target)
     return target.resolve()
 

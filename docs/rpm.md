@@ -30,7 +30,7 @@ packaging/build-rpm.sh
 
 产物位于 `target/rpm/RPMS/x86_64/cagent-0.3.0-1.al8.x86_64.rpm`，SRPM 位于 `target/rpm/SRPMS/`。源码准备阶段缓存并校验固定版本的 `cosign`、`aliyun`、`ossutil64` 和 `oras`；`target/rpm/SOURCES/SHA256SUMS` 记录源码、Cargo vendor 和原生工具归档的哈希，rpmbuild 内使用 `--locked --offline` 编译与测试。
 
-输出目录同时包含配套 Shelter RPM（`cagent` 依赖 `shelter >= 0.3.2-4`）、`shelter-rpm.json` 与 `SHA256SUMS`。`hack/shelter-rpm.json` 记录固定 Release URL、源码提交、RPM SHA-256 和 payload 摘要，缺少时由 `hack/resolve-shelter-rpm.sh` 下载到缓存目录并双重校验。`CAGENT_BUILD_JOBS` 控制打包并行度（默认 `4`）。
+输出目录同时包含配套 Shelter RPM（`cagent` 依赖 `shelter >= 0.3.2-4`）、`shelter-rpm.json` 与 `SHA256SUMS`。`hack/shelter-rpm.json` 记录 GHCR 仓库、源码提交、RPM SHA-256 和 payload 摘要。缓存中缺少该 RPM 时，`hack/resolve-shelter-rpm.sh` 获取固定版本的 ORAS，按 RPM SHA-256 匿名下载，并校验包文件和 payload 后写入缓存。`CAGENT_BUILD_JOBS` 控制打包并行度（默认 `4`）。
 
 ## 在干净机器手动安装本地 RPM
 
@@ -229,7 +229,7 @@ export CA_GITHUB_PROXY_URL=""
 `.github/workflows/binary-release.yml` 在固定摘要的 Alinux3 容器内执行版本一致性检查、下载测试、RPM 构建与全新安装验证；`vX.Y.Z` 标签通过检查后发布 GitHub Release。
 
 1. 更新 `Cargo.toml`、`Cargo.lock`、`cagent.spec`、`hack/release-image.json` 与安装脚本中的版本号，编写 `docs/releases/vX.Y.Z.md`，运行 `python3.11 packaging/check-version.py`。
-2. 如配套 Shelter 更新，先发布 Shelter RPM Release 并更新 `hack/shelter-rpm.json`。
+2. 如配套 Shelter 更新，用有包写权限的账号将原样 RPM 作为一个 OCI 文件上传到 cagent 的公开 GHCR 包 `ghcr.io/inclavare-containers/confidential-agent/shelter-rpm`，用 Shelter 的版本和发行号作为标签。核对匿名按 RPM SHA-256 下载的字节后，更新 `hack/shelter-rpm.json`。正式 cagent Release 随附对应的 Shelter RPM。
 3. 在安装新 RPM 的构建机上，从干净的发布提交执行 `python3.11 packaging/produce-release-image.py build WORK_DIR`。执行 `python3.11 packaging/produce-release-image.py push WORK_DIR OUTPUT_DIR` 将已有产物推送至 GHCR 并生成 `image-index.json`、`image-release.json`，然后将两份元数据上传至 draft Release。若通过 staging 仓库交接，给 `push` 传入 `--repository REPOSITORY`，并在发布前将相同 OCI digest 提升到官方仓库。
 4. 推送 `vX.Y.Z` 标签，CI 校验标签、源码提交、Rekor 元数据、公开匿名 GHCR 可拉取性及全部附件 `SHA256SUMS` 一致后正式发布 Release。
 
