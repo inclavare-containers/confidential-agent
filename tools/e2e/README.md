@@ -181,7 +181,7 @@ python3.11 tools/e2e/allinone-reuse.py \
 
 The work directory must be new. Consumers share one CA state directory, with
 independent service identities and keys.
-The test rejects altered signatures, wrong publisher keys and incorrect pins;
+The test rejects altered release files and incorrect digest or manifest pins;
 checks attestation, resource content, independent credentials and pinned SSH
 host keys; optionally forces a reboot and verifies persisted data; and destroys all attempted
 consumers, checking that the published image survives. Challenge reboot recovery
@@ -266,7 +266,7 @@ lanes: ALB/OHTTP with two Challenge replicas, NLB/OHTTP with two Trustee replica
 plus an isolated single-node service, and NLB/RATS-TLS with two Challenge replicas.
 The isolated service also exercises the one-click single-node entry point, wrong
 model key, and unavailable Trustee during cold boot. Each consumer has its own
-state and references the original debug SSH key explicitly. The signed image
+state and references the original debug SSH key explicitly. The image
 package contains no SSH private key or producer state. OpenClaw-vLLM builds and
 runs debug once. Together these lanes allocate eight GPU instances, including
 the isolated service; reboot tests reuse those instances. A2A data collaboration
@@ -320,7 +320,7 @@ bytes must match the checked-in SHA-512 digest before installation. CLI agent
 and Node bootstrap downloads use the mainland npm mirror by default.
 Published consumers configure Rekor using the installed Shelter tool path,
 without a build-time signing key. Their reference metadata is authenticated
-through the signed image release. Image export binds runtime metadata to the
+through the trusted digest of the image release. Image export binds runtime metadata to the
 requested variant's saved build and includes its public Rekor entry identifiers.
 Consumer reports can retrieve those entries without producer upload logs or
 local SLSA files. To include native schema regression checks,
@@ -367,7 +367,7 @@ original specifications and signing material, and runs Shelter's native artifact
 verification for every retained variant before publishing it. Changed specs,
 deployed services, missing variants and verification failures prevent reuse.
 Services without a completed build still run the normal build step. Cleanup
-remains owned by that producer after all signed-image consumers finish.
+remains owned by that producer after all image consumers finish.
 
 GPU instance families and the vLLM service have a two-hour application readiness
 budget, configurable with `CA_APP_READY_WAIT_SEC`. Image publication also waits

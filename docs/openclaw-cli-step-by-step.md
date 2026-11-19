@@ -49,24 +49,24 @@ confidential-agent peering add \
 
 请根据手头实际持有的条件选择其一：
 
-### 路径 A：按官方 Release 不可变 OCI 引用拉取并导入 ECS
+### 路径 A：下载官方预构建镜像并导入 ECS
 
-本机无需构建、也无需预先下载大体积镜像文件，先获取官方校验的 `image-index.json` 与 `image-release.json`：
+下载脚本输出本地产物路径。以下命令以 JSON 读取结果，随后显式发布。
 
 ```bash
-/usr/share/cagent/hack/resolve-release-image.sh --output-dir ./prebuilt
-OCI_REF="$(jq -er '.oci_reference' ./prebuilt/image-index.json)"
-RELEASE_DIGEST="$(jq -er '.release_digest' ./prebuilt/image-index.json)"
+DOWNLOAD="$(python3.11 /usr/share/cagent/hack/download-release-image.py --output-dir ./prebuilt --format json)"
+ARTIFACT="$(jq -er '.artifact' <<<"$DOWNLOAD")"
+IMAGE_RELEASE="$(jq -er '.image_release' <<<"$DOWNLOAD")"
+RELEASE_DIGEST="$(jq -er '.release_digest' <<<"$DOWNLOAD")"
 
 confidential-agent image publish \
-  --artifact "$OCI_REF" \
-  --image-release ./prebuilt/image-release.json \
+  --artifact "$ARTIFACT" \
+  --image-release "$IMAGE_RELEASE" \
   --release-digest "$RELEASE_DIGEST" \
   --region cn-beijing \
   --output ./published.json
 
 IMAGE_ID="$(jq -er '.image_id' ./published.json)"
-IMAGE_RELEASE="./prebuilt/image-release.json"
 ```
 
 ### 路径 B：预构建产物已下载到本地

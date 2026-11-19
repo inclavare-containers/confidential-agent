@@ -1,8 +1,8 @@
 {
-  "file": "shelter-0.3.2-3.al8.x86_64.rpm",
-  "source_commit": "537d3407a467849fc50cebc71bf2fe449d670aad",
-  "source_archive_sha256": "3fde7671d33cf5118d144897bcbfe64ad79f02d90e612927244a75c19b49e6f3",
-  "sha256": "1f1171bde10a6b3edeba18a23d9284878f7b82df51fbadb1648baaa75bd00c27",
-  "payload_sha256": "cc0239a8cf250310e27cddc2ed28fe510f3c9e5e0888daf3364efd166628264f",
-  "url": "https://github.com/inclavare-containers/confidential-agent/releases/download/shelter-v0.3.2-3/shelter-0.3.2-3.al8.x86_64.rpm"
+  "file": "shelter-0.3.2-4.al8.x86_64.rpm",
+  "source_commit": "d9c23b4f0905b320c9de449d74e7122c484c73e2",
+  "source_archive_sha256": "b1a47f9afae7c1ff6f190293c982e19db1d19600601540c105a8e313fdbae22c",
+  "sha256": "a442455508408bcc44136ed37ea9914f15d18cd5feff0faaaaafce57f9f4d8bc",
+  "payload_sha256": "9161d750e66a8f7707dd65bcf4b18101ade0ceea3ba01e5ddb3deb6f1e6fe0d9",
+  "url": "https://github.com/inclavare-containers/confidential-agent/releases/download/shelter-v0.3.2-4/shelter-0.3.2-4.al8.x86_64.rpm"
 }

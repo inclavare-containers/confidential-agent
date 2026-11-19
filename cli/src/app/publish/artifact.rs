@@ -62,28 +62,18 @@ fn shelter_json<T: serde::de::DeserializeOwned>(cli: &Cli, args: &[OsString]) ->
     Ok(serde_json::from_slice(&output.stdout)?)
 }
 
-fn release_identity(
-    cli: &Cli,
-    path: &Path,
-    release_digest: Option<&str>,
-    key: Option<&Path>,
-) -> Result<ReleaseIdentity> {
-    let mut args: Vec<OsString> = vec![
-        "image".into(),
-        "inspect-release".into(),
-        path.into(),
-        "--metadata-only".into(),
-    ];
-    if let Some(digest) = release_digest {
-        args.extend(["--release-digest".into(), digest.into()]);
-    } else {
-        args.extend([
-            "--trusted-key".into(),
-            key.context("supply --release-digest from the release index or your build")?
-                .into(),
-        ]);
-    }
-    shelter_json(cli, &args)
+fn release_identity(cli: &Cli, path: &Path, release_digest: &str) -> Result<ReleaseIdentity> {
+    shelter_json(
+        cli,
+        &[
+            "image".into(),
+            "inspect-release".into(),
+            path.into(),
+            "--metadata-only".into(),
+            "--release-digest".into(),
+            release_digest.into(),
+        ],
+    )
 }
 
 pub(in crate::app) struct Location {
@@ -196,15 +186,18 @@ pub(in crate::app) fn published_override(
     source: &confidential_agent_core::spec::PublishedImageSpec,
     region: &str,
 ) -> Result<Option<String>> {
-    if !cli.state_dir.join("image-publications").is_dir() || source.skip_signature_verification {
+    if !cli.state_dir.join("image-publications").is_dir() {
         return Ok(None);
     }
-    let release = release_identity(
-        cli,
-        &source.release,
-        source.release_digest.as_deref(),
-        Some(&source.trusted_key),
-    )?;
+    let release = release_identity(cli, &source.release, &source.release_digest)?;
+    Ok(publication_for_release(cli, &release, region)?.and_then(available_image_id))
+}
+
+fn publication_for_release(
+    cli: &Cli,
+    release: &ReleaseIdentity,
+    region: &str,
+) -> Result<Option<PublishedImage>> {
     if !directory(&cli.state_dir, &release.manifest_digest)?.is_dir() {
         return Ok(None);
     }
@@ -212,7 +205,7 @@ pub(in crate::app) fn published_override(
     let Some(entry) = location.entry(cli)? else {
         return Ok(None);
     };
-    if entry.account_id != location.account || entry.retiring || entry.status != STATUS_AVAILABLE {
+    if entry.account_id != location.account {
         return Ok(None);
     }
     let sha = release
@@ -225,7 +218,44 @@ pub(in crate::app) fn published_override(
         sha,
         release.disk_size,
     )?;
-    Ok(entry.image_id)
+    Ok(Some(entry))
+}
+
+fn available_image_id(entry: PublishedImage) -> Option<String> {
+    if entry.retiring || entry.status != STATUS_AVAILABLE {
+        return None;
+    }
+    entry.image_id
+}
+
+pub(in crate::app) fn resolve_artifact(
+    cli: &Cli,
+    image_release: &Path,
+    release_digest: &str,
+    region: &str,
+) -> Result<Option<String>> {
+    let release = release_identity(cli, image_release, release_digest)?;
+    if let Some(entry) = publication_for_release(cli, &release, region)? {
+        let Some(id) = available_image_id(entry) else {
+            return Ok(None);
+        };
+        return Ok(
+            (describe_image_status(cli, region, &id)?.as_deref() == Some("Available"))
+                .then_some(id),
+        );
+    }
+    let sha = release
+        .disk_digest
+        .strip_prefix("sha256:")
+        .context("expected a SHA-256 disk digest")?;
+    find_existing_published_image(
+        cli,
+        region,
+        "artifact",
+        &release.runtime_metadata.image_variant,
+        &release.artifact_alias,
+        sha,
+    )
 }
 
 fn verify_disk(cli: &Cli, base: &Path, release: &ReleaseIdentity) -> Result<PathBuf> {
@@ -234,6 +264,7 @@ fn verify_disk(cli: &Cli, base: &Path, release: &ReleaseIdentity) -> Result<Path
     } else {
         base.to_owned()
     };
+    let manifest = read_artifact_manifest(&file)?;
     #[derive(Deserialize)]
     struct Verification {
         manifest_digest: String,
@@ -252,7 +283,6 @@ fn verify_disk(cli: &Cli, base: &Path, release: &ReleaseIdentity) -> Result<Path
         checked.manifest_digest == release.manifest_digest,
         "artifact does not match the release manifest"
     );
-    let manifest = read_artifact_manifest(&file)?;
     let disk = manifest
         .outputs
         .iter()
@@ -279,61 +309,22 @@ fn verify_disk(cli: &Cli, base: &Path, release: &ReleaseIdentity) -> Result<Path
 pub(super) fn publish_artifact(
     cli: &Cli,
     args: &ImagePublishArgs,
-    input: &str,
+    input: &Path,
 ) -> Result<PublishedImage> {
     let release = release_identity(
         cli,
         args.image_release
             .as_deref()
             .context("expected --image-release")?,
-        args.release_digest.as_deref(),
-        args.trusted_key.as_deref(),
+        args.release_digest
+            .as_deref()
+            .context("expected --release-digest")?,
     )?;
-    let path = Path::new(input);
-    let local_disk = if path.exists() {
-        Some(verify_disk(cli, path, &release)?)
-    } else {
-        let pinned = input.rsplit_once('@').is_some_and(|(repo, digest)| {
-            !repo.is_empty()
-                && !repo.contains('@')
-                && digest.strip_prefix("sha256:").is_some_and(|hex| {
-                    hex.len() == 64
-                        && hex
-                            .bytes()
-                            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-                })
-        });
-        anyhow::ensure!(pinned, "artifact path {input} does not exist; a remote OCI reference must end in @sha256:<64 lowercase hex digits>");
-        None
-    };
+    let disk_path = verify_disk(cli, input, &release)?;
     let region = args.region.as_deref().context("expected --region")?;
     let location = Location::new(cli, region, &release.manifest_digest)?;
     let mut lock = location.lock()?;
-    let disk = || -> Result<PathBuf> {
-        if let Some(path) = local_disk {
-            return Ok(path);
-        }
-        #[derive(Deserialize)]
-        struct Pull {
-            record_path: PathBuf,
-        }
-        let layout = download::prepare(cli, input, &release.disk_digest, release.disk_size)?;
-        let pulled: Pull = shelter_json(
-            cli,
-            &[
-                "image".into(),
-                "pull".into(),
-                input.into(),
-                "--format".into(),
-                "json".into(),
-                "--oci-layout".into(),
-                layout.path.as_os_str().into(),
-                "--oras".into(),
-                layout.oras.as_os_str().into(),
-            ],
-        )?;
-        verify_disk(cli, &pulled.record_path, &release)
-    };
+    let disk = || Ok(disk_path);
     let sha = release
         .disk_digest
         .strip_prefix("sha256:")

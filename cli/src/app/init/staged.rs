@@ -123,7 +123,7 @@ pub(super) fn resolve_plan_and_interactive(args: &mut InitArgs) -> Result<InitPl
 
     if matches!(
         plan,
-        InitPlan::SharedCpuBuild | InitPlan::SharedCpuDeploy(_) | InitPlan::GpuStaged(_, _)
+        InitPlan::SharedCpuDeploy(_) | InitPlan::GpuStaged(_, _)
     ) {
         if args.region.is_none() {
             args.region = Some(prompt_default("Region", "cn-beijing")?);
@@ -155,6 +155,8 @@ pub(super) fn resolve_plan_and_interactive(args: &mut InitArgs) -> Result<InitPl
                 .parse()
                 .context("replicas must be an integer")?;
         }
+    }
+    if !matches!(plan, InitPlan::GpuDirect(_)) {
         args.output_dir = prompt_default(
             "Output parent directory",
             &args.output_dir.display().to_string(),
@@ -529,6 +531,7 @@ pub(super) fn write_shared_cpu_deploy(
     args: &InitArgs,
     project: &InitProject,
     target: InitTarget,
+    release: &PinnedRelease,
 ) -> Result<()> {
     let assets = find_assets_root()?;
     let base = assets.join("examples/allinone");
@@ -551,15 +554,15 @@ pub(super) fn write_shared_cpu_deploy(
         json!(reference_values_name(project.reference_values));
     spec["attestation"].as_object_mut().unwrap().remove("rekor");
 
-    let release_src = args
-        .image_release
-        .as_ref()
-        .context("missing --image-release")?;
     let release_digest = args
         .release_digest
         .as_ref()
         .context("missing --release-digest")?;
-    fs::copy(release_src, project.dir.join("image-release.json"))?;
+    write_private_file(
+        &project.dir.join("image-release.json"),
+        &release.bytes,
+        release.mode,
+    )?;
     let mut image = json!({
         "release": "./image-release.json",
         "release_digest": release_digest,
@@ -825,13 +828,12 @@ fn resource(
     Ok(())
 }
 
-pub(super) struct GpuRelease {
+pub(super) struct PinnedRelease {
     bytes: Vec<u8>,
     mode: u32,
-    ssh: bool,
 }
 
-pub(super) fn read_gpu_release(args: &InitArgs) -> Result<GpuRelease> {
+pub(super) fn read_pinned_release(args: &InitArgs) -> Result<PinnedRelease> {
     let release_digest = args.release_digest.as_ref().unwrap();
     let mut file = File::open(args.image_release.as_ref().unwrap())?;
     let mode = file.metadata()?.permissions().mode() & 0o777;
@@ -842,7 +844,17 @@ pub(super) fn read_gpu_release(args: &InitArgs) -> Result<GpuRelease> {
         actual_digest.eq_ignore_ascii_case(release_digest),
         "release digest mismatch: expected {release_digest}, found {actual_digest}"
     );
-    let mut release: Value = serde_json::from_slice(&bytes)?;
+    Ok(PinnedRelease { bytes, mode })
+}
+
+pub(super) struct GpuRelease {
+    pinned: PinnedRelease,
+    ssh: bool,
+}
+
+pub(super) fn read_gpu_release(args: &InitArgs) -> Result<GpuRelease> {
+    let pinned = read_pinned_release(args)?;
+    let mut release: Value = serde_json::from_slice(&pinned.bytes)?;
     if release["payloadType"] == "application/vnd.shelter.cloud-image-release.v1+json" {
         let payload = release["payload"]
             .as_str()
@@ -852,7 +864,7 @@ pub(super) fn read_gpu_release(args: &InitArgs) -> Result<GpuRelease> {
     let ssh = release["runtime_metadata"]["capabilities"]
         .as_array()
         .is_some_and(|values| values.iter().any(|value| value == "instance-ssh-v1"));
-    Ok(GpuRelease { bytes, mode, ssh })
+    Ok(GpuRelease { pinned, ssh })
 }
 
 pub(super) fn finish_gpu(
@@ -882,8 +894,8 @@ pub(super) fn finish_gpu(
         spec["service"]["ssh"] = json!(release.ssh);
         write_private_file(
             &project.dir.join("image-release.json"),
-            &release.bytes,
-            release.mode,
+            &release.pinned.bytes,
+            release.pinned.mode,
         )?;
         let mut image = json!({
             "release": "./image-release.json",
@@ -1158,7 +1170,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let release = temp.path().join("release.json");
         fs::write(&release, "fixture").unwrap();
-        let digest = format!("sha256:{}", "b".repeat(64));
+        let digest = format!("sha256:{}", sha256_file(&release).unwrap());
         let state = temp.path().join("state with spaces and 'quote");
         let output = run_args(
             temp.path(),
@@ -1181,10 +1193,8 @@ mod tests {
         .unwrap();
         let spec = AgentSpec::from_path(&output.join("instance.yaml")).unwrap();
         let image = spec.deploy.image.unwrap();
-        assert_eq!(image.release_digest.as_deref(), Some(digest.as_str()));
-        assert!(!image.skip_signature_verification);
+        assert_eq!(image.release_digest, digest);
         assert!(image.manifest.is_none());
-        assert!(image.trusted_key.as_os_str().is_empty());
         assert_eq!(image.image_id.as_deref(), Some("m-marketplace"));
         assert_eq!(spec.service.ports, vec![4500]);
         assert!(!output.join("publisher.pem").exists());
@@ -1198,6 +1208,29 @@ mod tests {
             "confidential-agent --state-dir {} deploy --spec instance.yaml",
             shell_path(&state)
         )));
+        let original_spec = fs::read(output.join("instance.yaml")).unwrap();
+        fs::write(&release, "changed fixture").unwrap();
+        let error = run_args(
+            temp.path(),
+            &[
+                "codex",
+                "--force",
+                "--service-id",
+                "portable-consumer",
+                "--dashscope-api-key",
+                "test-model-key",
+                "--image-release",
+                release.to_str().unwrap(),
+                "--release-digest",
+                &digest,
+            ],
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("release digest mismatch"));
+        assert_eq!(
+            fs::read(output.join("instance.yaml")).unwrap(),
+            original_spec
+        );
     }
 
     #[test]
@@ -1260,7 +1293,7 @@ mod tests {
             assert!(!project.join("cosign.key").exists());
             assert_eq!(spec.service.ssh, ssh, "{target}");
             let image = spec.deploy.image.unwrap();
-            assert_eq!(image.release_digest.as_deref(), Some(digest.as_str()));
+            assert_eq!(image.release_digest, digest);
             assert_eq!(
                 format!("sha256:{}", sha256_file(&image.release).unwrap()),
                 digest
@@ -1381,7 +1414,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let release = temp.path().join("release.json");
         fs::write(&release, "release-bytes").unwrap();
-        let release_digest = format!("sha256:{}", "c".repeat(64));
+        let release_digest = format!("sha256:{}", sha256_file(&release).unwrap());
         let manifest_digest = format!("sha256:{}", "a".repeat(64));
 
         let expected: &[(&str, &str, Option<u16>)] = &[
@@ -1420,13 +1453,8 @@ mod tests {
             assert!(!dir.join("files").exists());
             assert!(spec.service.ssh);
             assert_eq!(
-                spec.deploy
-                    .image
-                    .as_ref()
-                    .unwrap()
-                    .release_digest
-                    .as_deref(),
-                Some(release_digest.as_str())
+                spec.deploy.image.as_ref().unwrap().release_digest,
+                release_digest
             );
             assert_eq!(
                 spec.service.ports,

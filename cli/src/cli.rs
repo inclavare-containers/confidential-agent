@@ -293,7 +293,7 @@ pub(crate) struct InitArgs {
         help = format!("Model name (default: {})", confidential_agent_core::software::version("bailian_model"))
     )]
     pub(crate) model: Option<String>,
-    #[arg(long)]
+    #[arg(long, env = "CA_GATEWAY_TOKEN")]
     pub(crate) gateway_token: Option<String>,
     #[arg(long)]
     pub(crate) disable_pep: bool,
@@ -345,9 +345,6 @@ pub(crate) struct BuildArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct DeployArgs {
-    /// Explicitly skip the image release signature, preserving runtime attestation checks.
-    #[arg(long)]
-    pub(crate) skip_signature_verification: bool,
     /// Existing shared/marketplace image in the deployment region.
     #[arg(long)]
     pub(crate) image_id: Option<String>,
@@ -657,14 +654,21 @@ pub(crate) enum ImageCommands {
         force: bool,
     },
     Publish(ImagePublishArgs),
+    /// Find an available regional ECS image matching a release.
+    Resolve {
+        #[arg(long)]
+        image_release: PathBuf,
+        #[arg(long)]
+        release_digest: String,
+        #[arg(long)]
+        region: String,
+    },
     /// Export authenticated public metadata for deploying this image elsewhere.
     Export {
         service: String,
         #[arg(long)]
         /// Existing shared or marketplace image. Omit to export a portable release with no cloud mapping.
         image_id: Option<String>,
-        #[arg(long)]
-        signing_key: Option<PathBuf>,
         #[arg(long)]
         output: PathBuf,
         #[arg(long)]
@@ -683,15 +687,13 @@ pub(crate) struct ImagePublishArgs {
     pub(crate) service: Option<String>,
     #[arg(long, conflicts_with = "artifact")]
     pub(crate) spec: Option<PathBuf>,
-    /// Shelter artifact directory, artifact-manifest.json or immutable OCI reference.
-    #[arg(long, requires_all = ["image_release", "region"], conflicts_with = "variant")]
-    pub(crate) artifact: Option<String>,
+    /// Local Shelter artifact directory or artifact-manifest.json.
+    #[arg(long, requires_all = ["image_release", "release_digest", "region"], conflicts_with = "variant")]
+    pub(crate) artifact: Option<PathBuf>,
     #[arg(long, requires = "artifact")]
     pub(crate) image_release: Option<PathBuf>,
-    #[arg(long, requires = "artifact", conflicts_with = "trusted_key")]
-    pub(crate) release_digest: Option<String>,
     #[arg(long, requires = "artifact")]
-    pub(crate) trusted_key: Option<PathBuf>,
+    pub(crate) release_digest: Option<String>,
     /// Write the resulting cloud image information as JSON.
     #[arg(long)]
     pub(crate) output: Option<PathBuf>,

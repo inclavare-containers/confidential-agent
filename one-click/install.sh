@@ -10,7 +10,7 @@ usage() {
     cat <<'EOF'
 Usage:
   curl -fsSL https://raw.githubusercontent.com/inclavare-containers/confidential-agent/one-click/one-click/install.sh | sh
-  sh one-click/install.sh [deploy|install-only|cleanup] [options]
+  sh one-click/install.sh [deploy|continue|install-only|cleanup] [options]
 
 Bootstrap options:
   --repo URL             Git repository for source workflows
@@ -26,7 +26,7 @@ Deployment options:
   --api-key KEY          Inference API key (or CA_API_KEY); --bailian-api-key is an alias
   --model MODEL          Model id; --bailian-model is an alias
   --image-source MODE    prebuilt (default) or build
-  --artifact REF         Local Shelter artifact or OCI digest reference
+  --artifact PATH        Local Shelter artifact
   --image-release PATH   Local image-release.json with --release-digest
   --release-digest HASH  Trusted SHA-256 digest of --image-release
   --image-id ID          Existing regional ECS image ID
@@ -95,7 +95,7 @@ ensure_git() {
 github_proxy_repo_url() {
     [ -n "${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}" ] || return 1
     case "$1" in
-        https://github.com/*)
+        https://github.com/*|https://raw.githubusercontent.com/*)
             proxy="${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}"
             case "$proxy" in
                 */) printf '%s%s\n' "$proxy" "$1" ;;
@@ -156,11 +156,61 @@ git_fetch_with_fallback() {
     run_git_with_timeout -C "$dir" fetch --depth 1 origin "$ref_name"
 }
 
+checkout_source() {
+    if [ ! -e "$source_dir/.git" ]; then
+        mkdir -p "$source_dir"
+        git -C "$source_dir" init
+        git -C "$source_dir" remote add origin "$repo"
+    fi
+    git_fetch_with_fallback "$source_dir" "$repo" "$ref"
+    git -C "$source_dir" checkout --detach FETCH_HEAD
+}
+
+launch_github_frontend() {
+    slug="${1%.git}"
+    raw="https://raw.githubusercontent.com/$slug/$2"
+    frontend_dir="$(mktemp -d "${TMPDIR:-/tmp}/ca-one-click-frontend.XXXXXX")"
+    first="$raw"
+    second="$(github_proxy_repo_url "$raw" || true)"
+    if [ -n "$second" ] && github_proxy_first; then
+        first="$second"
+        second="$raw"
+    fi
+    if ! curl -fsSL --retry 2 --connect-timeout 10 --max-time 60 \
+        -o "$frontend_dir/bootstrap.sh" "$first/one-click/lib/bootstrap-frontend.sh"; then
+        [ -n "$second" ] || return 1
+        curl -fsSL --retry 2 --connect-timeout 10 --max-time 60 \
+            -o "$frontend_dir/bootstrap.sh" "$second/one-click/lib/bootstrap-frontend.sh"
+    fi
+    sh "$frontend_dir/bootstrap.sh" "$first" "$second" install.sh "$pass_args_file"
+}
+
+bootstrap_runtime() {
+    case "$CA_BOOTSTRAP_ACTION" in
+        release)
+            rpm_installer=""
+            trap 'if [ -n "$rpm_installer" ]; then rm -f "$rpm_installer"; fi' EXIT
+            install_release
+            ;;
+        source)
+            repo="$CA_BOOTSTRAP_REPO"
+            ref="$CA_BOOTSTRAP_REF"
+            source_dir="$CA_BOOTSTRAP_ROOT"
+            ensure_git
+            checkout_source
+            ;;
+    esac
+}
+
 # Wrap the imperative body so `sh` parses the entire script before executing
 # anything. Without this wrapper, `curl ... | sh` would hit `exec </dev/tty`
 # while the rest of the script bytes are still in the curl pipe, then sh would
 # try to read the remaining script from the terminal and silently hang.
 main() {
+    if [ "${CA_BOOTSTRAP_HOOK:-}" = "$0" ]; then
+        bootstrap_runtime
+        return
+    fi
     explicit_ref=""
     if [ -n "${CA_ONE_CLICK_REPO:-}${CA_ONE_CLICK_REF:-}${CA_ONE_CLICK_BRANCH:-}" ]; then
         explicit_ref=1
@@ -169,10 +219,12 @@ main() {
     ref="${CA_ONE_CLICK_REF:-${CA_ONE_CLICK_BRANCH:-$DEFAULT_BRANCH}}"
     commit_ref=0
     source_dir="${CA_ONE_CLICK_SOURCE_DIR:-}"
-    mode=""
-    rpm_installer=""
+    frontend_dir=""
     pass_args_file="$(mktemp "${TMPDIR:-/tmp}/ca-one-click-args.XXXXXX")"
-    trap 'rm -f "$pass_args_file" ${rpm_installer:+"$rpm_installer"}' EXIT HUP INT TERM
+    trap 'rm -f "$pass_args_file"; if [ -n "$frontend_dir" ]; then rm -rf -- "$frontend_dir"; fi' EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
 
     if [ ! -t 0 ] && ( : </dev/tty ) 2>/dev/null; then
         exec </dev/tty
@@ -215,7 +267,6 @@ main() {
                 exit 0
                 ;;
             *)
-                mode="${mode:-$1}"
                 append_pass_arg "$1"
                 shift
                 ;;
@@ -242,28 +293,24 @@ main() {
             fi
         fi
 
-        if [ "$mode" = cleanup ]; then
-            if [ ! -f "$PACKAGED_DIR/lib/main.sh" ]; then
-                echo "Packaged one-click installer not found. For a source deployment, run cleanup with --source-dir." >&2
-                exit 1
-            fi
-        else
-            install_release
-        fi
-        export CA_PACKAGED_INSTALL=1
-        run_main "$PACKAGED_DIR/lib/main.sh"
+        export CA_PACKAGED_INSTALL=1 CA_RELEASE_VERSION="$RELEASE_VERSION"
+        export CA_BOOTSTRAP_ROOT="${PACKAGED_DIR%/one-click}" CA_BOOTSTRAP_ACTION=release
+        launch_github_frontend "${DEFAULT_REPO#https://github.com/}" "v$RELEASE_VERSION"
+        return
     fi
 
-    source_dir="${source_dir:-${HOME:-/root}/.cache/confidential-agent/source}"
-    ensure_git
-    if [ ! -e "$source_dir/.git" ]; then
-        mkdir -p "$source_dir"
-        git -C "$source_dir" init
-        git -C "$source_dir" remote add origin "$repo"
-    fi
-    git_fetch_with_fallback "$source_dir" "$repo" "$ref"
-    git -C "$source_dir" checkout --detach FETCH_HEAD
-    run_main "$source_dir/one-click/lib/main.sh"
+    source_dir="$(realpath -m -- "${source_dir:-${HOME:-/root}/.cache/confidential-agent/source}")"
+    case "$repo" in
+        https://github.com/*)
+            export CA_PACKAGED_INSTALL=0 CA_BOOTSTRAP_ROOT="$source_dir" CA_BOOTSTRAP_ACTION=source
+            export CA_BOOTSTRAP_REPO="$repo" CA_BOOTSTRAP_REF="$ref"
+            launch_github_frontend "${repo#https://github.com/}" "$ref"
+            ;;
+        *)
+            checkout_source
+            run_main "$source_dir/one-click/lib/main.sh"
+            ;;
+    esac
 }
 
 main "$@"

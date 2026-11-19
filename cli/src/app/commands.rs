@@ -299,11 +299,7 @@ fn ensure_build_variant_present(
 }
 
 pub(super) fn cmd_deploy(cli: &Cli, args: &DeployArgs) -> Result<()> {
-    let mut snapshot = deployment_snapshot_with_image_options(
-        &args.spec,
-        args.skip_signature_verification,
-        args.image_id.as_deref(),
-    )?;
+    let mut snapshot = deployment_snapshot_with_image_id(&args.spec, args.image_id.as_deref())?;
     let spec = snapshot.spec.clone();
     let operation = lock_service_operation(&cli.state_dir, &spec.service.id)?;
     let trustee_mode = spec.attestation.mode == AttestationMode::Trustee;
@@ -1276,10 +1272,20 @@ pub(super) fn cmd_image(cli: &Cli, args: &ImageArgs) -> Result<()> {
         }
         ImageCommands::Rm { service, force } => remove_local_images(cli, service, *force),
         ImageCommands::Publish(args) => publish::cmd_image_publish(cli, args),
+        ImageCommands::Resolve {
+            image_release,
+            release_digest,
+            region,
+        } => {
+            if let Some(id) = publish::resolve_artifact(cli, image_release, release_digest, region)?
+            {
+                println!("{id}");
+            }
+            Ok(())
+        }
         ImageCommands::Export {
             service,
             image_id,
-            signing_key,
             output,
             region,
             variant,
@@ -1287,7 +1293,6 @@ pub(super) fn cmd_image(cli: &Cli, args: &ImageArgs) -> Result<()> {
             cli,
             service,
             image_id.as_deref(),
-            signing_key.as_deref(),
             output,
             region.as_deref(),
             variant.as_deref(),
@@ -2709,16 +2714,10 @@ pub(super) fn deploy_shelter_args(prepared: &PreparedConfig) -> Vec<OsString> {
         if let Some(pin) = &image.source.manifest {
             args.extend(["--expect-manifest".into(), pin.into()]);
         }
-        if let Some(digest) = &image.source.release_digest {
-            args.extend(["--release-digest".into(), digest.into()]);
-        } else if image.source.skip_signature_verification {
-            args.push("--skip-signature-verification".into());
-        } else {
-            args.extend([
-                "--trusted-key".into(),
-                image.source.trusted_key.as_os_str().to_os_string(),
-            ]);
-        }
+        args.extend([
+            "--release-digest".into(),
+            (&image.source.release_digest).into(),
+        ]);
     } else {
         args.push(prepared.shelter_build_id.clone().into());
     }

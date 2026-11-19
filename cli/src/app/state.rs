@@ -14,31 +14,25 @@ pub(super) fn link_committed_config(alias: &Path, target: &Path) -> Result<()> {
 }
 
 pub(super) fn deployment_snapshot(path: &Path) -> Result<DeploymentSnapshot> {
-    deployment_snapshot_with_image_options(path, false, None)
+    deployment_snapshot_with_image_id(path, None)
 }
 
-pub(super) fn deployment_snapshot_with_image_options(
+pub(super) fn deployment_snapshot_with_image_id(
     path: &Path,
-    skip_signature: bool,
     image_id: Option<&str>,
 ) -> Result<DeploymentSnapshot> {
     let path = fs::canonicalize(path)
         .with_context(|| format!("failed to resolve spec {}", path.display()))?;
     let content = fs::read_to_string(&path)
         .with_context(|| format!("failed to read spec '{}'", path.display()))?;
-    let effective_content = if skip_signature || image_id.is_some() {
+    let effective_content = if let Some(id) = image_id {
         let mut value: serde_yaml::Value = serde_yaml::from_str(&content)?;
         let image = value
             .get_mut("deploy")
             .and_then(|v| v.get_mut("image"))
             .and_then(|v| v.as_mapping_mut())
-            .context("image options require deploy.image")?;
-        if skip_signature {
-            image.insert("skip_signature_verification".into(), true.into());
-        }
-        if let Some(id) = image_id {
-            image.insert("image_id".into(), id.into());
-        }
+            .context("--image-id requires deploy.image")?;
+        image.insert("image_id".into(), id.into());
         serde_yaml::to_string(&value)?
     } else {
         content.clone()
@@ -207,7 +201,7 @@ pub(super) fn validated_injection_spec(
     let mut proposed = current.deploy.clone();
     deployed.image_variant = Some(state.build.variant.clone());
     proposed.image_variant = Some(current.image_variant().to_string());
-    // The saved release and publisher key are the authorization. Download
+    // The saved release and its digest are the authorization. Download
     // locations are not instance identity, and need not remain available.
     if let (Some(image), Some(committed)) = (&mut proposed.image, &manifest.image) {
         anyhow::ensure!(
@@ -219,53 +213,22 @@ pub(super) fn validated_injection_spec(
         );
         // A user-supplied version pin is optional; the authenticated snapshot
         // remains the identity, including for deployments made by older CLIs.
-        image.manifest = saved
+        let saved_image = saved
             .spec
             .deploy
             .image
             .as_ref()
-            .context("missing committed image release")?
-            .manifest
-            .clone();
-        for (name, source, frozen) in [
-            ("release", &image.release, &committed.source.release),
-            (
-                "publisher key",
-                &image.trusted_key,
-                &committed.source.trusted_key,
-            ),
-        ] {
-            if name == "publisher key"
-                && (committed.source.skip_signature_verification
-                    || committed.source.release_digest.is_some())
-            {
-                continue;
-            }
-            let frozen_digest = sha256_file(frozen)
-                .with_context(|| format!("failed to read committed image {name}"))?;
-            match fs::symlink_metadata(source) {
-                Ok(_) => anyhow::ensure!(sha256_file(source)? == frozen_digest,
-                    "inject cannot change the committed image {name}; deploy a new instance to select another release"),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(error).with_context(|| format!("failed to inspect image {name}")),
-            }
+            .context("missing committed image release")?;
+        image.manifest = saved_image.manifest.clone();
+        let frozen_digest = sha256_file(&committed.source.release)
+            .context("failed to read committed image release")?;
+        match fs::symlink_metadata(&image.release) {
+            Ok(_) => anyhow::ensure!(sha256_file(&image.release)? == frozen_digest,
+                "inject cannot change the committed image release; deploy a new instance to select another release"),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error).context("failed to inspect image release"),
         }
-        image.release = saved
-            .spec
-            .deploy
-            .image
-            .as_ref()
-            .context("missing committed image release")?
-            .release
-            .clone();
-        image.trusted_key = saved
-            .spec
-            .deploy
-            .image
-            .as_ref()
-            .context("missing committed publisher key")?
-            .trusted_key
-            .clone();
+        image.release = saved_image.release.clone();
     }
     anyhow::ensure!(
         serde_json::to_value(&proposed)? == serde_json::to_value(&deployed)?,

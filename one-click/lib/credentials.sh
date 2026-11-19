@@ -84,13 +84,15 @@ export_aliyun_cli_ak_profile() {
   export ALIBABA_CLOUD_ACCESS_KEY_SECRET="$sk"
 }
 
+aliyun_credentials_file() {
+  local path="${ALIBABA_CLOUD_CREDENTIALS_FILE:-${ALICLOUD_SHARED_CREDENTIALS_FILE:-${HOME:-/root}/.aliyun/config.json}}"
+  [[ -r "$path" ]] || return 1
+  printf '%s\n' "$path"
+}
+
 configure_terraform_from_aliyun_cli() {
   local profile credentials_file
-  credentials_file="${ALIBABA_CLOUD_CREDENTIALS_FILE:-${ALICLOUD_SHARED_CREDENTIALS_FILE:-}}"
-  if [[ -z "$credentials_file" && -n "${HOME:-}" && -r "$HOME/.aliyun/config.json" ]]; then
-    credentials_file="$HOME/.aliyun/config.json"
-  fi
-  [[ -n "$credentials_file" ]] || return 1
+  credentials_file="$(aliyun_credentials_file)" || return 1
 
   profile="${ALIBABA_CLOUD_PROFILE:-${ALICLOUD_PROFILE:-}}"
   if [[ -n "$profile" ]]; then
@@ -113,9 +115,14 @@ configure_terraform_from_aliyun_cli() {
   log "using Aliyun CLI AK profile '$profile' for one-click authentication"
 }
 
-ensure_aliyun_credentials() {
+collect_aliyun_credentials() {
   normalize_aliyun_env
   if [[ -n "${ALICLOUD_ACCESS_KEY:-}" && -n "${ALICLOUD_SECRET_KEY:-}" ]]; then
+    return
+  fi
+  if aliyun_credentials_file >/dev/null &&
+     { ! command -v aliyun >/dev/null || ! command -v jq >/dev/null; }; then
+    CA_ALIYUN_PROFILE_PENDING=1
     return
   fi
   if configure_terraform_from_aliyun_cli; then
@@ -132,6 +139,17 @@ ensure_aliyun_credentials() {
   export ALICLOUD_SECRET_KEY="$sk"
   export ALIBABA_CLOUD_ACCESS_KEY_ID="$ak"
   export ALIBABA_CLOUD_ACCESS_KEY_SECRET="$sk"
+}
+
+configure_aliyun_credentials() {
+  if [[ "${CA_ALIYUN_PROFILE_PENDING:-0}" == 1 ]]; then
+    configure_terraform_from_aliyun_cli || die "Aliyun CLI profile could not authenticate; configure a usable AK profile or set Aliyun environment credentials"
+  fi
+}
+
+ensure_aliyun_credentials() {
+  collect_aliyun_credentials
+  configure_aliyun_credentials
 }
 
 ensure_aliyun_cli_region() {
@@ -180,7 +198,6 @@ resolve_dingtalk_enablement() {
 }
 
 ensure_dingtalk_credentials() {
-  resolve_dingtalk_enablement
   if [[ "$CA_ENABLE_DINGTALK" != "1" ]]; then
     return
   fi

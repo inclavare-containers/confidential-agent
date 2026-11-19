@@ -17,6 +17,9 @@ export CA_SOFTWARE_VERSIONS_FILE="$ROOT_DIR/software-versions.json"
 . "$SCRIPT_DIR/harness.sh"
 # shellcheck source=one-click/lib/deploy.sh
 . "$SCRIPT_DIR/deploy.sh"
+# shellcheck source=one-click/lib/cpu-state.sh
+. "$SCRIPT_DIR/cpu-state.sh"
+ROOT_DIR="${CA_BOOTSTRAP_ROOT:-$ROOT_DIR}"
 
 usage() {
   if [[ "${CA_ONE_CLICK_TARGET:-openclaw}" == "openclaw-vllm" ]]; then
@@ -111,7 +114,7 @@ Deploy options:
   --vllm-served-model-name NAME  vLLM served model name; default: Qwen3.8-27B
   --oss-bucket NAME              OSS bucket holding the encrypted model artifact (required)
   --oss-endpoint URL             Model download endpoint; default: https://oss-cn-beijing-internal.aliyuncs.com
-  --image-spec PATH              Deploy an existing signed-image AppSpec (JSON), without rebuilding
+  --image-spec PATH              Deploy an existing digest-pinned image AppSpec (JSON), without rebuilding
   --model-key-file PATH          Local gocryptfs model key file (required, must exist)
   --reference-values MODE        rekor or sample; default: rekor
   --cosign-key PATH              Existing cosign private key for rekor mode
@@ -134,7 +137,7 @@ EOF
 
   cat <<EOF
 Usage:
-  one-click/install.sh [deploy|install-only|cleanup] [options]
+  one-click/install.sh [deploy|continue|install-only|cleanup] [options]
 
 Default mode:
   deploy
@@ -156,7 +159,7 @@ Common options:
 
 CPU shared image options:
   --image-source MODE            prebuilt (default) or build
-  --artifact REF                 Local Shelter artifact dir/manifest or OCI digest ref
+  --artifact PATH                Local Shelter artifact directory or manifest
   --image-release PATH           Explicit local image-release.json (requires --release-digest)
   --release-digest sha256:HEX    Trusted SHA-256 digest of --image-release
   --image-id ID                  Existing regional cloud ECS image ID (skips pull and publish)
@@ -198,6 +201,7 @@ Examples:
   one-click/install.sh --non-interactive --yes --bailian-model qwen3.7-max
   one-click/install.sh --harness codex --access ws
   one-click/install.sh --image-source build --harness openclaw
+  one-click/install.sh continue --service-id openclaw
   one-click/install.sh install-only
   one-click/install.sh cleanup --state-dir "\$HOME/.confidential-agent"
 EOF
@@ -244,7 +248,7 @@ init_defaults() {
   CA_MODEL="${CA_MODEL:-${CA_BAILIAN_MODEL:-${DASHSCOPE_MODEL:-}}}"
   CA_API_KEY="${CA_API_KEY:-${CA_BAILIAN_API_KEY:-}}"
   CA_API_BASE_URL="${CA_API_BASE_URL:-}"
-  CA_IMAGE_SOURCE="${CA_IMAGE_SOURCE:-prebuilt}"
+  CA_IMAGE_SOURCE="${CA_IMAGE_SOURCE:-}"
   CA_ARTIFACT="${CA_ARTIFACT:-}"
   CA_IMAGE_ID="${CA_IMAGE_ID:-}"
   CA_IMAGE_RELEASE="${CA_IMAGE_RELEASE:-}"
@@ -288,7 +292,7 @@ init_defaults() {
 parse_args() {
   if (($# > 0)); then
     case "$1" in
-      deploy|deploy-openclaw|deploy-openclaw-vllm|deploy-vllm-inference|install-only|cleanup|cleanup-openclaw-vllm|cleanup-vllm-inference)
+      deploy|deploy-openclaw|deploy-openclaw-vllm|deploy-vllm-inference|continue|install-only|cleanup|cleanup-openclaw-vllm|cleanup-vllm-inference)
         normalize_mode "$1"
         shift
         ;;
@@ -296,6 +300,12 @@ parse_args() {
   fi
 
   while (($# > 0)); do
+    if [[ "$CA_MODE" == continue ]]; then
+      case "$1" in
+        --state-dir|--service-id|--non-interactive|--help|-h) ;;
+        *) die "continue reuses the original inputs; unsupported option: $1" ;;
+      esac
+    fi
     case "$1" in
       --non-interactive) CA_NON_INTERACTIVE=1; shift ;;
       --yes|-y) CA_ASSUME_YES=1; shift ;;
@@ -395,6 +405,7 @@ normalize_mode() {
   local requested="$1"
   case "$CA_ONE_CLICK_TARGET:$requested" in
     openclaw:deploy|openclaw:deploy-openclaw) CA_MODE="deploy-openclaw" ;;
+    openclaw:continue) CA_MODE="continue" ;;
     openclaw:cleanup) CA_MODE="cleanup" ;;
     openclaw:install-only) CA_MODE="install-only" ;;
     openclaw:deploy-openclaw-vllm|openclaw:cleanup-openclaw-vllm)
@@ -485,6 +496,9 @@ apply_target_defaults() {
 
 validate_options() {
   [[ "$CA_SERVICE_ID" =~ ^[A-Za-z0-9_.-]+$ && "$CA_SERVICE_ID" != . && "$CA_SERVICE_ID" != .. ]] || die "invalid service ID: $CA_SERVICE_ID"
+  if [[ "$CA_MODE" == deploy-openclaw || "$CA_MODE" == cleanup ]]; then
+    [[ "$CA_SERVICE_ID" =~ ^[A-Za-z0-9_-]+$ ]] || die "invalid service ID: $CA_SERVICE_ID"
+  fi
   if [[ "$CA_MODE" == deploy-openclaw || "$CA_MODE" == cleanup ]]; then
     is_supported_harness "$CA_HARNESS" || die "unsupported harness: $CA_HARNESS"
   fi
@@ -627,24 +641,59 @@ print_startup_config() {
   log "reference_values: $CA_REFERENCE_VALUES"
 }
 
+prepare_one_click_source() {
+  if [[ -n "${CA_BOOTSTRAP_HOOK:-}" ]]; then
+    bash "$CA_BOOTSTRAP_HOOK"
+    ROOT_DIR="$CA_BOOTSTRAP_ROOT"
+  fi
+}
+
+collect_gpu_inputs() {
+  ensure_aliyun_cli_region
+  collect_aliyun_credentials
+  if [[ "$CA_MODE" == deploy-openclaw-vllm ]]; then
+    resolve_dingtalk_enablement
+    ensure_dingtalk_credentials
+  fi
+  resolve_allowed_cidr
+  prepare_operator_peering
+}
+
 main() {
   init_defaults
   parse_args "$@"
-  resolve_harness_options
+  if [[ "$CA_MODE" == continue ]]; then
+    resume_cpu_task
+  else
+    if [[ "$CA_MODE" == deploy-openclaw && -n "$CA_SERVICE_ID_OVERRIDE" ]]; then
+      [[ "$CA_SERVICE_ID_OVERRIDE" =~ ^[A-Za-z0-9_-]+$ ]] || die "invalid service ID: $CA_SERVICE_ID_OVERRIDE"
+      CA_STATE_DIR="$(realpath -m -- "$CA_STATE_DIR")"
+      CA_SERVICE_ID="$CA_SERVICE_ID_OVERRIDE" reject_pending_cpu_task
+    fi
+    resolve_harness_options
+  fi
   normalize_workspace_paths
   apply_target_defaults
-  validate_options
+  if [[ "${CA_CPU_RESUMING:-0}" != 1 ]]; then validate_options; fi
+  case "$CA_MODE" in
+    deploy-openclaw)
+      if [[ "${CA_CPU_RESUMING:-0}" != 1 ]]; then reject_pending_cpu_task; fi
+      collect_cpu_inputs
+      ;;
+    deploy-openclaw-vllm|deploy-vllm-inference) collect_gpu_inputs ;;
+    cleanup-openclaw-vllm|cleanup-vllm-inference) collect_aliyun_credentials ;;
+  esac
   install -d -m 0700 "$CA_STATE_DIR" "$CA_WORK_DIR"
   print_startup_config
 
   case "$CA_MODE" in
     deploy-openclaw) run_deploy_cpu ;;
-    deploy-openclaw-vllm) run_deploy_openclaw_vllm ;;
-    deploy-vllm-inference) run_deploy_vllm_inference ;;
-    install-only) run_install_only ;;
-    cleanup) run_cleanup ;;
-    cleanup-openclaw-vllm) run_cleanup_openclaw_vllm ;;
-    cleanup-vllm-inference) run_cleanup_vllm_inference ;;
+    deploy-openclaw-vllm) prepare_one_click_source; run_deploy_openclaw_vllm ;;
+    deploy-vllm-inference) prepare_one_click_source; run_deploy_vllm_inference ;;
+    install-only) prepare_one_click_source; run_install_only ;;
+    cleanup) run_cleanup_cpu ;;
+    cleanup-openclaw-vllm) prepare_one_click_source; run_cleanup_openclaw_vllm ;;
+    cleanup-vllm-inference) prepare_one_click_source; run_cleanup_vllm_inference ;;
     *) die "unsupported mode: $CA_MODE" ;;
   esac
 }

@@ -1,7 +1,6 @@
 mod artifact;
-mod download;
 use super::*;
-pub(super) use artifact::{imported_image_entries, published_override};
+pub(super) use artifact::{imported_image_entries, published_override, resolve_artifact};
 use std::os::unix::fs::OpenOptionsExt;
 
 const PROVIDER_ALIYUN: &str = "aliyun";
@@ -1367,10 +1366,7 @@ fn image_references(state_dir: &Path, image_id: &str) -> Result<Vec<String>> {
             .values()
             .any(|entry| entry.exported && entry.image_id.as_deref() == Some(image_id))
         {
-            references.insert(format!(
-                "service '{}' exported a signed release",
-                state.service_id
-            ));
+            references.insert(format!("service '{}' exported a release", state.service_id));
         }
     }
     // Imports can precede state creation (including deploy --render-only).
@@ -1898,13 +1894,11 @@ mod tests {
             image: Some(images::ImageDeployment {
                 image_id: entry.image_id.clone().unwrap(),
                 source: confidential_agent_core::spec::PublishedImageSpec {
-                    release_digest: None,
+                    release_digest: format!("sha256:{}", "1".repeat(64)),
                     release: "/release.json".into(),
-                    trusted_key: "/publisher.pem".into(),
                     manifest: Some(format!("sha256:{}", "a".repeat(64))),
                     legacy_account_id: None,
                     image_id: None,
-                    skip_signature_verification: false,
                 },
             }),
             ..BuildManifest::default()

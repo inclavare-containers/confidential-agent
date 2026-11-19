@@ -12,7 +12,7 @@ sudo --preserve-env=CA_GITHUB_PROXY_URL,CA_GITHUB_PROXY_FIRST bash install-rpm.s
 confidential-agent --version
 ```
 
-安装器会下载并校验 `cagent-0.3.0-1.al8.x86_64.rpm` 与配套 `shelter-0.3.2-3.al8.x86_64.rpm` 的文件 SHA-256 和 RPM payload 摘要，再通过 DNF 一并安装，无需克隆源码或编译 Rust：
+安装器会下载并校验 `cagent-0.3.0-1.al8.x86_64.rpm` 与配套 `shelter-0.3.2-4.al8.x86_64.rpm` 的文件 SHA-256 和 RPM payload 摘要，再通过 DNF 一并安装，无需克隆源码或编译 Rust：
 
 - `--download-only --output-dir DIR`：仅下载并校验两个 RPM 及 `release-manifest.json`。
 - `--from-dir DIR`：从已下载目录校验并安装本地包（仍通过系统源解析常规 RPM 依赖）。
@@ -30,7 +30,7 @@ packaging/build-rpm.sh
 
 产物位于 `target/rpm/RPMS/x86_64/cagent-0.3.0-1.al8.x86_64.rpm`，SRPM 位于 `target/rpm/SRPMS/`。源码准备阶段缓存并校验固定版本的 `cosign`、`aliyun`、`ossutil64` 和 `oras`；`target/rpm/SOURCES/SHA256SUMS` 记录源码、Cargo vendor 和原生工具归档的哈希，rpmbuild 内使用 `--locked --offline` 编译与测试。
 
-输出目录同时包含配套 Shelter RPM（`cagent` 依赖 `shelter >= 0.3.2-3`）、`shelter-rpm.json` 与 `SHA256SUMS`。`hack/shelter-rpm.json` 记录固定 Release URL、源码提交、RPM SHA-256 和 payload 摘要，缺少时由 `hack/resolve-shelter-rpm.sh` 下载到缓存目录并双重校验。`CAGENT_BUILD_JOBS` 控制打包并行度（默认 `4`）。
+输出目录同时包含配套 Shelter RPM（`cagent` 依赖 `shelter >= 0.3.2-4`）、`shelter-rpm.json` 与 `SHA256SUMS`。`hack/shelter-rpm.json` 记录固定 Release URL、源码提交、RPM SHA-256 和 payload 摘要，缺少时由 `hack/resolve-shelter-rpm.sh` 下载到缓存目录并双重校验。`CAGENT_BUILD_JOBS` 控制打包并行度（默认 `4`）。
 
 ## 在干净机器手动安装本地 RPM
 
@@ -38,7 +38,7 @@ packaging/build-rpm.sh
 
 ```bash
 grep -E '  (cagent-0\.3\.0-1\.al8\.x86_64|shelter-0\.3\.2-3\.al8\.x86_64)\.rpm$' SHA256SUMS | sha256sum -c -
-sudo dnf install -y ./shelter-0.3.2-3.al8.x86_64.rpm ./cagent-0.3.0-1.al8.x86_64.rpm
+sudo dnf install -y ./shelter-0.3.2-4.al8.x86_64.rpm ./cagent-0.3.0-1.al8.x86_64.rpm
 confidential-agent version
 rpm -q cagent shelter attestation-challenge-client libtdx-verify trusted-network-gateway
 ```
@@ -47,7 +47,7 @@ rpm -q cagent shelter attestation-challenge-client libtdx-verify trusted-network
 
 ## 镜像交付与运行时证明
 
-- **镜像交付**。从官方 GitHub Release 的 `image-index.json` 读取不可变 OCI 引用 `oci_reference` 和可信 `release_digest`，或使用本机 `image export` 输出的摘要。该摘要校验 `image-release.json` 的完整字节。`image publish --artifact` 校验本地或从 OCI 拉取的产物，确认其 manifest 和磁盘摘要及大小与描述一致。镜像站只负责传输。
+- **镜像交付**。从官方 GitHub Release 的 `image-index.json` 读取不可变 OCI 引用 `oci_reference` 和可信 `release_digest`，或使用本机 `image export` 输出的摘要。该摘要校验 `image-release.json` 的完整字节。`image publish --artifact` 校验本地产物，确认其 manifest 和磁盘摘要及大小与描述一致。镜像站只负责传输。
 - **实例启动**。`deploy` 验证镜像描述和运行时契约，再创建 TDX 实例。通过 TDX Quote 和 Rekor 参考值验证后，challenge 或 Trustee 才释放磁盘密钥与业务资源。开发场景也可使用 `sample` 参考值。
 
 ## 按手头已有产物选择手动流程
@@ -90,21 +90,12 @@ confidential-agent image publish allinone-builder \
   --output ./published.json
 ```
 
-### 3. 按不可变 OCI 引用下载并导入 ECS（使用官方预构建镜像）
+### 3. 下载并导入官方预构建镜像
 
-从官方 Release 获取 `image-index.json` 与 `image-release.json`，将固定到 `@sha256` 的 `oci_reference` 传给 `image publish`。导入官方公开产物时，cagent 负责磁盘下载和续传，并调用 ORAS 补齐本地 OCI layout。Shelter 从该 layout 校验并导入产物，随后由 cagent 发布到当前账号的目标地域 ECS。
+在安装 RPM 的机器上执行下载脚本，再运行它输出的 `image publish` 命令。下载先尝试官方 GHCR，传输失败后切换至 1ms，使用相同摘要和本地断点继续传输。
 
 ```bash
-/usr/share/cagent/hack/resolve-release-image.sh --output-dir ./prebuilt
-OCI_REF="$(jq -er '.oci_reference' ./prebuilt/image-index.json)"
-RELEASE_DIGEST="$(jq -er '.release_digest' ./prebuilt/image-index.json)"
-
-confidential-agent image publish \
-  --artifact "$OCI_REF" \
-  --image-release ./prebuilt/image-release.json \
-  --release-digest "$RELEASE_DIGEST" \
-  --region cn-beijing \
-  --output ./published.json
+python3.11 /usr/share/cagent/hack/download-release-image.py --output-dir ./prebuilt --region cn-beijing
 ```
 
 ### 4. 预构建产物已下载到本地（离线传输或镜像加速下载后导入）

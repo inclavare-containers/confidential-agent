@@ -1,5 +1,5 @@
 """Exercise generated consumption specs against the installed CLI schema."""
-import base64
+import hashlib
 import importlib.util
 import json
 import os
@@ -29,12 +29,12 @@ reuse_spec.loader.exec_module(reuse)
 class ConsumerSpecTest(unittest.TestCase):
     def selection(self, root):
         release = root / 'image-release.json'
-        release.write_text(json.dumps({'payload': base64.b64encode(json.dumps({
+        release.write_text(json.dumps({
             'images': [{'region': 'cn-beijing', 'account_id': '1234567890'}],
-            'manifest': {'manifest_digest': 'sha256:' + 'a' * 64}}).encode()).decode()}))
-        public = root / 'publisher.pem'
-        public.write_text('schema-only public fixture\n')
-        return {'release': str(release), 'trusted_key': str(public),
+            'manifest': {'manifest_digest': 'sha256:' + 'a' * 64}}))
+        digest = 'sha256:' + hashlib.sha256(release.read_bytes()).hexdigest()
+        (root / 'image-release.sha256').write_text(digest)
+        return {'release': str(release), 'release_digest': digest,
                 'manifest': 'sha256:' + 'a' * 64, 'account_id': '1234567890'}
 
     def command(self, *args):

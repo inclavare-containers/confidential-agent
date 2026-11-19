@@ -21,7 +21,7 @@
 | --- | --- |
 | **1. 从零构建镜像** | `init --stage build` 生成 `build.yaml` → `build` 生成完整 Shelter 产物 → `image export` 导出描述与 `release_digest` → `image publish` 导入 ECS |
 | **2. 本机已构建好产物** | 跳过 `build`，直接对已有构建执行 `image export` 获取 `release_digest`，再执行 `image publish` 导入目标地域 ECS |
-| **3. 按不可变 OCI 引用拉取** | 从官方 Release 获取 `image-index.json` 与 `image-release.json`，运行 `image publish --artifact <oci_reference@sha256> --image-release ... --release-digest ... --region ...` 显式拉取校验并导入 ECS |
+| **3. 下载官方预构建镜像** | 运行 `download-release-image.py` 下载并校验本地产物，再执行脚本输出的 `image publish` 命令 |
 | **4. 镜像产物已下载到本地** | 运行 `image publish --artifact <本地产物目录或artifact-manifest.json> --image-release ... --release-digest ... --region ...` 校验本地大文件并导入 ECS |
 | **5. 当前地域已有 ECS 镜像 ID** | 跳过构建和 `image publish`，直接运行 `init <app> --image-release ... --release-digest ... --image-id <m-xxxx> --service-id <id>` 后 `deploy` |
 | **6. 同一镜像再起新实例** | 云镜像已就绪，无需重新下载或导入；更换新的 `--service-id` 运行 `init <app>`（可选相同或不同应用）后直接 `deploy` |
@@ -50,33 +50,23 @@ confidential-agent image publish allinone-builder \
 
 阿里云凭证优先读取环境变量（`ALICLOUD_ACCESS_KEY` / `ALICLOUD_SECRET_KEY` 等），其次读取宿主机 `aliyun configure` 配置的 AK 或 StsToken profile（可通过 `ALIBABA_CLOUD_PROFILE` / `ALICLOUD_PROFILE` 选择命名 profile，或通过 `ALIBABA_CLOUD_CREDENTIALS_FILE` / `ALICLOUD_SHARED_CREDENTIALS_FILE` 指定凭证文件）。`CA_IMAGE_OSS_ENDPOINT` 默认 `auto`，同地域 ECS 内网可达时自动走内网 HTTPS，否则走公网。
 
-### 2. 导入官方预构建镜像（OCI 引用或本地已下载产物）
-
-按不可变 OCI 引用发布，或选择同一镜像的本地产物目录：
+### 2. 下载并导入官方预构建镜像
 
 ```bash
-# 从已安装 RPM 解析并校验官方 Release 的 image-index.json 与 image-release.json
-/usr/share/cagent/hack/resolve-release-image.sh --output-dir ./prebuilt
-OCI_REF="$(jq -er '.oci_reference' ./prebuilt/image-index.json)"
-RELEASE_DIGEST="$(jq -er '.release_digest' ./prebuilt/image-index.json)"
-IMAGE_RELEASE=./prebuilt/image-release.json
+DOWNLOAD="$(python3.11 /usr/share/cagent/hack/download-release-image.py --output-dir ./prebuilt --format json)"
+ARTIFACT="$(jq -er '.artifact' <<<"$DOWNLOAD")"
+IMAGE_RELEASE="$(jq -er '.image_release' <<<"$DOWNLOAD")"
+RELEASE_DIGEST="$(jq -er '.release_digest' <<<"$DOWNLOAD")"
 
-# 情况 A：按不可变 @sha256 OCI 引用拉取、校验并导入 ECS
 confidential-agent image publish \
-  --artifact "$OCI_REF" \
-  --image-release "$IMAGE_RELEASE" \
-  --release-digest "$RELEASE_DIGEST" \
-  --region cn-beijing \
-  --output ./published.json
-
-# 情况 B：产物目录（含 artifact-manifest.json 与磁盘文件）已下载到本地
-confidential-agent image publish \
-  --artifact ./local-shelter-artifact \
+  --artifact "$ARTIFACT" \
   --image-release "$IMAGE_RELEASE" \
   --release-digest "$RELEASE_DIGEST" \
   --region cn-beijing \
   --output ./published.json
 ```
+
+已有本地产物时，将 `ARTIFACT` 设为对应的 Shelter 产物目录或 `artifact-manifest.json`，并提供与之匹配的 release 文件和可信摘要。
 
 ### 3. 初始化应用实例、部署与同镜像多实例复用
 

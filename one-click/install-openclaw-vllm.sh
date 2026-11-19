@@ -74,7 +74,7 @@ ensure_git() {
 github_proxy_repo_url() {
     [ -n "${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}" ] || return 1
     case "$1" in
-        https://github.com/*)
+        https://github.com/*|https://raw.githubusercontent.com/*)
             proxy="${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}"
             case "$proxy" in
                 */) printf '%s%s\n' "$proxy" "$1" ;;
@@ -181,13 +181,66 @@ git_lfs_pull_with_fallback() {
     fi
 }
 
+checkout_source() {
+    if [ ! -e "$source_dir/.git" ]; then
+        mkdir -p "$source_dir"
+        git -C "$source_dir" init
+        git -C "$source_dir" remote add origin "$repo"
+    fi
+    git_fetch_with_fallback "$source_dir" "$repo" "$ref"
+    GIT_LFS_SKIP_SMUDGE=1 git -C "$source_dir" checkout --detach FETCH_HEAD
+}
+
+launch_github_frontend() {
+    slug="${1%.git}"
+    raw="https://raw.githubusercontent.com/$slug/$ref"
+    frontend_dir="$(mktemp -d "${TMPDIR:-/tmp}/ca-one-click-frontend.XXXXXX")"
+    export CA_ONE_CLICK_TARGET=openclaw-vllm
+    first="$raw"
+    second="$(github_proxy_repo_url "$raw" || true)"
+    if [ -n "$second" ] && github_proxy_first; then
+        first="$second"
+        second="$raw"
+    fi
+    if ! curl -fsSL --retry 2 --connect-timeout 10 --max-time 60 \
+        -o "$frontend_dir/bootstrap.sh" "$first/one-click/lib/bootstrap-frontend.sh"; then
+        [ -n "$second" ] || return 1
+        curl -fsSL --retry 2 --connect-timeout 10 --max-time 60 \
+            -o "$frontend_dir/bootstrap.sh" "$second/one-click/lib/bootstrap-frontend.sh"
+    fi
+    sh "$frontend_dir/bootstrap.sh" "$first" "$second" install-openclaw-vllm.sh "$pass_args_file"
+}
+
+bootstrap_runtime() {
+    repo="$CA_BOOTSTRAP_REPO"
+    ref="$CA_BOOTSTRAP_REF"
+    source_dir="$CA_BOOTSTRAP_ROOT"
+    ensure_git
+    if [ "$CA_BOOTSTRAP_ACTION" = source ]; then
+        checkout_source
+    fi
+    git_lfs_pull_with_fallback "$source_dir" "$repo"
+}
+
 main() {
+    if [ "${CA_BOOTSTRAP_HOOK:-}" = "$0" ]; then
+        bootstrap_runtime
+        return
+    fi
+    explicit_ref=""
+    if [ -n "${CA_ONE_CLICK_REPO:-}${CA_ONE_CLICK_REF:-}${CA_ONE_CLICK_BRANCH:-}" ]; then
+        explicit_ref=1
+    fi
     repo="${CA_ONE_CLICK_REPO:-$DEFAULT_REPO}"
     ref="${CA_ONE_CLICK_REF:-${CA_ONE_CLICK_BRANCH:-$DEFAULT_BRANCH}}"
     commit_ref=0
-    source_dir="${CA_ONE_CLICK_SOURCE_DIR:-${HOME:-/root}/.cache/confidential-agent/source}"
+    source_dir="${CA_ONE_CLICK_SOURCE_DIR:-}"
+    frontend_dir=""
     pass_args_file="$(mktemp "${TMPDIR:-/tmp}/ca-one-click-args.XXXXXX")"
-    trap 'rm -f "$pass_args_file"' EXIT HUP INT TERM
+    trap 'rm -f "$pass_args_file"; if [ -n "$frontend_dir" ]; then rm -rf -- "$frontend_dir"; fi' EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
 
     if [ ! -t 0 ] && ( : </dev/tty ) 2>/dev/null; then
         exec </dev/tty
@@ -198,22 +251,26 @@ main() {
             --repo)
                 [ "$#" -ge 2 ] || { echo "missing value for --repo" >&2; exit 2; }
                 repo="$2"
+                explicit_ref=1
                 shift 2
                 ;;
             --branch)
                 [ "$#" -ge 2 ] || { echo "missing value for --branch" >&2; exit 2; }
                 ref="$2"
+                explicit_ref=1
                 shift 2
                 ;;
             --ref)
                 [ "$#" -ge 2 ] || { echo "missing value for $1" >&2; exit 2; }
                 ref="$2"
+                explicit_ref=1
                 shift 2
                 ;;
             --commit)
                 [ "$#" -ge 2 ] || { echo "missing value for --commit" >&2; exit 2; }
                 ref="$2"
                 commit_ref=1
+                explicit_ref=1
                 shift 2
                 ;;
             --source-dir)
@@ -238,33 +295,28 @@ main() {
 
     script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd -P 2>/dev/null || pwd)
     local_root=$(CDPATH= cd -- "$script_dir/.." 2>/dev/null && pwd -P 2>/dev/null || true)
-    if [ -n "$local_root" ] && [ -f "$local_root/Cargo.toml" ] && [ -f "$local_root/one-click/lib/main.sh" ]; then
-        run_main "$local_root/one-click/lib/main.sh"
+    if [ -z "$explicit_ref" ]; then
+        if [ -n "$source_dir" ] && [ -f "$source_dir/one-click/lib/main.sh" ]; then
+            run_main "$source_dir/one-click/lib/main.sh"
+        fi
+        if [ -z "$source_dir" ] && [ -n "$local_root" ] && [ -f "$local_root/Cargo.toml" ] && [ -f "$local_root/one-click/lib/main.sh" ]; then
+            run_main "$local_root/one-click/lib/main.sh"
+        fi
     fi
 
-    ensure_git
-    mkdir -p "$(dirname "$source_dir")"
-
-    if [ -d "$source_dir/.git" ]; then
-        git_fetch_with_fallback "$source_dir" "$repo" "$ref"
-        GIT_LFS_SKIP_SMUDGE=1 git -C "$source_dir" checkout --detach "FETCH_HEAD"
-        git_lfs_pull_with_fallback "$source_dir" "$repo"
-    else
-        rm -rf "$source_dir"
-        mkdir -p "$source_dir"
-        git -C "$source_dir" init
-        git -C "$source_dir" remote add origin "$repo"
-        git_fetch_with_fallback "$source_dir" "$repo" "$ref"
-        GIT_LFS_SKIP_SMUDGE=1 git -C "$source_dir" checkout --detach "FETCH_HEAD"
-        git_lfs_pull_with_fallback "$source_dir" "$repo"
-    fi
-
-    if [ ! -f "$source_dir/one-click/lib/main.sh" ]; then
-        echo "one-click installer not found in checkout: $source_dir" >&2
-        exit 1
-    fi
-
-    run_main "$source_dir/one-click/lib/main.sh"
+    source_dir="$(realpath -m -- "${source_dir:-${HOME:-/root}/.cache/confidential-agent/source}")"
+    export CA_PACKAGED_INSTALL=0 CA_BOOTSTRAP_ROOT="$source_dir" CA_BOOTSTRAP_ACTION=source
+    export CA_BOOTSTRAP_REPO="$repo" CA_BOOTSTRAP_REF="$ref"
+    case "$repo" in
+        https://github.com/*)
+            launch_github_frontend "${repo#https://github.com/}"
+            ;;
+        *)
+            checkout_source
+            export CA_BOOTSTRAP_ACTION=lfs CA_BOOTSTRAP_HOOK="$source_dir/one-click/install-openclaw-vllm.sh"
+            run_main "$source_dir/one-click/lib/main.sh"
+            ;;
+    esac
 }
 
 main "$@"

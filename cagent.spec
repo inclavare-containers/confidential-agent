@@ -28,7 +28,7 @@ BuildRequires:  glibc-devel
 BuildRequires:  python3.11
 BuildRequires:  /usr/bin/pkg-config
 
-Requires:       shelter >= 0.3.2-3
+Requires:       shelter >= 0.3.2-4
 Requires:       attestation-challenge-client
 Requires:       libtdx-verify
 Requires:       trusted-network-gateway = 2.9.2-1.al8
@@ -82,7 +82,7 @@ install -m 0644 native-tools/SOURCES.tsv %{buildroot}%{_libexecdir}/cagent/SOURC
 install -d %{buildroot}%{_datadir}/cagent/{one-click,hack,packaging}
 cp -a examples common software-versions.json %{buildroot}%{_datadir}/cagent/
 cp -a one-click/install*.sh one-click/lib %{buildroot}%{_datadir}/cagent/one-click/
-for helper in check-shelter.sh check-shelter-rpm.sh resolve-shelter-rpm.sh fetch-shelter-rpm.py resolve-release-image.sh fetch-release-image.py; do
+for helper in check-shelter.sh check-shelter-rpm.sh resolve-shelter-rpm.sh fetch-shelter-rpm.py resolve-release-image.sh fetch-release-image.py download-release-image.py; do
     install -m 0755 hack/$helper %{buildroot}%{_datadir}/cagent/hack/$helper
 done
 install -m 0644 hack/shelter-rpm.json %{buildroot}%{_datadir}/cagent/hack/shelter-rpm.json
@@ -118,7 +118,7 @@ native-tools/oras version >/dev/null
 
 %changelog
 * Wed Nov 18 2026 Weidong Sun <sunweidong@linux.alibaba.com> - 0.3.0-1
-- Require Shelter 0.3.2-3 and package ORAS 1.3.0 for OCI artifact delivery and digest-authenticated image releases.
+- Require Shelter 0.3.2-4 and package the official image downloader and ORAS 1.3.0.
 - Package one-click scripts and shared version/dependency helpers under /usr/share/cagent.
 
 * Mon Nov 02 2026 Weidong Sun <sunweidong@linux.alibaba.com> - 0.2.0-1

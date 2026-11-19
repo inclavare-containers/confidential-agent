@@ -91,29 +91,34 @@ install_shelter_rpm() {
   fi
 }
 
+needs_pep_binary() {
+  [[ "${CA_DISABLE_PEP:-0}" != 1 ]] ||
+    [[ "${CA_MODE:-}" == deploy-openclaw && "${CA_IMAGE_SOURCE:-}" == build ]]
+}
+
 build_confidential_agent() {
   if [[ "${CA_PACKAGED_INSTALL:-0}" == 1 ]]; then return; fi
   if [[ "${CA_SKIP_CARGO_BUILD:-0}" == 1 ]]; then
     [[ -x "$CA_BIN" ]] || die "confidential-agent binary is missing: $CA_BIN"
     [[ -x "$CA_AGENTD_BIN" ]] || die "confidential-agentd binary is missing: $CA_AGENTD_BIN"
     [[ -x "$CA_GATEWAY_BIN" ]] || die "cai-gateway binary is missing: $CA_GATEWAY_BIN"
-    if [[ "${CA_DISABLE_PEP:-0}" != "1" ]]; then
+    if needs_pep_binary; then
       [[ -x "$CA_PEP_BIN" ]] || die "cai-pep binary is missing: $CA_PEP_BIN"
     fi
     return
   fi
   ensure_rust_toolchain
-  if [[ "${CA_DISABLE_PEP:-0}" == "1" ]]; then
-    log "building Confidential Agent host CLI, guest daemon and gateway"
-    (cd "$ROOT_DIR" && cargo build --release -p confidential-agent-cli -p confidential-agentd -p cai-gateway)
-  else
+  if needs_pep_binary; then
     log "building Confidential Agent host CLI, guest daemon, gateway and PEP"
     (cd "$ROOT_DIR" && cargo build --release -p confidential-agent-cli -p confidential-agentd -p cai-gateway -p cai-pep)
+  else
+    log "building Confidential Agent host CLI, guest daemon and gateway"
+    (cd "$ROOT_DIR" && cargo build --release -p confidential-agent-cli -p confidential-agentd -p cai-gateway)
   fi
   [[ -x "$CA_BIN" ]] || die "confidential-agent binary was not built: $CA_BIN"
   [[ -x "$CA_AGENTD_BIN" ]] || die "confidential-agentd binary was not built: $CA_AGENTD_BIN"
   [[ -x "$CA_GATEWAY_BIN" ]] || die "cai-gateway binary was not built: $CA_GATEWAY_BIN"
-  if [[ "${CA_DISABLE_PEP:-0}" != "1" ]]; then
+  if needs_pep_binary; then
     [[ -x "$CA_PEP_BIN" ]] || die "cai-pep binary was not built: $CA_PEP_BIN"
   fi
 }
@@ -142,7 +147,7 @@ install_confidential_agent_cli() {
   CA_BIN="$cli_dest"
   CA_AGENTD_BIN="$agentd_dest"
   CA_GATEWAY_BIN="$gateway_dest"
-  if [[ "${CA_DISABLE_PEP:-0}" != "1" ]]; then
+  if needs_pep_binary; then
     [[ -x "$CA_PEP_BIN" ]] || die "cai-pep binary is missing: $CA_PEP_BIN"
     local pep_dest="/usr/local/bin/cai-pep"
     install -D -m 0755 "$CA_PEP_BIN" "$pep_dest"
@@ -165,6 +170,18 @@ ca_cmd() {
   "$CA_BIN" --tools-dir "$CA_TOOLS_DIR" --state-dir "$CA_STATE_DIR" "$@"
 }
 
+confirm_operator_peering_entry() {
+  local label="$1" cidr="$2" existing
+  existing="$(ca_cmd peering show "$label" 2>/dev/null)" || return 0
+  if grep -Fxq "cidr: $cidr" <<<"$existing"; then return; fi
+  if [[ "$CA_NON_INTERACTIVE" == 1 ]]; then
+    die "peering '$label' already exists with a different CIDR. Re-run with --yes to replace it."
+  fi
+  confirm "Replace operator peering '$label' with $cidr?" "y" ||
+    die "operator peering replacement was declined"
+  CA_APPROVED_PEERING_REPLACEMENTS+=" $label"
+}
+
 ensure_operator_peering_entry() {
   local label="$1"
   local cidr="$2"
@@ -175,21 +192,17 @@ ensure_operator_peering_entry() {
       log "operator peering '$label' already allows $cidr"
       return
     fi
-    if [[ "$CA_NON_INTERACTIVE" == "1" && "$CA_ASSUME_YES" != "1" ]]; then
-      die "peering '$label' already exists with a different CIDR. Re-run with --yes to replace it."
+    if [[ "$CA_ASSUME_YES" != 1 && " ${CA_APPROVED_PEERING_REPLACEMENTS:-} " != *" $label "* ]]; then
+      die "peering '$label' already exists with a different CIDR. Approve replacement before deployment."
     fi
-    if [[ "$CA_ASSUME_YES" == "1" ]] || confirm "Replace operator peering '$label' with $cidr?" "y"; then
-      ca_cmd peering remove "$label"
-    else
-      die "operator peering replacement was declined"
-    fi
+    ca_cmd peering remove "$label"
   fi
   log "adding operator peering '$label' for $cidr"
   ca_cmd peering add --role operator --cidr "$cidr" --label "$label" --note "$note"
 }
 
-ensure_operator_peering() {
-  install -d -m 0700 "$CA_WORK_DIR"
+operator_peering_entries() {
+  local operation="$1"
   local allowed_cidrs="${CA_ALLOWED_CIDRS:-${CA_ALLOWED_CIDR:-}}"
   local cidr label idx=0
   [[ -n "$allowed_cidrs" ]] || die "operator CIDR list is empty"
@@ -200,13 +213,30 @@ ensure_operator_peering() {
     else
       label="ops-$idx"
     fi
-    ensure_operator_peering_entry "$label" "$cidr" "operator access CIDR selected by one-click installer"
+    "$operation" "$label" "$cidr" "operator access CIDR selected by one-click installer"
   done
   if [[ -n "${CA_DEPLOYER_CIDR:-}" ]] \
     && ! cidr_list_contains "$allowed_cidrs" "$CA_DEPLOYER_CIDR" \
     && ! cidr_list_contains "$allowed_cidrs" "0.0.0.0/0"; then
-    ensure_operator_peering_entry deployer "$CA_DEPLOYER_CIDR" "deployment host egress CIDR detected by one-click installer"
+    "$operation" deployer "$CA_DEPLOYER_CIDR" "deployment host egress CIDR detected by one-click installer"
   fi
+}
+
+prepare_operator_peering() {
+  CA_APPROVED_PEERING_REPLACEMENTS=""
+  if [[ "$CA_ASSUME_YES" != 1 && -f "$CA_STATE_DIR/peerings.yaml" ]]; then
+    local inspect_bin="$CA_BIN"
+    if [[ ! -x "$inspect_bin" ]]; then
+      inspect_bin="$(command -v confidential-agent)" ||
+        die "reviewing existing operator peerings requires an installed confidential-agent CLI; use --yes to approve replacement"
+    fi
+    CA_BIN="$inspect_bin" operator_peering_entries confirm_operator_peering_entry
+  fi
+}
+
+ensure_operator_peering() {
+  install -d -m 0700 "$CA_WORK_DIR"
+  operator_peering_entries ensure_operator_peering_entry
 }
 
 build_openclaw_image() {
@@ -488,14 +518,11 @@ run_install_only() {
 run_deploy_openclaw_vllm() {
   install_os_dependencies
   ensure_host_openclaw_runtime
-  ensure_aliyun_credentials
-  ensure_aliyun_cli_region
-  ensure_dingtalk_credentials
-  resolve_allowed_cidr
   ensure_shelter
   build_confidential_agent
   install_confidential_agent_cli
   ensure_native_tools
+  configure_aliyun_credentials
   prepare_openclaw_vllm_specs
   build_openclaw_image
   ensure_operator_peering
@@ -510,13 +537,11 @@ run_deploy_openclaw_vllm() {
 
 run_deploy_vllm_inference() {
   install_os_dependencies
-  ensure_aliyun_credentials
-  ensure_aliyun_cli_region
-  resolve_allowed_cidr
   ensure_shelter
   build_confidential_agent
   install_confidential_agent_cli
   ensure_native_tools
+  configure_aliyun_credentials
   prepare_vllm_inference_specs
   build_openclaw_image
   ensure_operator_peering
@@ -528,8 +553,8 @@ run_deploy_vllm_inference() {
 }
 
 run_cleanup_service() {
-  ensure_aliyun_credentials
   ensure_aliyun_cli_region
+  configure_aliyun_credentials
   ensure_shelter
   if [[ -x "$CA_BIN" ]]; then
     log "using Confidential Agent CLI for cleanup: $CA_BIN"
