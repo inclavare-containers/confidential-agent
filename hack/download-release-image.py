@@ -88,7 +88,28 @@ def anonymous_token(challenge, repository):
     return token
 
 
-def download_disk(source, part, blob, digest, size):
+def fetch_manifest(source):
+    location, digest = source.rsplit('@', 1)
+    host, repository = location.split('/', 1)
+    url = f'https://{host}/v2/{repository}/manifests/{digest}'
+    # Curl can suppress the 401 headers with --fail. Discover the Bearer
+    # challenge here before using --fail to keep errors out of the disk file.
+    args = (
+        '--max-time', '60', '--location', '--proto-redir', '=https',
+        '--header', 'Accept: application/vnd.oci.image.manifest.v1+json',
+    )
+    code, http, headers, body = request(url, *args)
+    challenge, token = '', None
+    if http == 401:
+        challenge = header(headers, 'www-authenticate')
+        token = anonymous_token(challenge, repository)
+        code, http, _, body = request(url, *args, token=token)
+    if code or http != 200:
+        raise TransferError(f'{host} OCI manifest transfer failed (HTTP {http}, curl {code})')
+    return json.loads(body), challenge, token
+
+
+def download_disk(source, part, blob, digest, size, challenge, token):
     if blob.is_file():
         if blob.stat().st_size == size and sha256(blob) == digest:
             return
@@ -97,8 +118,6 @@ def download_disk(source, part, blob, digest, size):
     host, repository = source.split('@', 1)[0].split('/', 1)
     speed, seconds = ('65536', '30') if host == 'ghcr.io' else ('1', '90')
     url = f'https://{host}/v2/{repository}/blobs/{digest}'
-    challenge = ''
-    token = None
     failures = 0
     while True:
         offset = part.stat().st_size if part.exists() else 0
@@ -143,20 +162,18 @@ def copy_layout(reference, release, work, oras):
         auth.flush()
         for source in (reference, mirror):
             try:
-                manifest = json.loads(subprocess.check_output([
-                    oras, 'manifest', 'fetch', '--registry-config', auth.name, source,
-                ], timeout=60))
+                manifest, challenge, token = fetch_manifest(source)
                 if manifest.get('artifactType') != 'application/vnd.shelter.artifact.v1' or not any(
                     layer['digest'] == disk and layer['size'] == size for layer in manifest.get('layers', [])
                 ):
                     raise ValueError('OCI artifact does not contain the disk described by the release')
-                download_disk(source, work / 'disk.part', blob, disk, size)
+                download_disk(source, work / 'disk.part', blob, disk, size, challenge, token)
                 subprocess.run([
                     oras, 'cp', '--recursive', '--to-oci-layout', '--from-registry-config',
                     auth.name, source, str(layout) + ':release',
                 ], stdout=sys.stderr, check=True)
                 return
-            except (subprocess.CalledProcessError, subprocess.TimeoutExpired, TransferError) as error:
+            except (subprocess.CalledProcessError, TransferError) as error:
                 if source == mirror:
                     raise
                 log(f'{error}; trying ghcr.1ms.run')
