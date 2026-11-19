@@ -41,7 +41,7 @@ printf fixture > %{{buildroot}}/usr/share/release-fixture/{name}
             cls.rpms[name] = cls.base/'build/RPMS/x86_64'/f'{name}-{version}-{release}.x86_64.rpm'
         cls.manifest = {'file':cls.rpms['shelter'].name,'sha256':fetch.digest(cls.rpms['shelter']),
                         'payload_sha256':subprocess.check_output(['rpm','-qp','--qf','%{PAYLOADDIGEST}',str(cls.rpms['shelter'])],text=True),
-                        'url':'https://github.com/example/project/releases/download/v0.3.0/'+cls.rpms['shelter'].name}
+                        'oci_repository':'ghcr.io/example/project/shelter-rpm'}
 
     @classmethod
     def tearDownClass(cls):
@@ -54,34 +54,38 @@ printf fixture > %{{buildroot}}/usr/share/release-fixture/{name}
         self.manifest_path = self.work/'shelter-rpm.json'
         self.manifest_path.write_text(json.dumps(self.manifest))
 
-    def fake_download(self, args, **kwargs):
-        self.assertEqual(args[0], 'curl')
-        shutil.copy2(self.rpms['shelter'], args[args.index('-o')+1])
-        return subprocess.CompletedProcess(args,0)
+    def mock_rpm_download(self, payload):
+        original = subprocess.run
+
+        def run(args, **kwargs):
+            tool = Path(args[0]).name
+            if tool == 'fetch-native-tools.sh':
+                self.assertEqual(args[-1], 'oras')
+            elif tool == 'oras':
+                self.assertEqual(args[-1], f"{self.manifest['oci_repository']}@sha256:{self.manifest['sha256']}")
+                config = Path(args[args.index('--registry-config') + 1])
+                self.assertEqual(json.loads(config.read_text()), {'auths': {}})
+                Path(args[args.index('--output') + 1]).write_bytes(payload)
+            else:
+                return original(args, **kwargs)
+            return subprocess.CompletedProcess(args, 0)
+
+        return patch.object(fetch.subprocess, 'run', side_effect=run)
 
     def test_download_then_verified_cache_without_network(self):
-        # Patch only curl; leave rpm's actual header/payload query intact.
         original = subprocess.run
-        def run(args, **kwargs):
-            return self.fake_download(args, **kwargs) if args[0]=='curl' else original(args, **kwargs)
-        with patch.object(fetch.subprocess,'run',side_effect=run):
+        with self.mock_rpm_download(self.rpms['shelter'].read_bytes()):
             path = fetch.resolve(self.manifest_path,self.work/'cache')
         self.assertEqual(fetch.digest(path),self.manifest['sha256'])
         def cached_run(args, **kwargs):
-            self.assertNotIn(args[0], ['curl', 'gh'], 'network unexpectedly used')
+            self.assertEqual(args[0], 'rpm', 'cached lookup ran a download command')
             return original(args, **kwargs)
         with patch.object(fetch.subprocess,'run',side_effect=cached_run):
             self.assertEqual(fetch.resolve(self.manifest_path,self.work/'cache'),path)
 
     def test_bad_download_never_populates_cache(self):
-        original = subprocess.run
-        def run(args, **kwargs):
-            if args[0] == 'curl':
-                Path(args[args.index('-o')+1]).write_bytes(b'corrupted download')
-                return subprocess.CompletedProcess(args, 0)
-            return original(args, **kwargs)
-        with patch.object(fetch.subprocess,'run',side_effect=run):
-            with self.assertRaisesRegex(ValueError, 'Unable to download'):
+        with self.mock_rpm_download(b'corrupted download'):
+            with self.assertRaisesRegex(ValueError, 'SHA256 mismatch'):
                 fetch.resolve(self.manifest_path, self.work/'cache')
         self.assertFalse((self.work/'cache'/self.manifest['sha256']/self.manifest['file']).exists())
 

@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-destination="${1:?usage: packaging/fetch-native-tools.sh OUTPUT_DIR [CACHE_DIR]}"
+destination="${1:?usage: packaging/fetch-native-tools.sh OUTPUT_DIR [CACHE_DIR] [TOOL]}"
 default_cache="$root/target/native-tool-downloads"
 if [[ ! -f "$root/Cargo.toml" ]]; then
   default_cache="${XDG_CACHE_HOME:-${HOME:-/root}/.cache}/confidential-agent/native-tool-downloads"
 fi
 cache="${2:-$default_cache}"
+tool="${3:-}"
 [[ "$(uname -m)" == x86_64 ]] || { echo 'Native tool pins currently support x86_64' >&2; exit 1; }
 mkdir -p "$destination" "$cache"
 work="$(mktemp -d "$cache/.fetch.XXXXXX")"
@@ -14,6 +15,7 @@ trap 'rm -rf "$work"' EXIT
 
 while read -r name version sha256 url; do
   [[ -n "$name" && "$name" != \#* ]] || continue
+  [[ -z "$tool" || "$name" == "$tool" ]] || continue
   archive="$cache/$name-$version"
   if ! printf '%s  %s\n' "$sha256" "$archive" | sha256sum -c - >/dev/null 2>&1; then
     urls=("$url")

@@ -4,5 +4,5 @@
   "source_archive_sha256": "b1a47f9afae7c1ff6f190293c982e19db1d19600601540c105a8e313fdbae22c",
   "sha256": "a442455508408bcc44136ed37ea9914f15d18cd5feff0faaaaafce57f9f4d8bc",
   "payload_sha256": "9161d750e66a8f7707dd65bcf4b18101ade0ceea3ba01e5ddb3deb6f1e6fe0d9",
-  "url": "https://github.com/inclavare-containers/confidential-agent/releases/download/shelter-v0.3.2-4/shelter-0.3.2-4.al8.x86_64.rpm"
+  "oci_repository": "ghcr.io/inclavare-containers/confidential-agent/shelter-rpm"
 }
