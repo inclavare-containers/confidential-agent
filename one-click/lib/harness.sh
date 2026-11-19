@@ -52,6 +52,9 @@ resolve_harness_options() {
         warn "unsupported harness: $CA_HARNESS"
       done
     fi
+    if [[ -z "${CA_IMAGE_SOURCE:-}" ]]; then
+      prompt_value CA_IMAGE_SOURCE 'Image source (prebuilt/build)' prebuilt
+    fi
     if [[ -z "${CA_ACCESS_METHOD:-}${CA_HARNESS_MODE:-}" ]]; then
       local choices
       choices="$(harness_access_options "$CA_HARNESS")"
@@ -72,6 +75,7 @@ resolve_harness_options() {
   CA_HARNESS="${CA_HARNESS:-openclaw}"
   CA_MODEL="${CA_MODEL:-$(ca_software_version bailian_model)}"
   CA_API_BASE_URL="${CA_API_BASE_URL:-$(default_api_base_url)}"
+  CA_IMAGE_SOURCE="${CA_IMAGE_SOURCE:-prebuilt}"
   if [[ "$CA_MODE" == deploy-openclaw ]] && is_supported_harness "$CA_HARNESS"; then
     normalize_harness_access
   fi
@@ -108,40 +112,83 @@ selected_host_client() {
   esac
 }
 
-resolve_cpu_image() {
-  local artifact="$CA_ARTIFACT"
-  if [[ "$CA_IMAGE_SOURCE" == build ]]; then
-    local builder="$CA_WORK_DIR/allinone-builder"
-    CA_IMAGE_RELEASE="$builder/image-release.json"
-    if [[ "$CA_SKIP_BUILD" != 1 ]]; then
-      local args=(--reference-values "$CA_REFERENCE_VALUES" --slsa-generator "$CA_SLSA_GENERATOR")
-      if [[ -n "${CA_COSIGN_KEY:-}" ]]; then args+=(--cosign-key "$CA_COSIGN_KEY"); fi
-      (cd "$ROOT_DIR" && ca_cmd init --stage build --non-interactive --output-dir "$CA_WORK_DIR" --force "${args[@]}")
-      (cd "$builder" && ca_cmd build --spec "$builder/build.yaml")
-    fi
-    mkdir -p "$builder"
-    ca_cmd image export allinone-builder --output "$CA_IMAGE_RELEASE"
-    CA_RELEASE_DIGEST="sha256:$(sha256sum "$CA_IMAGE_RELEASE" | cut -d' ' -f1)"
-    if [[ "$CA_SKIP_DEPLOY" != 1 ]]; then
-      ca_cmd image publish allinone-builder --region "$CA_REGION"
-    fi
-    return
-  fi
+cpu_builder_id() {
+  printf 'allinone-builder-%s\n' "$CA_SERVICE_ID"
+}
 
-  if [[ -z "$CA_IMAGE_RELEASE" ]]; then
-    local version metadata reference
-    version="${CA_RELEASE_VERSION:-$("$CA_BIN" --version | awk '{print $2}')}"
-    local args=(--output-dir "${CA_RELEASE_IMAGE_CACHE:-$CA_STATE_DIR/cache/release-image}/v${version#v}" --version "${version#v}")
-    if [[ -n "${CA_OFFICIAL_METADATA_DIR:-}" ]]; then args+=(--from-dir "$CA_OFFICIAL_METADATA_DIR"); fi
-    metadata="$("$ROOT_DIR/hack/resolve-release-image.sh" "${args[@]}")"
-    CA_IMAGE_RELEASE="$(jq -er .image_release <<<"$metadata")"
-    reference="$(jq -er .oci_reference <<<"$metadata")"
-    CA_RELEASE_DIGEST="${CA_RELEASE_DIGEST:-$(jq -er .release_digest <<<"$metadata")}"
-    artifact="${artifact:-${CA_GHCR_MIRROR:-ghcr.1ms.run}/${reference#ghcr.io/}}"
+prepare_cpu_builder() {
+  local args=(--service-id "$(cpu_builder_id)" --reference-values "$CA_REFERENCE_VALUES" --slsa-generator "$CA_SLSA_GENERATOR")
+  if [[ -n "${CA_COSIGN_KEY:-}" ]]; then args+=(--cosign-key "$CA_COSIGN_KEY"); fi
+  (cd "$ROOT_DIR" && ca_cmd init --stage build --non-interactive --output-dir "$CA_WORK_DIR" --force "${args[@]}")
+}
+
+build_cpu_image() {
+  local builder="$CA_WORK_DIR/$(cpu_builder_id)"
+  (cd "$builder" && ca_cmd build --spec "$builder/build.yaml")
+}
+
+export_cpu_image() {
+  CA_IMAGE_RELEASE="$CA_WORK_DIR/$(cpu_builder_id)/image-release.json"
+  ca_cmd image export "$(cpu_builder_id)" --output "$CA_IMAGE_RELEASE"
+  CA_RELEASE_DIGEST="sha256:$(sha256sum "$CA_IMAGE_RELEASE" | cut -d' ' -f1)"
+}
+
+resolve_cpu_release_metadata() {
+  if [[ -n "$CA_IMAGE_RELEASE" ]]; then return; fi
+  local metadata version
+  version="${CA_RELEASE_VERSION:-$("$CA_BIN" --version | awk '{print $2}')}"
+  CA_RELEASE_VERSION="${version#v}"
+  CA_DOWNLOAD_DIR="$CA_WORK_DIR/prebuilt/v$CA_RELEASE_VERSION"
+  local args=(--output-dir "$CA_DOWNLOAD_DIR" --version "$CA_RELEASE_VERSION")
+  if [[ -n "${CA_OFFICIAL_METADATA_DIR:-}" ]]; then args+=(--from-dir "$CA_OFFICIAL_METADATA_DIR"); fi
+  metadata="$("$ROOT_DIR/hack/resolve-release-image.sh" "${args[@]}")"
+  CA_IMAGE_RELEASE="$(jq -er .image_release <<<"$metadata")"
+  CA_RELEASE_DIGEST="${CA_RELEASE_DIGEST:-$(jq -er .release_digest <<<"$metadata")}"
+}
+
+find_cpu_publication() {
+  if [[ -n "$CA_IMAGE_ID" ]]; then return; fi
+  CA_IMAGE_ID="$(ca_cmd image resolve --image-release "$CA_IMAGE_RELEASE" \
+    --release-digest "$CA_RELEASE_DIGEST" --region "$CA_REGION")"
+  if [[ -n "$CA_IMAGE_ID" ]]; then log "reusing ECS image $CA_IMAGE_ID in $CA_REGION"; fi
+}
+
+download_cpu_image() {
+  local downloaded
+  downloaded="$(CA_TOOLS_DIR="$CA_TOOLS_DIR" python3.11 "$ROOT_DIR/hack/download-release-image.py" --output-dir "$CA_DOWNLOAD_DIR" \
+    --version "$CA_RELEASE_VERSION" --from-dir "${CA_IMAGE_RELEASE%/*}" --region "$CA_REGION" --format json)"
+  CA_ARTIFACT="$(jq -er .artifact <<<"$downloaded")"
+}
+
+publish_cpu_image() {
+  local receipt="$CA_WORK_DIR/published-$CA_SERVICE_ID.json"
+  if [[ "$CA_IMAGE_SOURCE" == build ]]; then
+    ca_cmd image publish "$(cpu_builder_id)" --region "$CA_REGION" --output "$receipt"
+  else
+    ca_cmd image publish --artifact "$CA_ARTIFACT" --image-release "$CA_IMAGE_RELEASE" \
+      --release-digest "$CA_RELEASE_DIGEST" --region "$CA_REGION" --output "$receipt"
   fi
-  if [[ "$CA_SKIP_DEPLOY" != 1 && -z "$CA_IMAGE_ID" && -n "$artifact" ]]; then
-    ca_cmd image publish --image-release "$CA_IMAGE_RELEASE" --release-digest "$CA_RELEASE_DIGEST" \
-      --artifact "$artifact" --region "$CA_REGION"
+  CA_IMAGE_ID="$(jq -er .image_id "$receipt")"
+}
+
+resolve_cpu_image() {
+  if [[ "$CA_IMAGE_SOURCE" == build ]]; then
+    if [[ "$CA_SKIP_BUILD" != 1 ]]; then
+      cpu_step build-config prepare_cpu_builder
+      cpu_step build build_cpu_image
+    fi
+    cpu_step export export_cpu_image
+  else
+    cpu_step release-metadata resolve_cpu_release_metadata
+  fi
+  if [[ "$CA_SKIP_DEPLOY" == 1 ]]; then return; fi
+  cpu_step image-lookup find_cpu_publication
+  if [[ -n "$CA_IMAGE_ID" ]]; then return; fi
+  if [[ "$CA_IMAGE_SOURCE" == prebuilt && -z "$CA_ARTIFACT" && -n "${CA_DOWNLOAD_DIR:-}" ]]; then
+    cpu_step download download_cpu_image
+  fi
+  if [[ "$CA_IMAGE_SOURCE" == build || -n "$CA_ARTIFACT" ]]; then
+    cpu_step publish publish_cpu_image
   fi
 }
 
@@ -150,8 +197,7 @@ prepare_cpu_specs() {
     openclaw:*|hermes:gateway|opencode:web) ensure_gateway_token "cpu-$CA_SERVICE_ID" ;;
     codex:app-server) ensure_gateway_token "cpu-$CA_SERVICE_ID" base64 ;;
   esac
-  export CA_BIN CA_AGENTD_BIN CA_GATEWAY_BIN CA_PEP_BIN
-  resolve_cpu_image
+  export CA_BIN CA_AGENTD_BIN CA_GATEWAY_BIN CA_PEP_BIN CA_GATEWAY_TOKEN
 
   local args=(
     --stage deploy
@@ -175,7 +221,6 @@ prepare_cpu_specs() {
 
   if [[ "$CA_HARNESS" == openclaw ]]; then
     args+=(
-      --gateway-token "$CA_GATEWAY_TOKEN"
       --openclaw-version "$CA_OPENCLAW_VERSION"
       --node-version "$CA_NODE_VERSION"
       --npm-registry "$CA_NPM_REGISTRY"
@@ -184,19 +229,13 @@ prepare_cpu_specs() {
       args+=(--disable-pep)
     fi
     if [[ "${CA_ENABLE_DINGTALK:-0}" == "1" ]]; then
-      args+=(
-        --enable-dingtalk
-        --dingtalk-client-id "$DINGTALK_BOT_CLIENT_ID"
-        --dingtalk-client-secret "$DINGTALK_BOT_CLIENT_SECRET"
-      )
+      args+=(--enable-dingtalk)
     fi
-  elif [[ -n "${CA_GATEWAY_TOKEN:-}" ]]; then
-    args+=(--gateway-token "$CA_GATEWAY_TOKEN")
   fi
 
   if [[ "$CA_HARNESS" != qodercli ]]; then
+    export BAILIAN_API_KEY="$DASHSCOPE_API_KEY"
     args+=(
-      --dashscope-api-key "$DASHSCOPE_API_KEY"
       --model "$CA_MODEL"
       --dashscope-base-url "$CA_API_BASE_URL"
       --dashscope-anthropic-base-url "$CA_API_BASE_URL"
@@ -231,6 +270,9 @@ Deployment summary
 EOF
   if [[ -n "${CA_IMAGE_ID:-}" ]]; then
     printf '  image_id:     %s\n' "$CA_IMAGE_ID"
+  fi
+  if [[ -n "${CA_DOWNLOAD_DIR:-}" && -d "${CA_ARTIFACT:-}" ]]; then
+    printf '  local image:  %s\n' "$CA_ARTIFACT"
   fi
   if [[ "$CA_HARNESS_MODE" == cli ]]; then
     if [[ "$CA_HARNESS" == dsh ]]; then
@@ -283,9 +325,11 @@ EOF
         fi
         ;;
       dsh)
-        cat <<EOF
-  web:          $CA_DSH_WEB_URL
-EOF
+        local web_url="${CA_DSH_WEB_URL:-}"
+        if [[ -z "$web_url" ]]; then
+          web_url="$(ca_cmd ssh "$CA_SERVICE_ID" -- cai-agent --web-url --port "$port")"
+        fi
+        printf '  web:          %s\n' "$web_url"
         ;;
     esac
     cat <<EOF
@@ -314,38 +358,83 @@ EOF
   fi
 }
 
+collect_cpu_inputs() {
+  if [[ "$CA_SKIP_DEPLOY" != 1 ]] && ! cpu_step_done deploy; then
+    collect_aliyun_credentials
+    if [[ "${CA_CPU_RESUMING:-0}" != 1 ]]; then
+      resolve_allowed_cidr
+      prepare_operator_peering
+    fi
+  fi
+  if ! cpu_step_done instance-config; then
+    if [[ "$CA_HARNESS" != qodercli ]]; then ensure_bailian_credentials; fi
+    if [[ "$CA_HARNESS" == openclaw ]]; then
+      if [[ "${CA_CPU_RESUMING:-0}" != 1 ]]; then resolve_dingtalk_enablement; fi
+      ensure_dingtalk_credentials
+    fi
+    if [[ "${CA_CPU_RESUMING:-0}" == 1 && "${CA_CPU_GATEWAY_TOKEN_REQUIRED:-0}" == 1 \
+      && -z "${CA_GATEWAY_TOKEN:-}" ]]; then
+      [[ "$CA_NON_INTERACTIVE" != 1 ]] || die 'set CA_GATEWAY_TOKEN to resume this service'
+      prompt_secret CA_GATEWAY_TOKEN 'Gateway token'
+    fi
+    if [[ -n "${CA_GATEWAY_TOKEN:-}" ]]; then CA_CPU_GATEWAY_TOKEN_REQUIRED=1; fi
+  fi
+}
+
+bootstrap_cpu_source() {
+  prepare_one_click_source
+  CA_CPU_ROOT="$ROOT_DIR"
+}
+
+deploy_cpu_service() {
+  if [[ "${CA_CPU_RESUMING:-0}" == 1 ]]; then
+    local phase
+    phase="$(ca_cmd status --json | jq -r --arg id "$CA_SERVICE_ID" '.[] | select(.service_id == $id) | .phase')"
+    case "$phase" in
+      deploying)
+        die "service '$CA_SERVICE_ID' is still deploying and the cloud outcome is unknown; inspect the existing Shelter deployment before continuing"
+        ;;
+      deployed|activating)
+        (cd "$CA_PROJECT_DIR" && ca_cmd deploy --resume --spec "$CA_SPEC_PATH")
+        return
+        ;;
+      active)
+        log "service '$CA_SERVICE_ID' is already active"
+        return
+        ;;
+    esac
+  fi
+  log "deploying $CA_SERVICE_LABEL to Aliyun"
+  (cd "$CA_PROJECT_DIR" && ca_cmd deploy --spec "$CA_SPEC_PATH")
+}
+
 run_deploy_cpu() {
-  install_os_dependencies
-  ensure_host_access_client
-  if [[ "$CA_SKIP_DEPLOY" != 1 ]]; then
-    ensure_aliyun_credentials
+  cpu_step bootstrap bootstrap_cpu_source
+  cpu_step dependencies install_os_dependencies
+  cpu_step host-client ensure_host_access_client
+  cpu_step shelter ensure_shelter
+  cpu_step cagent-build build_confidential_agent
+  cpu_step cagent-install install_confidential_agent_cli
+  cpu_step tools ensure_native_tools
+  if [[ "$CA_SKIP_DEPLOY" != 1 ]] && ! cpu_step_done deploy; then
     ensure_aliyun_cli_region
-    resolve_allowed_cidr
+    configure_aliyun_credentials
   fi
-  if [[ "$CA_HARNESS" != qodercli ]]; then
-    ensure_bailian_credentials
-  fi
-  if [[ "$CA_HARNESS" == openclaw ]]; then
-    ensure_dingtalk_credentials
-  fi
-  ensure_shelter
-  build_confidential_agent
-  install_confidential_agent_cli
-  ensure_native_tools
-  prepare_cpu_specs
+  resolve_cpu_image
+  cpu_step instance-config prepare_cpu_specs
   if [[ "$CA_SKIP_DEPLOY" == 1 ]]; then
     log "generated $CA_SPEC_PATH (--skip-deploy)"
-    return
+  else
+    cpu_step peering ensure_operator_peering
+    cpu_step deploy deploy_cpu_service
+    cpu_step readiness wait_for_live_status
+    if [[ -n "$(harness_guest_port)" && "$CA_START_CONNECT" == 1 ]]; then
+      if [[ "$CA_HARNESS" == openclaw ]]; then
+        IFS= read -r CA_GATEWAY_TOKEN <"$CA_WORK_DIR/secrets/cpu-$CA_SERVICE_ID.token"
+      fi
+      cpu_step access start_connect
+    fi
+    print_cpu_summary
   fi
-  ensure_operator_peering
-  deploy_openclaw_service
-  sync_active_openclaw_resources
-  if [[ "${CA_ACTIVE_RESOURCES_SYNCED:-0}" == 1 ]]; then
-    ca_cmd ssh "$CA_SERVICE_ID" -- systemctl restart cai-allinone.service
-  fi
-  wait_for_live_status
-  if [[ -n "$(harness_guest_port)" ]]; then
-    start_connect
-  fi
-  print_cpu_summary
+  rm -- "$(cpu_task_path "$CA_SERVICE_ID")"
 }

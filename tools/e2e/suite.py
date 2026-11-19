@@ -321,7 +321,7 @@ class Suite:
             lease = self.environment.get("E2E_FIXTURE_CONSUMER_LEASE")
             deadline = time.monotonic() + int(self.environment.get("E2E_FIXTURE_LEASE_TIMEOUT_SEC", "28800"))
             if lease and Path(lease).exists():
-                print("Waiting for the independent signed-image consumers to finish", flush=True)
+                print("Waiting for the independent published-image consumers to finish", flush=True)
                 for producer in producers.values():
                     producer["external_consumers_pending"] = True
                 write_json(self.work / "results.json", self.results)
@@ -329,7 +329,7 @@ class Suite:
                     if self.stop.is_set() or time.monotonic() >= deadline:
                         for producer in producers.values():
                             producer.update(status="failed", cleanup_complete=False,
-                                            reason="independent consumers still retain the signed fixtures")
+                                            reason="independent consumers still retain the image fixtures")
                         write_json(self.work / "results.json", self.results)
                         return False
                     self.stop.wait(1)

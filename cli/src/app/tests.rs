@@ -324,7 +324,6 @@ fn failed_deploy_records_attempt_before_apply_and_destroy_uses_it() {
         let result = cmd_deploy(
             &cli,
             &DeployArgs {
-                skip_signature_verification: false,
                 image_id: None,
                 resume: false,
                 spec,
@@ -1653,7 +1652,6 @@ resources: {}
     let err = cmd_deploy(
         &cli,
         &DeployArgs {
-            skip_signature_verification: false,
             image_id: None,
             resume: false,
             spec: spec.clone(),
@@ -1683,7 +1681,6 @@ resources: {}
     cmd_deploy(
         &cli,
         &DeployArgs {
-            skip_signature_verification: false,
             image_id: None,
             resume: false,
             spec,
@@ -1943,7 +1940,6 @@ resources: {}
     cmd_deploy(
         &cli,
         &DeployArgs {
-            skip_signature_verification: false,
             image_id: None,
             resume: false,
             spec,
@@ -2483,13 +2479,11 @@ resources: {}
     let id = "a".repeat(64);
     prepared.image = Some(images::ImageDeployment {
         source: confidential_agent_core::spec::PublishedImageSpec {
-            release_digest: None,
+            release_digest: format!("sha256:{}", "1".repeat(64)),
             release: temp.path().join("release.json"),
-            trusted_key: temp.path().join("publisher.pem"),
             manifest: Some(format!("sha256:{}", "0".repeat(64))),
             legacy_account_id: None,
             image_id: None,
-            skip_signature_verification: false,
         },
         image_id: "m-shared".into(),
     });
@@ -3877,7 +3871,6 @@ resources: {}
     let err = cmd_deploy(
         &cli,
         &DeployArgs {
-            skip_signature_verification: false,
             image_id: None,
             resume: false,
             spec,
@@ -3950,7 +3943,6 @@ resources: {}
     let err = cmd_deploy(
         &cli,
         &DeployArgs {
-            skip_signature_verification: false,
             image_id: None,
             resume: false,
             spec,
@@ -4040,7 +4032,6 @@ resources: {}
     let deploy_result = cmd_deploy(
         &cli,
         &DeployArgs {
-            skip_signature_verification: false,
             image_id: None,
             resume: false,
             spec,
@@ -5287,7 +5278,7 @@ fn candidate_shelter_accepts_ca_contracts_without_allocating_resources() {
         ]);
         assert!(
             release_validation.status.success(),
-            "candidate rejected signed-image runtime: {}",
+            "candidate rejected published-image runtime: {}",
             String::from_utf8_lossy(&release_validation.stderr)
         );
         let output = invoke(vec![
@@ -5368,10 +5359,9 @@ fn candidate_shelter_accepts_ca_contracts_without_allocating_resources() {
                 "image".into(),
                 "inspect-release".into(),
                 root.path().join("missing-release.json").into_os_string(),
-                "--trusted-key".into(),
-                root.path().join("missing-key.pem").into_os_string(),
-                "--region".into(),
-                "cn-beijing".into(),
+                "--metadata-only".into(),
+                "--release-digest".into(),
+                format!("sha256:{}", "a".repeat(64)).into(),
             ],
             vec![
                 "image".into(),
@@ -5384,10 +5374,7 @@ fn candidate_shelter_accepts_ca_contracts_without_allocating_resources() {
                 "image".into(),
                 "release".into(),
                 "missing-image".into(),
-                "--mapping".into(),
-                root.path().join("missing-mapping.json").into_os_string(),
-                "--signing-key".into(),
-                root.path().join("missing-signing-key.pem").into_os_string(),
+                "--portable".into(),
                 "--runtime-metadata".into(),
                 root.path().join("missing-runtime.json").into_os_string(),
                 "--output".into(),
@@ -5398,8 +5385,8 @@ fn candidate_shelter_accepts_ca_contracts_without_allocating_resources() {
                 "-d".into(),
                 "--release".into(),
                 root.path().join("missing-release.json").into_os_string(),
-                "--trusted-key".into(),
-                root.path().join("missing-key.pem").into_os_string(),
+                "--release-digest".into(),
+                format!("sha256:{}", "a".repeat(64)).into(),
                 "-c".into(),
                 release_runtime.into_os_string(),
                 "--target".into(),

@@ -1,5 +1,4 @@
 """Shared lifecycle and private evidence for cloud matrix cases."""
-import base64
 import json
 import os
 from pathlib import Path
@@ -87,21 +86,16 @@ def release_selection(directory, region):
     directory = Path(directory).resolve()
     path = directory / "image-release.json"
     release = json.loads(path.read_text())
-    if "payload" in release:
-        release = json.loads(base64.b64decode(release["payload"]))
-        authentication = {"trusted_key": str(directory / "publisher.pem")}
-    else:
-        authentication = {"release_digest": (directory / "image-release.sha256").read_text().strip()}
     if not any(value["region"] == region for value in release["images"]):
         raise ValueError("release has no image mapping for region " + region)
-    return {"release": str(path), "manifest": release["manifest"]["manifest_digest"], **authentication}
+    return {"release": str(path), "manifest": release["manifest"]["manifest_digest"],
+            "release_digest": (directory / "image-release.sha256").read_text().strip()}
 
 
 def copy_release_fixture(source, destination, region):
-    image = release_selection(source, region)
+    release_selection(source, region)
     destination.mkdir(mode=0o700)
-    metadata = "publisher.pem" if "trusted_key" in image else "image-release.sha256"
-    for name in ["image-release.json", metadata]:
+    for name in ["image-release.json", "image-release.sha256"]:
         shutil.copyfile(source / name, destination / name)
 
 

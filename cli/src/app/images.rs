@@ -55,19 +55,8 @@ pub(super) fn import(cli: &Cli, spec: &AgentSpec) -> Result<BuildManifest> {
     fs::create_dir_all(&paths.artifacts_dir)?;
     let mut source = source.clone();
     let release = paths.artifacts_dir.join("image-release.json");
-    let trusted_key = paths.artifacts_dir.join("image-publisher.pem");
-    // Authenticate the snapshots that this deployment will use, including on
-    // later reconciliation. Never copy producer state or private signing keys.
+    // Authenticate the release snapshot used by this deployment and later reconciliation.
     copy_metadata(&source.release, &release, 16 * 1024 * 1024)?;
-    if source.release_digest.is_some() {
-        source.trusted_key = PathBuf::new();
-    } else if !source.skip_signature_verification {
-        copy_metadata(&source.trusted_key, &trusted_key, 64 * 1024)?;
-        source.trusted_key = trusted_key;
-    } else {
-        source.trusted_key = PathBuf::new();
-        println!("[ca] release signature verification explicitly skipped; runtime attestation remains required");
-    }
     source.release = release;
     let mut command = shelter_command(cli, &[])?;
     command
@@ -78,13 +67,7 @@ pub(super) fn import(cli: &Cli, spec: &AgentSpec) -> Result<BuildManifest> {
     if let Some(digest) = &source.manifest {
         command.arg("--expect-manifest").arg(digest);
     }
-    if let Some(digest) = &source.release_digest {
-        command.arg("--release-digest").arg(digest);
-    } else if source.skip_signature_verification {
-        command.arg("--skip-signature-verification");
-    } else {
-        command.arg("--trusted-key").arg(&source.trusted_key);
-    }
+    command.arg("--release-digest").arg(&source.release_digest);
     if source.image_id.is_none() {
         source.image_id = publish::published_override(cli, &source, &spec.deploy.region)?;
     }
@@ -210,7 +193,6 @@ pub(super) fn export(
     cli: &Cli,
     service: &str,
     image_id: Option<&str>,
-    signing_key: Option<&Path>,
     output: &Path,
     region: Option<&str>,
     variant: Option<&str>,
@@ -267,14 +249,12 @@ pub(super) fn export(
         "image".into(),
         "release".into(),
         built.shelter_build_id.into(),
+        "--portable".into(),
         "--output".into(),
         output.into(),
         "--runtime-metadata".into(),
         runtime_metadata.into_os_string(),
     ];
-    if let Some(key) = signing_key {
-        args.extend(["--signing-key".into(), key.into()]);
-    }
     if let Some(id) = image_id {
         write_json_atomic(
             &mapping,
@@ -355,12 +335,7 @@ mod tests {
         )
         .unwrap();
         set_mode(&shelter, 0o755).unwrap();
-        fs::write(
-            root.path().join("release.json"),
-            "signed publisher metadata",
-        )
-        .unwrap();
-        fs::write(root.path().join("publisher.pem"), "trusted public key").unwrap();
+        fs::write(root.path().join("release.json"), "release metadata").unwrap();
         let cli = Cli::parse_from([
             "confidential-agent",
             "--state-dir",
@@ -374,7 +349,8 @@ mod tests {
 
     fn instance_spec(root: &Path, id: &str) -> PathBuf {
         let path = root.join(format!("{id}.yaml"));
-        fs::write(&path, format!("schema: confidential-agent/v1\nservice:\n  id: {id}\n  ports: []\n  app_service: cai-allinone.service\n  ssh: true\ndeploy:\n  provider: aliyun\n  instance_type: ecs.g9i.xlarge\n  region: cn-beijing\n  zone_id: cn-beijing-i\n  disk_gb: 80\n  image:\n    release: ./release.json\n    trusted_key: ./publisher.pem\n    manifest: sha256:{}\n    account_id: '1234567890'\nattestation:\n  tee: tdx\n  mode: challenge\n  reference_values: sample\nresources: {{}}\n", "a".repeat(64))).unwrap();
+        let digest = sha256_file(&root.join("release.json")).unwrap();
+        fs::write(&path, format!("schema: confidential-agent/v1\nservice:\n  id: {id}\n  ports: []\n  app_service: cai-allinone.service\n  ssh: true\ndeploy:\n  provider: aliyun\n  instance_type: ecs.g9i.xlarge\n  region: cn-beijing\n  zone_id: cn-beijing-i\n  disk_gb: 80\n  image:\n    release: ./release.json\n    release_digest: sha256:{digest}\n    manifest: sha256:{}\n    account_id: '1234567890'\nattestation:\n  tee: tdx\n  mode: challenge\n  reference_values: sample\nresources: {{}}\n", "a".repeat(64))).unwrap();
         path
     }
 
@@ -420,31 +396,24 @@ mod tests {
     }
 
     #[test]
-    fn deployment_flag_skips_only_signature_and_needs_no_key_file() {
+    fn deployment_passes_release_digest_and_renders_image_override() {
         let (root, cli, inspected) = fixture();
-        let path = instance_spec(root.path(), "unsigned-consumer");
-        let content = fs::read_to_string(&path)
-            .unwrap()
-            .replace("    trusted_key: ./publisher.pem\n", "");
-        fs::write(&path, content).unwrap();
-        fs::remove_file(root.path().join("publisher.pem")).unwrap();
-        assert!(deployment_snapshot(&path).is_err());
-        let snapshot =
-            deployment_snapshot_with_image_options(&path, true, Some("m-shared-image")).unwrap();
+        let path = instance_spec(root.path(), "digest-consumer");
+        let snapshot = deployment_snapshot_with_image_id(&path, Some("m-shared-image")).unwrap();
         let manifest = import(&cli, &snapshot.spec).unwrap();
         let image = manifest.image.as_ref().unwrap();
-        assert!(image.source.skip_signature_verification);
-        assert!(image.source.trusted_key.as_os_str().is_empty());
         let prepared = prepare(
-            &context_paths(&cli.state_dir, "unsigned-consumer"),
+            &context_paths(&cli.state_dir, "digest-consumer"),
             &snapshot.spec,
             &manifest,
             &PrepareOptions::default(),
         )
         .unwrap();
         let args = deploy_shelter_args(&prepared);
-        assert!(args.iter().any(|a| a == "--skip-signature-verification"));
-        assert!(!args.iter().any(|a| a == "--trusted-key"));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair[0] == "--release-digest"
+                && pair[1] == image.source.release_digest.as_str()));
         let rendered: serde_yaml::Value =
             serde_yaml::from_slice(&fs::read(prepared.runtime_config()).unwrap()).unwrap();
         assert!(rendered.get("artifact").is_none());
@@ -522,7 +491,6 @@ mod tests {
             commands::cmd_deploy(
                 &cli,
                 &DeployArgs {
-                    skip_signature_verification: false,
                     image_id: None,
                     resume: false,
                     spec: path.clone(),
@@ -551,11 +519,8 @@ mod tests {
             .unwrap();
             let args = commands::deploy_shelter_args(&prepared);
             assert!(args.iter().any(|arg| arg == "--release"));
-            assert!(args.iter().any(|arg| arg == "--trusted-key"));
+            assert!(args.iter().any(|arg| arg == "--release-digest"));
             assert!(args.iter().any(|arg| arg == "--expect-manifest"));
-            assert!(!args
-                .iter()
-                .any(|arg| arg == "--skip-signature-verification"));
             let state = build_service_state(
                 &cli.state_dir,
                 &path,
@@ -597,7 +562,6 @@ mod tests {
             commands::cmd_deploy(
                 &cli,
                 &DeployArgs {
-                    skip_signature_verification: false,
                     image_id: None,
                     resume: false,
                     spec: path.clone(),
@@ -680,7 +644,6 @@ mod tests {
         );
         assert_ne!(passphrases[0], passphrases[1]);
         fs::remove_file(root.path().join("release.json")).unwrap();
-        fs::remove_file(root.path().join("publisher.pem")).unwrap();
         for state in states {
             let paths = context_paths(&cli.state_dir, &state.service_id);
             let before = fs::read(&paths.rendered_config).unwrap();
@@ -706,7 +669,7 @@ mod tests {
             "manifest",
             "region",
             "reference",
-            "signature",
+            "release-digest",
             "protocol",
             "disk",
             "capability",
@@ -736,7 +699,7 @@ mod tests {
                 }
                 _ => fs::write(
                     &cli.shelter_bin,
-                    "#!/bin/sh\necho 'invalid signature' >&2\nexit 1\n",
+                    "#!/bin/sh\necho 'release digest mismatch' >&2\nexit 1\n",
                 )
                 .unwrap(),
             }
@@ -745,7 +708,6 @@ mod tests {
                 commands::cmd_deploy(
                     &cli,
                     &DeployArgs {
-                        skip_signature_verification: false,
                         image_id: None,
                         resume: false,
                         spec: path,
@@ -769,7 +731,6 @@ mod tests {
         let (root, cli, _) = fixture();
         let path = instance_spec(root.path(), "agent-a");
         let args = DeployArgs {
-            skip_signature_verification: false,
             image_id: None,
             spec: path.clone(),
             resume: true,
@@ -793,7 +754,6 @@ mod tests {
         commands::cmd_deploy(
             &cli,
             &DeployArgs {
-                skip_signature_verification: false,
                 image_id: None,
                 resume: false,
                 render_only: true,
@@ -810,7 +770,6 @@ mod tests {
         assert!(commands::cmd_deploy(
             &cli,
             &DeployArgs {
-                skip_signature_verification: false,
                 image_id: None,
                 spec: path,
                 resume: true,
@@ -841,7 +800,6 @@ mod tests {
         let mut state = crate::app::tests::local_state("agent-a", vec![], vec![]);
         state.build.image_name = spec.image_id().into();
         fs::remove_file(root.path().join("release.json")).unwrap();
-        fs::remove_file(root.path().join("publisher.pem")).unwrap();
         let relocated = root.path().join("moved-project");
         fs::create_dir(&relocated).unwrap();
         let moved_spec = relocated.join("agent-a.yaml");
@@ -882,15 +840,15 @@ mod tests {
         );
         fs::copy(paths.secrets_dir.join("disk_passphrase"), &moved_disk).unwrap();
         fs::write(
-            &current.deploy.image.as_ref().unwrap().trusted_key,
-            "different publisher",
+            &current.deploy.image.as_ref().unwrap().release,
+            "different release",
         )
         .unwrap();
         assert!(
             validated_injection_spec(&state, &manifest, &current, &paths)
                 .unwrap_err()
                 .to_string()
-                .contains("publisher key")
+                .contains("committed image release")
         );
     }
 

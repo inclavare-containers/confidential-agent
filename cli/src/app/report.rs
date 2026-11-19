@@ -1526,7 +1526,7 @@ mod tests {
         fs::create_dir_all(&paths.service_dir).unwrap();
         let manifest = BuildManifest {
             image: Some(serde_json::from_value(serde_json::json!({
-                "source": {"release": "/public/release.json", "trusted_key": "/public/publisher.pem",
+                "source": {"release": "/public/release.json", "release_digest": format!("sha256:{}", "b".repeat(64)),
                            "manifest": format!("sha256:{}", "a".repeat(64)), "account_id": "123"},
                 "image_id": "m-published"
             })).unwrap()),

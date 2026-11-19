@@ -8,7 +8,7 @@ trap 'rm -rf "$task_tmp"' EXIT
 export CA_BIN="${CA_TEST_BIN:-$ROOT_DIR/target/debug/confidential-agent}"
 export CA_PEP_BIN="${CA_PEP_BIN:-$ROOT_DIR/target/debug/cai-pep}"
 export CA_NON_INTERACTIVE=1
-unset CA_HARNESS CA_MODEL CA_BAILIAN_MODEL DASHSCOPE_MODEL CA_API_BASE_URL DASHSCOPE_BASE_URL
+unset CA_HARNESS CA_IMAGE_SOURCE CA_MODEL CA_BAILIAN_MODEL DASHSCOPE_MODEL CA_API_BASE_URL DASHSCOPE_BASE_URL
 unset CA_API_KEY CA_BAILIAN_API_KEY DASHSCOPE_API_KEY BAILIAN_API_KEY
 printf '{}\n' > "$task_tmp/release.json"
 digest="sha256:$(sha256sum "$task_tmp/release.json" | cut -d' ' -f1)"
@@ -29,8 +29,8 @@ export CA_SLSA_GENERATOR=/bin/true
 (
   CA_NON_INTERACTIVE=0
   init_defaults
-  resolve_harness_options <<< $'claudecode\nclaude-code\nchosen-model\nhttps://inference.example/anthropic'
-  [[ "$CA_HARNESS" == claude-code && "$CA_MODEL" == chosen-model ]]
+  resolve_harness_options <<< $'claudecode\nclaude-code\n\nchosen-model\nhttps://inference.example/anthropic'
+  [[ "$CA_HARNESS" == claude-code && "$CA_MODEL" == chosen-model && "$CA_IMAGE_SOURCE" == prebuilt ]]
   [[ "$CA_API_BASE_URL" == https://inference.example/anthropic ]]
 )
 (
@@ -45,7 +45,8 @@ export CA_SLSA_GENERATOR=/bin/true
 # Exercise the public entry point without running deployment or host setup.
 (
   run_deploy_cpu() { :; }
-  run_cleanup() { :; }
+  collect_cpu_inputs() { :; }
+  run_cleanup_cpu() { :; }
   run_install_only() { :; }
   expect_usage_error() {
     local expected="$1" output
@@ -74,8 +75,10 @@ export CA_SLSA_GENERATOR=/bin/true
   unset CA_COSIGN_KEY
   init_defaults
   parse_args --image-source build --reference-values sample --skip-deploy \
-    --work-dir "$task_tmp/sample-build"
-  builder="$CA_WORK_DIR/allinone-builder"
+    --work-dir "$task_tmp/sample-build" --state-dir "$task_tmp/sample-state"
+  resolve_harness_options
+  apply_target_defaults
+  builder="$CA_WORK_DIR/$(cpu_builder_id)"
   ca_cmd() {
     case "$1" in
       init)

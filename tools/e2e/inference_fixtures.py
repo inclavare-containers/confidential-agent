@@ -52,7 +52,7 @@ def record_debug_identity(case):
     key = Path(case.local_state("vllm-inference")["build"]["debug_ssh"]["private_key"]).resolve()
     if not key.is_file() or not key.stat().st_size:
         raise RuntimeError("the debug producer's original SSH key is missing")
-    # This local pointer is never copied into the signed fixture directory.
+    # Keep the local key reference outside the release fixture directory.
     write_json(case.work / "debug-key-path.json", {"private_key": str(key)})
 
 
@@ -85,11 +85,6 @@ def main():
             key, bucket = os.environ.get("E2E_MODEL_KEY_FILE"), os.environ.get("E2E_MODEL_OSS_BUCKET")
             if not key or not bucket:
                 raise RuntimeError("encrypted model fixture and key are required")
-            for arguments, label in ([] if args.resume else [
-                (["genpkey", "-algorithm", "ED25519", "-out", case.work / "publisher.key"], "publisher-key"),
-                (["pkey", "-in", case.work / "publisher.key", "-pubout", "-out", case.work / "publisher.pem"], "publisher-public"),
-            ]):
-                run(["openssl", *arguments], case.work / label)
             cosign = case.work / "cosign.key"
             if not args.resume:
                 case.command("cosign-key", "key", "generate-cosign", "--output-key-prefix", cosign.with_suffix(""))
@@ -112,7 +107,7 @@ def main():
             records = json.loads(ledger.read_text()) if args.resume and ledger.exists() else []
             publish_variant(case, "vllm-inference", spec, "debug", case.work / "inference-debug",
                             records)
-            case.checks.update(debug_variant_verified=True, signed_debug_published=True,
+            case.checks.update(debug_variant_verified=True, debug_published=True,
                                debug_credentials_distributed=False)
     except BaseException:
         try:

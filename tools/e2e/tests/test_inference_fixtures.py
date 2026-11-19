@@ -1,5 +1,5 @@
 """Shared builds keep debug keys local and publication ownership durable."""
-import base64
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -116,16 +116,17 @@ class InferenceFixturesTest(unittest.TestCase):
             cleanup.assert_called_once_with(case)
             remove_local.assert_not_called()
 
-    def test_external_runner_copies_only_debug_envelope_and_public_key(self):
+    def test_external_runner_copies_only_debug_release_and_digest(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source = root / 'producer/inference-debug'
             source.mkdir(parents=True)
             payload = {'images': [{'region': 'cn-beijing', 'account_id': 'test'}],
                        'manifest': {'manifest_digest': 'sha256:' + 'a' * 64}}
-            (source / 'image-release.json').write_text(json.dumps({
-                'payload': base64.b64encode(json.dumps(payload).encode()).decode()}))
-            (source / 'publisher.pem').write_text('test public key')
+            release = source / 'image-release.json'
+            release.write_text(json.dumps(payload))
+            (source / 'image-release.sha256').write_text(
+                'sha256:' + hashlib.sha256(release.read_bytes()).hexdigest())
             (source / 'private.key').write_text('never distribute this')
             work = root / 'consumer'
             with patch.dict(os.environ, E2E_INFERENCE_FIXTURES=str(source.parent), E2E_WORK_DIR=str(work)), \
@@ -134,7 +135,7 @@ class InferenceFixturesTest(unittest.TestCase):
                 inference_fixtures.main()
             run.assert_not_called()
             self.assertEqual(sorted(p.name for p in (work / 'inference-debug').iterdir()),
-                             ['image-release.json', 'publisher.pem'])
+                             ['image-release.json', 'image-release.sha256'])
             self.assertTrue(json.loads((work / 'case-result.json').read_text())['passed'])
             self.assertFalse((work / 'debug-key-path.json').exists())
             self.assertFalse((work / 'state/services').exists())

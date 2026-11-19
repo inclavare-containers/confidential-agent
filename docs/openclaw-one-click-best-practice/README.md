@@ -121,7 +121,7 @@ sh "$INSTALL_SCRIPT" deploy \
   --bailian-model qwen3.7-max
 ```
 
-交互式部署（脚本会先询问 harness、接入方式、模型与推理端点，回车即可采用默认值，随后再按所选接入方式按需检查/安装本地客户端）：
+交互式部署（脚本会先询问镜像来源、harness、接入方式、模型、推理端点和所需凭据，回车即可采用默认值，随后再按所选接入方式按需检查/安装本地客户端）：
 
 ```bash
 sh "$INSTALL_SCRIPT"
@@ -131,13 +131,13 @@ sh "$INSTALL_SCRIPT"
 
 下载上述 `INSTALL_SCRIPT` 后，可根据当前实际持有的产物状态选择对应的 `one-click` 方式：
 
-1. **按官方 Release 不可变 OCI 引用自动拉取并导入（默认）**：直接运行 `sh "$INSTALL_SCRIPT" deploy ...`（默认 `--image-source prebuilt`），自动校验官方 `image-index.json` 的 `release_digest` 并导入当前地域 ECS 自定义镜像。
+1. **自动下载并导入官方预构建镜像（默认）**：直接运行 `sh "$INSTALL_SCRIPT" deploy ...`（默认 `--image-source prebuilt`），优先复用当前账号和地域的同一镜像，首次导入时下载并校验官方产物。
 2. **从零本地构建共享镜像**：
    ```bash
    sh "$INSTALL_SCRIPT" deploy --non-interactive --yes --image-source build
    ```
-3. **本机已构建好共享镜像**：同一 `--work-dir` 下已有 `allinone-builder` 构建结果时，传入 `--image-source build --skip-build` 直接导出/复用本地构建产物而不再重跑构建。
-4. **指定不可变 `@sha256` OCI 引用或本地 Shelter 产物目录**。将 `RELEASE_DIGEST` 设为官方索引或本机 `image export` 提供的摘要：
+3. **本机已构建好共享镜像**：同一 `--work-dir` 下已有当前服务的 `allinone-builder-<service-id>` 构建结果时，传入 `--image-source build --skip-build` 直接导出/复用本地构建产物而不再重跑构建。
+4. **指定本地 Shelter 产物目录**。将 `RELEASE_DIGEST` 设为官方索引或本机 `image export` 提供的摘要：
    ```bash
    sh "$INSTALL_SCRIPT" deploy --non-interactive --yes \
      --artifact ./local-shelter-artifact \
@@ -153,9 +153,10 @@ sh "$INSTALL_SCRIPT"
 6. **复用同一云镜像再起新实例（相同或不同应用）**：更换 `--service-id` 即可在同一地域复用已导入镜像部署新实例：
    ```bash
    sh "$INSTALL_SCRIPT" deploy --non-interactive --yes \
-     --harness codex --access ws --service-id codex-02 \
-     --image-id m-xxxxxxxxxxxxxxxxxxxx
+     --harness codex --access ws --service-id codex-02
    ```
+
+部署中断后用 `sh "$INSTALL_SCRIPT" continue`。多个未完成任务时加 `--service-id`，使用自定义状态目录时加原来的 `--state-dir`。继续原任务时，脚本只补问剩余步骤需要的凭据。要改参数并沿用相同服务 ID，先用 `cleanup --service-id <id>` 结束原任务。
 
 #### 选择其他 Harness、原生服务接入方式或自定义推理端点
 
@@ -456,7 +457,7 @@ LOG_INDEX="<对应条目的 log index>"
 
 #### Q2：`Shelter is required` 或官方预构建元数据下载失败
 
-检查官方 GitHub Release 是否可达，镜像索引和描述从这里获取。OCI 产物默认经 `ghcr.1ms.run` 传输。设置 `CA_GHCR_MIRROR=ghcr.io` 可直连官方仓库。已有本地产物时可传入 `--artifact`，并使用相应描述文件的可信 `release_digest`。
+检查官方 GitHub Release 是否可达，镜像索引和描述从这里获取。OCI 产物先直连 `ghcr.io`，传输失败后自动切换到 `ghcr.1ms.run`。已有本地产物时可传入 `--artifact`，并使用相应描述文件的可信 `release_digest`。
 
 #### Q3：本地隧道端口打不开
 

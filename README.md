@@ -126,13 +126,15 @@ sh "$INSTALL_SCRIPT" deploy \
   --bailian-model qwen3.7-max
 ```
 
-官方 GitHub Release 提供不可变 OCI 引用和 `image-release.json` 的可信 SHA-256 摘要。默认通过 `ghcr.1ms.run` 传输 OCI 产物，设置 `CA_GHCR_MIRROR=ghcr.io` 可直连官方仓库。运行时仍使用 TDX 和 Rekor 参考值完成远程证明。
+官方 GitHub Release 提供不可变 OCI 引用和 `image-release.json` 的可信 SHA-256 摘要。下载脚本先直连 `ghcr.io`，传输失败后切换到 `ghcr.1ms.run`。one-click 会优先复用当前账号和地域的同一云镜像。运行时使用 TDX 和 Rekor 参考值完成远程证明。
 
-交互式部署（逐步选择 harness、接入方式、模型、是否启用钉钉 `--enable-dingtalk` 以及 operator 访问 CIDR；直接执行 `sh "$INSTALL_SCRIPT"` 即可）：
+交互式部署会先收集镜像来源、harness、接入方式、模型、凭据和 operator 访问 CIDR，然后开始安装和部署。
 
 ```bash
 sh "$INSTALL_SCRIPT"
 ```
+
+部署中断后，用相同入口执行 `sh "$INSTALL_SCRIPT" continue`。多个待续跑任务时加 `--service-id`，使用自定义状态目录时加原来的 `--state-dir`。脚本跳过已完成的阶段，并在开头补问剩余步骤所需的凭据。首次下载的完整产物留在工作目录，部署摘要会显示路径。
 
 在百炼/CPU OpenClaw 场景下，传入实例级 `--disable-pep` 可关闭该实例的 `exec` 工具策略沙箱控制，同时完整保留 TDX 远程证明与 `cai-pep attest` 能力。CIDR 默认限制为部署机公网出口 `/32`（仅支持 IPv4），非交互可通过 `--allowed-cidr` 传入自定义 CIDR，脚本仍会自动探测部署机出口写入 `deployer` peering；请勿在无保护场景随意暴露 `0.0.0.0/0`。更多双场景细节见 [OpenClaw one-click 最佳实践](docs/openclaw-one-click-best-practice/README.md)。
 
@@ -187,7 +189,7 @@ ready_json: /root/.confidential-agent/one-click/connect.json
 
 1. **从零构建共享镜像**。执行 `confidential-agent init --stage build`，进入生成的 `confidential-agent-init/allinone-builder/`，运行 `confidential-agent build --spec build.yaml`、`confidential-agent image export allinone-builder --output image-release.json` 和 `confidential-agent image publish allinone-builder --spec build.yaml --region cn-beijing`。`image export` 输出描述文件的可信摘要。
 2. **本机已完成构建**：直接执行 `image export` 与 `image publish`，无需重跑 `build`。
-3. **按官方不可变 OCI 引用拉取并导入 ECS**：从官方 Release `image-index.json` 读取 `oci_reference`（`@sha256:...`）和可信 `release_digest`，运行 `confidential-agent image publish --artifact "$OCI_REF" --image-release image-release.json --release-digest "$RELEASE_DIGEST" --region cn-beijing --output published.json`。
+3. **下载官方预构建镜像并导入 ECS**。运行 `python3.11 /usr/share/cagent/hack/download-release-image.py --output-dir ./prebuilt --region cn-beijing`，再执行脚本输出的 `image publish` 命令。
 4. **预构建产物已下载到本地**：运行 `confidential-agent image publish --artifact ./artifact-dir --image-release image-release.json --release-digest "$RELEASE_DIGEST" --region cn-beijing --output published.json` 校验本地大文件并导入 ECS。
 5. **当前地域已有可用 ECS 镜像 ID**：直接执行 `confidential-agent init <app> --image-release image-release.json --release-digest "$RELEASE_DIGEST" --image-id m-xxxx --service-id <id>`（同一 `--state-dir` 已 `image publish` 时可省略 `--image-id`），随后运行 `confidential-agent deploy --spec <dir>/instance.yaml`。
 6. **同一云镜像再起新实例**：更换新的 `--service-id` 执行 `confidential-agent init <app> ...` 后直接 `deploy`，可快速拉起同种或不同 `<app>`（`openclaw`、`hermes`、`codex`、`opencode`、`dsh`、`claude-code`、`qodercli`、`pi`）的独立实例。
@@ -221,7 +223,7 @@ sh "$INSTALL_SCRIPT" cleanup \
 |---|---|
 | **GPU TEE（OpenClaw + vLLM / 安全推理）** | `one-click/install-openclaw-vllm.sh` 与 `one-click/install-vllm-inference.sh`；手动模板见 `examples/openclaw-vllm/` 与 `examples/vllm-inference/`（推荐 `ecs.gn8v-tee.4xlarge`）。 |
 | **最小 MCP Server** | `examples/mcp/mcp-demo.yaml`，最薄的一个 spec，可作为自定义应用模板。 |
-| **预构建镜像导入 / 多实例同镜像复用** | 通过 `confidential-agent image publish --artifact <OCI引用或本地产物> --image-release image-release.json --release-digest sha256:... --region cn-beijing`（或本地构建后 `image export` + `image publish`）导入阿里云自定义镜像，再用 `init <app> --image-release ... --release-digest ... --service-id <id>` 为不同应用或新实例复用同一云镜像；云镜像退役使用 `image unpublish` / `image prune`。 |
+| **预构建镜像导入 / 多实例同镜像复用** | 通过 `confidential-agent image publish --artifact <本地产物> --image-release image-release.json --release-digest sha256:... --region cn-beijing` 或本地构建后的 `image publish` 导入阿里云自定义镜像。用 `init <app> --image-release ... --release-digest ... --service-id <id>` 为不同应用或实例复用镜像。云镜像退役使用 `image unpublish` / `image prune`。 |
 | **多实例 Mesh** | 在不同的 spec 文件里使用相同的 `connect` 端口集合分别 `deploy`，CLI 会自动维护 `mesh-bundle.json` 并把对端公网 CIDR 注入安全组。 |
 | **管理 SSH 与 Debug SSH** | `release` 镜像通过 `service.ssh: true` 下发每实例独立的远程证明 SSH 密钥（`confidential-agent ssh <id>`）；开发排障也可使用 `deploy.image_variant: debug` + `build.variants.debug.enabled: true`，入向访问由 `peering add --role operator --cidr ...` 控制。 |
 

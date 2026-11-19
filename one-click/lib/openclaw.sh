@@ -54,7 +54,6 @@ append_init_common_args() {
     --disk-gb "$CA_DISK_GB"
     --replicas "$CA_REPLICAS"
     --reference-values "$CA_REFERENCE_VALUES"
-    --gateway-token "$CA_GATEWAY_TOKEN"
     --openclaw-version "$CA_OPENCLAW_VERSION"
     --node-version "$CA_NODE_VERSION"
     --npm-registry "$CA_NPM_REGISTRY"
@@ -64,11 +63,7 @@ append_init_common_args() {
     args_ref+=(--cosign-key "$CA_COSIGN_KEY")
   fi
   if [[ "$CA_ENABLE_DINGTALK" == "1" ]]; then
-    args_ref+=(
-      --enable-dingtalk
-      --dingtalk-client-id "$DINGTALK_BOT_CLIENT_ID"
-      --dingtalk-client-secret "$DINGTALK_BOT_CLIENT_SECRET"
-    )
+    args_ref+=(--enable-dingtalk)
   fi
 }
 
@@ -90,7 +85,11 @@ run_confidential_agent_init() {
   export CA_BIN CA_AGENTD_BIN CA_GATEWAY_BIN CA_PEP_BIN
   install -d -m 0700 "$CA_WORK_DIR"
   log "generating $CA_SERVICE_LABEL AppSpec with confidential-agent init $target"
-  (cd "$ROOT_DIR" && ca_cmd init "$target" "$@")
+  (
+    cd "$ROOT_DIR"
+    if [[ -n "${CA_GATEWAY_TOKEN:-}" ]]; then export CA_GATEWAY_TOKEN; else unset CA_GATEWAY_TOKEN; fi
+    ca_cmd init "$target" "$@"
+  )
   [[ -f "$CA_SPEC_PATH" ]] || die "init did not create expected AppSpec: $CA_SPEC_PATH"
 }
 
@@ -128,14 +127,14 @@ path = Path(sys.argv[1]).resolve()
 spec = json.loads(path.read_text())
 if (spec.get('service', {}).get('id') != 'vllm-inference'
         or not spec.get('deploy', {}).get('image', {}).get('release')):
-    raise SystemExit('--image-spec requires a signed-image AppSpec for service vllm-inference')
+    raise SystemExit('--image-spec requires a published-image AppSpec for service vllm-inference')
 print(path)
 PY
 )" || return
     ca_cmd spec validate --spec "$CA_SPEC_PATH" || return
     CA_PROJECT_DIR="$(dirname "$CA_SPEC_PATH")"
     CA_SKIP_BUILD=1
-    log "using signed-image spec at $CA_SPEC_PATH"
+    log "using published-image spec at $CA_SPEC_PATH"
     return
   fi
   ensure_cosign_key

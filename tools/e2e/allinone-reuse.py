@@ -463,8 +463,7 @@ def reject_invalid_release(consumer):
     spec = consumer.spec
     image = spec["deploy"]["image"]
     path = Path(image["release"])
-    document = json.loads(path.read_text())
-    release = json.loads(base64.b64decode(document["payload"])) if "payload" in document else document
+    release = json.loads(path.read_text())
     # Old specs can retain an account field, but image authorization comes from
     # the authenticated release mapping. Rendering does not allocate resources.
     legacy = json.loads(json.dumps(spec))
@@ -479,14 +478,11 @@ def reject_invalid_release(consumer):
                                                   if value["region"] == spec["deploy"]["region"])
     assert rendered["image"]["image_id"] == selected_image, "legacy account changed the authenticated image selection"
     assert not (legacy_directory / "state.json").exists(), "render-only recorded an infrastructure deployment"
-    invalid_fields = [("manifest", "manifest", "sha256:" + "0" * 64)]
-    if "release_digest" in image:
-        altered_release = consumer.work / "altered-release.json"
-        altered_release.write_bytes(path.read_bytes() + b"\n")
-        invalid_fields.extend([("release_digest", "release_digest", "sha256:" + "0" * 64),
-                               ("release", "release", str(altered_release))])
-    else:
-        invalid_fields.extend(invalid_signed_release_fields(consumer, document, release))
+    altered_release = consumer.work / "altered-release.json"
+    altered_release.write_bytes(path.read_bytes() + b"\n")
+    invalid_fields = [("manifest", "manifest", "sha256:" + "0" * 64),
+                      ("release_digest", "release_digest", "sha256:" + "0" * 64),
+                      ("release", "release", str(altered_release))]
     for label, field, wrong in invalid_fields:
         invalid = json.loads(json.dumps(spec))
         invalid["service"]["id"] += "-invalid-" + label.replace("_", "-")
@@ -502,34 +498,13 @@ def reject_invalid_release(consumer):
         assert not (rejected / "bootstrap.json").exists()
 
 
-def invalid_signed_release_fields(consumer, envelope, release):
-    # Preserve the signature-tampering tests for explicitly signed fixtures.
-    mapping = next(value for value in release["images"] if value["region"] == consumer.spec["deploy"]["region"])
-    mapping["image_id"] += "-mismatch"
-    altered_mapping = consumer.work / "altered-mapping-release.json"
-    altered_mapping.write_text(json.dumps(dict(envelope, payload=base64.b64encode(json.dumps(release).encode()).decode())))
-    signature = envelope["signatures"][0]["sig"]
-    envelope["signatures"][0]["sig"] = ("A" if signature[0] != "A" else "B") + signature[1:]
-    altered_release = consumer.work / "altered-release.json"
-    altered_release.write_text(json.dumps(envelope))
-    wrong_key = consumer.work / "wrong-publisher.key"
-    wrong_public = consumer.work / "wrong-publisher.pem"
-    run(["openssl", "genpkey", "-algorithm", "ED25519", "-out", str(wrong_key)],
-        consumer.work / "wrong-publisher-key")
-    run(["openssl", "pkey", "-in", str(wrong_key), "-pubout", "-out", str(wrong_public)],
-        consumer.work / "wrong-publisher-public")
-    return [("image_id", "release", str(altered_mapping)), ("release", "release", str(altered_release)),
-            ("trusted_key", "trusted_key", str(wrong_public))]
-
-
 def reject_incompatible_release(consumer, release):
     spec = json.loads(json.dumps(consumer.spec))
     spec["service"]["id"] += "-incompatible"
     image = spec["deploy"]["image"]
     image["release"] = str(release.resolve())
     image.pop("manifest", None)
-    if "release_digest" in image:
-        image["release_digest"] = release.with_suffix(".sha256").read_text().strip()
+    image["release_digest"] = release.with_suffix(".sha256").read_text().strip()
     path = consumer.spec_path.parent / "incompatible-appspec.json"
     path.write_text(json.dumps(spec))
     result = consumer.command("reject-incompatible-runtime", "deploy", "--spec", str(path),

@@ -60,7 +60,7 @@ def verify_full_hardening_build(case):
     case.checks["full_hardening_release_built"] = True
 
 
-def publish_variant(case, service, spec, variant, directory, records, *, signed=True):
+def publish_variant(case, service, spec, variant, directory, records):
     """Publish once and durably record ownership before exporting the release."""
     receipt = case.work / f"publication-{service}-{variant}.json"
     case.command("publish-"+service+"-"+variant, "image", "publish", service,
@@ -75,15 +75,11 @@ def publish_variant(case, service, spec, variant, directory, records, *, signed=
     record_publication_snapshots(case)
     directory.mkdir(mode=0o700, exist_ok=True)
     release = directory / "image-release.json"
-    signing = ["--signing-key", case.work / "publisher.key"] if signed else []
-    case.command("export-"+service+"-"+variant, "image", "export", service, *signing,
+    case.command("export-"+service+"-"+variant, "image", "export", service,
                  "--output", release, "--region", case.region, "--variant", variant,
                  "--image-id", image_id)
-    if signed:
-        shutil.copyfile(case.work / "publisher.pem", directory / "publisher.pem")
-    else:
-        digest = hashlib.sha256(release.read_bytes()).hexdigest()
-        (directory / "image-release.sha256").write_text("sha256:" + digest + "\n")
+    digest = hashlib.sha256(release.read_bytes()).hexdigest()
+    (directory / "image-release.sha256").write_text("sha256:" + digest + "\n")
 
 
 def verify_resumable_build(case, service, spec, variants):
@@ -182,9 +178,8 @@ def resume_producer(case):
     previous = json.loads((case.work / "case-result.json").read_text())
     if previous.get("passed") is not False:
         raise RuntimeError("only a failed producer attempt can be resumed")
-    for name in ["publisher.key", "publisher.pem", "cosign.key"]:
-        if not (case.work / name).is_file():
-            raise RuntimeError("publisher resume is missing its original signing material")
+    if not (case.work / "cosign.key").is_file():
+        raise RuntimeError("publisher resume is missing its original Rekor signing key")
     archive = case.work / "attempts" / str(time.time_ns())
     archive.mkdir(parents=True, mode=0o700)
     for path in case.work.iterdir():
@@ -214,7 +209,7 @@ def main():
             raise RuntimeError("external fixtures cannot resume a producer build")
         resume_producer(case)
     if external:
-        # Release documents travel with their publisher key or release digest.
+        # Release documents travel with their trusted digest.
         # The originating producer owns the images and cleanup.
         with case:
             source = Path(external).resolve()
@@ -230,9 +225,6 @@ def main():
     records = json.loads(ledger.read_text()) if args.resume and ledger.exists() else []
     try:
         with case:
-            if not args.resume:
-                run(["openssl", "genpkey", "-algorithm", "ED25519", "-out", case.work / "publisher.key"], case.work / "publisher-key")
-                run(["openssl", "pkey", "-in", case.work / "publisher.key", "-pubout", "-out", case.work / "publisher.pem"], case.work / "publisher-public")
             run(["aliyun", "--region", case.region, "sts", "GetCallerIdentity"], case.work / "caller-identity")
             cosign = case.work / "cosign.key"
             if not args.resume:
@@ -248,8 +240,7 @@ def main():
                 if service == "allinone-hardened-builder":
                     verify_full_hardening_build(case)
                 for variant in variants:
-                    publish_variant(case, service, spec, variant, case.work / fixture, records,
-                                    signed=fixture == "allinone")
+                    publish_variant(case, service, spec, variant, case.work / fixture, records)
             # Older producers may own inference publications too. Retain every
             # owned entry for cleanup when resuming, without rebuilding them.
             case.checks["images_published"] = REQUIRED_PUBLICATIONS <= {

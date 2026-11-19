@@ -196,7 +196,7 @@ deploy:
 
 `confidential-agent image publish` 将镜像导入为阿里云自定义镜像：
 1. 本地构建记录：`confidential-agent image publish <service> --spec <path> [--region <region>] [--output <published.json>]`
-2. 预构建产物或不可变 OCI 引用：`confidential-agent image publish --artifact <Shelter产物目录 | artifact-manifest.json | OCI引用@sha256:...> --image-release <file> --release-digest sha256:<64位摘要> --region <region> [--output <published.json>]`
+2. 本地 Shelter 产物：`confidential-agent image publish --artifact <Shelter产物目录 | artifact-manifest.json> --image-release <file> --release-digest sha256:<64位摘要> --region <region> [--output <published.json>]`
 
 导入完成后，CLI 按 `manifest_digest`、当前阿里云账号和地域记录已就绪的 `image_id`。`--output` 写出该发布记录，包括 `account_id`、`manifest_digest`、`region`、`image_id`。使用 `image unpublish <service | sha256:manifest摘要> --region <region>` 退役所选发布及自有导入快照。
 
@@ -237,7 +237,7 @@ deploy:
 
 构建端完成 `build` 后，运行 `image export <service> --output image-release.json` 导出通用描述及整个文件的 SHA-256 摘要。指定 `--image-id` 时才写入云镜像映射。官方预构建镜像从 GitHub Release 的 `image-index.json` 获取 `oci_reference` 和可信 `release_digest`。`image publish --artifact` 按已验证的描述核对产物的 manifest 和磁盘摘要及大小。
 
-若当前 `state-dir` 已通过 `image publish` 在当前账号和目标地域导入过该 `manifest_digest`，CA 会自动解析对应的 `image_id`；若用户直接持有当前地域可用的自定义镜像、共享镜像或云市场镜像 ID，可通过 `deploy.image.image_id`、`init --image-id` 或 `deploy --image-id` 显式指定，无需重复执行 `image publish`（发布元数据不绑定特定云账号）。如需使用公钥签名分发流程，也可配置 `trusted_key`（配合 `image export --signing-key`）。
+若当前 `state-dir` 已通过 `image publish` 在当前账号和目标地域导入过该 `manifest_digest`，CA 会自动解析对应的 `image_id`；若用户直接持有当前地域可用的自定义镜像、共享镜像或云市场镜像 ID，可通过 `deploy.image.image_id`、`init --image-id` 或 `deploy --image-id` 显式指定，无需重复执行 `image publish`（发布元数据不绑定特定云账号）。
 
 **信任分层**：`release_digest` 用于校验镜像描述与导入产物字节的一致性；运行时远程证明（TDX Quote 与 `attestation.reference_values` 指定的 Rekor / sample 参考值校验）与之相互独立，始终在释放磁盘密钥和应用资源前强制执行。消费者无需生产端 state、构建输入或本地 QCOW2；每个实例拥有独立的 `service.id`、磁盘口令、网关身份、认证管理 SSH 密钥和 Terraform state，`destroy` 不会删除共享云镜像。该模式同时支持 `release` 和 `debug` 变体（`debug` 变体的运行时元数据须标记 `image_variant: debug`）。
 
@@ -509,7 +509,7 @@ OpenClaw A2A 插件不再从配置里读取对端 URL/端口，而是从 `/etc/c
 
 ## 10. 路径解析规则
 
-所有路径字段（`build.runtime_contract`, `build.scripts[]`, `build.files[].source`, `build.variants.debug.ssh_public_key`, `deploy.image.release`, `deploy.image.trusted_key`, `secrets.disk_passphrase`, `resources.*.source`, `attestation.rekor.cosign_key`, `attestation.rekor.slsa_generator`）都遵循：
+所有路径字段（`build.runtime_contract`, `build.scripts[]`, `build.files[].source`, `build.variants.debug.ssh_public_key`, `deploy.image.release`, `secrets.disk_passphrase`, `resources.*.source`, `attestation.rekor.cosign_key`, `attestation.rekor.slsa_generator`）都遵循：
 
 1. 如果是绝对路径 → 直接使用。
 2. 如果是相对路径 → 相对于 **spec YAML 所在目录** 解析。

@@ -294,10 +294,7 @@ fn default_slb_type() -> SlbType {
 pub struct PublishedImageSpec {
     pub release: PathBuf,
     /// SHA-256 of the complete release document from the publisher or local build.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub release_digest: Option<String>,
-    #[serde(default)]
-    pub trusted_key: PathBuf,
+    pub release_digest: String,
     /// Optional publisher manifest pin; otherwise use the authenticated release.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub manifest: Option<String>,
@@ -310,9 +307,6 @@ pub struct PublishedImageSpec {
     pub legacy_account_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_id: Option<String>,
-    /// Explicit opt-out for release signatures, never runtime attestation.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub skip_signature_verification: bool,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -530,9 +524,6 @@ impl AgentSpec {
             if !image.release.as_os_str().is_empty() {
                 resolve_pathbuf(&mut image.release, base_dir);
             }
-            if !image.trusted_key.as_os_str().is_empty() {
-                resolve_pathbuf(&mut image.trusted_key, base_dir);
-            }
         }
         for path in &mut self.build.scripts {
             resolve_pathbuf(path, base_dir);
@@ -589,19 +580,17 @@ impl AgentSpec {
             bail!("service.ssh requires a release image; debug images use their existing SSH mechanism");
         }
         if let Some(image) = &self.deploy.image {
-            if image.release.as_os_str().is_empty()
-                || (image.release_digest.is_none()
-                    && !image.skip_signature_verification
-                    && image.trusted_key.as_os_str().is_empty())
-            {
-                bail!("deploy.image requires release and its release_digest or a trusted_key");
+            if image.release.as_os_str().is_empty() {
+                bail!("deploy.image requires release");
             }
-            if let Some(pin) = &image.release_digest {
-                if !pin.strip_prefix("sha256:").is_some_and(|hex| {
-                    hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit())
-                }) {
-                    bail!("deploy.image.release_digest must be the full sha256 of the release document");
-                }
+            if !image
+                .release_digest
+                .strip_prefix("sha256:")
+                .is_some_and(|hex| hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+            {
+                bail!(
+                    "deploy.image.release_digest must be the full sha256 of the release document"
+                );
             }
             if let Some(manifest) = &image.manifest {
                 let digest = manifest.strip_prefix("sha256:").unwrap_or_default();
@@ -1205,8 +1194,8 @@ mod tests {
             .unwrap()
             .remove(serde_yaml::Value::from("build"));
         value["deploy"]["image"] = serde_yaml::from_str(&format!(
-            "release: ./image.json\ntrusted_key: ./publisher.pem\nmanifest: sha256:{}\naccount_id: '1234567890'\n",
-            "a".repeat(64)
+            "release: ./image.json\nrelease_digest: sha256:{}\nmanifest: sha256:{}\naccount_id: '1234567890'\n",
+            "b".repeat(64), "a".repeat(64)
         )).unwrap();
         value
     }
@@ -1310,7 +1299,7 @@ mod tests {
         assert!(spec.build.image_name.is_empty());
         let image = spec.deploy.image.unwrap();
         assert_eq!(image.release, Path::new("/project/image.json"));
-        assert_eq!(image.trusted_key, Path::new("/project/publisher.pem"));
+        assert_eq!(image.release_digest, format!("sha256:{}", "b".repeat(64)));
     }
 
     #[test]

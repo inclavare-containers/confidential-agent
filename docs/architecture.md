@@ -149,11 +149,11 @@ sequenceDiagram
 
 Shelter 构建使用主线支持的显式 `version: 1` 配置，保留 V2 尚不能完整表达的 `initrd.binaries`、Rekor 和容器挂载配置。构建命令为 `build -f shelter.yaml --tag <image-tag>`；部署不改写这份构建快照，而是单独生成 `version: 2` 的 `shelter-runtime.yaml`，只包含运行目标。
 
-部署目标使用 `trust: verified`、`attestation: disabled`，并在 provider options 中明确设置 `cc_mode: tdx`、`attestation_authority: external`。Shelter 负责创建 TDX 实例，证据验证与密钥释放由下面的 CA challenge/Trustee 流程负责。CLI 通过 `run <image-tag> -d -c shelter-runtime.yaml --target deploy --name <resource_name>` 复用已构建镜像；预构建共享镜像通过同一 `run -d --release … --release-digest … -c …`（或 `--trusted-key`）接口部署。`inspect <name> --format json` 读取实际 instance ID 和 Terraform 目录，`network update <name> -c … --target deploy` 只更新受管实例网络，`rm -f <name>` 删除实例；部署身份与 build ID 分开保存。
+部署目标使用 `trust: verified`、`attestation: disabled`，并在 provider options 中明确设置 `cc_mode: tdx`、`attestation_authority: external`。Shelter 负责创建 TDX 实例，证据验证与密钥释放由下面的 CA challenge/Trustee 流程负责。CLI 通过 `run <image-tag> -d -c shelter-runtime.yaml --target deploy --name <resource_name>` 复用已构建镜像；预构建共享镜像通过同一 `run -d --release … --release-digest … -c …`接口部署。`inspect <name> --format json` 读取实际 instance ID 和 Terraform 目录，`network update <name> -c … --target deploy` 只更新受管实例网络，`rm -f <name>` 删除实例；部署身份与 build ID 分开保存。
 
 challenge 注入采用 `inject-resource` over `http://<ip>:8006`，对应代码 [`cli/src/app/tools.rs::challenge_inject`](../cli/src/app/tools.rs)。每个资源会先尝试 direct 网络，失败后 fallback 走 host 的代理环境变量。Trustee mode 不依赖 operator 到 Guest `:8006` 的入站连通性。
 
-`image publish` 显式完成阿里云自定义镜像导入（没有单独的 `import` 子命令）：既可从本地构建记录执行 `image publish <service> --spec <path>`，也可直接传入本地 Shelter 产物目录/`artifact-manifest.json` 或不可变 `@sha256` OCI 引用执行 `image publish --artifact <input> --image-release <file> --release-digest sha256:... --region <region> [--output <json>]`。导入完成后按 `manifest_digest`、阿里云账号与地域记录 `image_id`；`deploy` 会自动匹配或按显式 `--image-id` 复用该镜像。`destroy` 只删除实例运行资源，已发布云镜像由 `image unpublish` 或 `image prune` 管理。
+`image publish` 显式完成阿里云自定义镜像导入（没有单独的 `import` 子命令）：既可从本地构建记录执行 `image publish <service> --spec <path>`，也可直接传入本地 Shelter 产物目录/`artifact-manifest.json` 执行 `image publish --artifact <input> --image-release <file> --release-digest sha256:... --region <region> [--output <json>]`。导入完成后按 `manifest_digest`、阿里云账号与地域记录 `image_id`；`deploy` 会自动匹配或按显式 `--image-id` 复用该镜像。`destroy` 只删除实例运行资源，已发布云镜像由 `image unpublish` 或 `image prune` 管理。
 
 ---
 

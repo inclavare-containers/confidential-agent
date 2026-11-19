@@ -87,9 +87,6 @@ fn validate_spec_file(spec_path: &Path) -> SpecValidationReport {
             push_check(&mut checks, "parse", true, "AppSpec parsed");
             if let Some(image) = &spec.deploy.image {
                 push_path_check(&mut checks, "deploy.image.release", &image.release);
-                if image.release_digest.is_none() && !image.skip_signature_verification {
-                    push_path_check(&mut checks, "deploy.image.trusted_key", &image.trusted_key);
-                }
             }
             match spec.ensure_mvp_supported() {
                 Ok(()) => push_check(&mut checks, "supported", true, "uses supported features"),
@@ -493,7 +490,7 @@ fn spec_schema_json() -> serde_json::Value {
         "deploy": {
             "provider": "aliyun",
             "image_variant": "release or debug",
-            "image": {"release": "Shelter image release JSON", "release_digest": "SHA-256 of the exact release file from the official version index or your own build", "trusted_key": "public key for a signed release", "manifest": "optional sha256 version pin; otherwise read from authenticated release", "image_id": "optional existing shared/marketplace image override", "skip_signature_verification": "explicit release-signature opt-out; runtime attestation remains required"},
+            "image": {"release": "Shelter image release JSON", "release_digest": "SHA-256 of the exact release file from the official version index or your own build", "manifest": "optional sha256 version pin; otherwise read from authenticated release", "image_id": "optional existing shared/marketplace image override"},
             "region": "Aliyun region",
             "zone_id": "Aliyun zone",
             "instance_type": "TDX-capable ECS instance type",

@@ -100,7 +100,7 @@ pub struct PublishedImage {
     pub updated_at: String,
     #[serde(default)]
     pub oss_cleaned: bool,
-    /// A signed release may have consumers outside this workspace. Automatic
+    /// A release may have consumers outside this workspace. Automatic
     /// pruning must retain it until the operator explicitly retires the release.
     #[serde(default)]
     pub exported: bool,

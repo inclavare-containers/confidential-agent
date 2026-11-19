@@ -75,10 +75,10 @@ pub(super) fn cmd_init(cli: &Cli, args: &InitArgs) -> Result<()> {
     let args = &resolved_args;
 
     staged::validate_args(args, plan)?;
-    let gpu_release = if matches!(plan, InitPlan::GpuStaged(_, InitStage::Deploy)) {
-        Some(staged::read_gpu_release(args)?)
-    } else {
-        None
+    let (cpu_release, gpu_release) = match plan {
+        InitPlan::SharedCpuDeploy(_) => (Some(staged::read_pinned_release(args)?), None),
+        InitPlan::GpuStaged(_, InitStage::Deploy) => (None, Some(staged::read_gpu_release(args)?)),
+        _ => (None, None),
     };
     let mut project = resolve_project(args, plan)?;
     guard_output_dir(&project.dir, args.force)?;
@@ -98,7 +98,7 @@ pub(super) fn cmd_init(cli: &Cli, args: &InitArgs) -> Result<()> {
     match plan {
         InitPlan::SharedCpuBuild => staged::write_shared_cpu_build(args, &project)?,
         InitPlan::SharedCpuDeploy(target) => {
-            staged::write_shared_cpu_deploy(args, &project, target)?
+            staged::write_shared_cpu_deploy(args, &project, target, cpu_release.as_ref().unwrap())?
         }
         InitPlan::GpuDirect(InitTarget::OpenclawVllm)
         | InitPlan::GpuStaged(InitTarget::OpenclawVllm, _) => {

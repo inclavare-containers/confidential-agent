@@ -1,5 +1,4 @@
 """The shared producer only builds fixtures that the matrix consumes."""
-import base64
 import hashlib
 import json
 import os
@@ -50,12 +49,9 @@ class PublisherConsumersTest(unittest.TestCase):
                 fixture.mkdir(parents=True)
                 payload = {'images': [{'region': 'cn-beijing', 'image_id': 'm-published'}],
                            'manifest': {'manifest_digest': 'sha256:' + 'a' * 64}}
-                if name == 'allinone':
-                    payload = {'payload': base64.b64encode(json.dumps(payload).encode()).decode()}
-                    (fixture / 'publisher.pem').write_text('public test fixture')
-                else:
-                    (fixture / 'image-release.sha256').write_text('sha256:' + hashlib.sha256(json.dumps(payload).encode()).hexdigest())
                 (fixture / 'image-release.json').write_text(json.dumps(payload))
+                (fixture / 'image-release.sha256').write_text(
+                    'sha256:' + hashlib.sha256((fixture / 'image-release.json').read_bytes()).hexdigest())
             (source / 'allinone-publisher-state.json').write_text('{}')
             with patch.dict(os.environ, E2E_PUBLISHED_FIXTURES=str(source), E2E_WORK_DIR=str(work)), \
                     patch.object(sys, 'argv', ['publish_fixtures.py']):
@@ -146,7 +142,9 @@ class PublisherConsumersTest(unittest.TestCase):
             exports = [args for _, args in commands if args[:2] == ('image', 'export')]
             for args in exports:
                 self.assertEqual(args[args.index('--image-id') + 1], 'm-test-' + args[2])
-                self.assertEqual('--signing-key' in args, args[2] == 'allinone-builder')
+                release = Path(args[args.index('--output') + 1])
+                self.assertEqual(release.with_suffix('.sha256').read_text().strip(),
+                                 'sha256:' + hashlib.sha256(release.read_bytes()).hexdigest())
             self.assertTrue(case.checks['images_published'])
             self.assertTrue(case.checks['full_hardening_release_built'])
             strict = work / 'init/allinone-hardened-builder/build.yaml'

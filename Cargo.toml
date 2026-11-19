@@ -35,5 +35,4 @@ tempfile = "=3.10.1"
 ureq = { version = "=2.12.1", default-features = false, features = ["tls"] }
 # Keep ratatui's compatible transitive range on a release that supports workspace MSRV 1.75.
 unicode-segmentation = "=1.12.0"
-httpdate = "=1.0.3"
 libc = "=0.2.186"
