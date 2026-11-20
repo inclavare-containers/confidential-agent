@@ -45,6 +45,7 @@ def main():
         for tool in NATIVE_TOOLS:
             copy_executable(args.native_dir / tool, native / tool)
         shutil.copytree(args.providers, bundle / 'provider')
+        shutil.copy2(ROOT / 'LICENSE', bundle / 'LICENSE')
         copy_executable(ROOT / 'packaging/deploy-one-click.sh', bundle / 'one-click.sh')
 
         share = bundle / 'share/cagent'
