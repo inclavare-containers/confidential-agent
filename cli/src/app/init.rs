@@ -1035,11 +1035,17 @@ fn find_assets_root() -> Result<PathBuf> {
             return Ok(base.to_path_buf());
         }
     }
-    let packaged = PathBuf::from("/usr/share/cagent");
-    if packaged.join("examples").is_dir() {
-        return Ok(packaged);
+    if let Some(prefix) = exe.parent().and_then(Path::parent) {
+        let packaged = prefix.join("share/cagent");
+        if packaged.join("examples").is_dir() {
+            return Ok(packaged);
+        }
     }
-    bail!("could not locate application templates; install the cagent RPM or run init from a source checkout")
+    let system = PathBuf::from("/usr/share/cagent");
+    if system.join("examples").is_dir() {
+        return Ok(system);
+    }
+    bail!("could not locate the cagent application templates in share/cagent or a source checkout")
 }
 
 fn find_cai_pep_binary_for_init() -> Result<PathBuf> {
