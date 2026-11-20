@@ -18,6 +18,25 @@ v0.3.0 已发布 AliLinux 3 全功能 RPM。下表是下一版多平台 Release 
 
 同一台 AliLinux 3 机器上，同一用户运行同一版本的全功能 RPM 或部署 ZIP 时，两者默认共用 `~/.confidential-agent`。切换工具后可继续查看和管理同一批实例。需要独立的实验环境时，给 one-click 和后续 CLI 命令传入同一个单独的 `--state-dir`。
 
+## 使用部署 ZIP
+
+从同一版本的 Release 下载 `cagent-deploy-VERSION-linux-amd64.zip` 或
+`cagent-deploy-VERSION-darwin-arm64.zip`，按 Release 的 `SHA256SUMS`
+校验后解压。在解压目录执行 `./one-click.sh`，或用 `./bin/cagent`
+分步部署。也可以把解压目录的 `bin` 加到当前 shell 的 `PATH`。
+公开 one-click 使用 `--edition deploy-only` 显式选择该形态。它会将
+ZIP 安装到 `${XDG_DATA_HOME:-$HOME/.local/share}/cagent/releases/` 下，
+保留按版本命名的目录供后续复用。
+
+打包机用 `cargo build --locked --release -p confidential-agent-cli --no-default-features`
+编译 cagent，并在 Shelter 源码树用
+`cargo build --locked --release --bin shelter --no-default-features --features deploy-only`
+编译 Shelter。准备匹配平台的原生工具和 Terraform provider，再用
+`python3.11 packaging/build-deploy-zip.py --help` 查看打包参数。
+两种 ZIP 和 AliLinux 3 RPM 可由 `packaging/collect-release.py --deploy-bundles DIR`
+收集到同一 Release 目录。仅更新部署工具时，`packaging/publish-release.py`
+的 `--reuse-image-from TAG` 可取用已发布的官方镜像及其原始摘要。
+
 ## 从 Release 安装
 
 从 [v0.3.1 GitHub Release](https://github.com/inclavare-containers/confidential-agent/releases/tag/v0.3.1) 下载并运行安装器：
