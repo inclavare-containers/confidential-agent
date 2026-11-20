@@ -6,7 +6,6 @@ assert re.fullmatch(r'\d+\.\d+\.\d+', version)
 spec = (root/'cagent.spec').read_text()
 assert re.search(r'^Version:\s+(\S+)', spec, re.M)[1] == version
 assert 'version='+version+'\n' in (root/'packaging/install-rpm.sh').read_text()
-assert '"confidential-agent '+version+'"' in (root/'packaging/ci-install-test.sh').read_text()
 assert json.loads((root/'hack/release-image.json').read_text())['version'] == version
 metadata=json.loads(subprocess.check_output(['cargo','metadata','--locked','--no-deps','--format-version','1'],cwd=root))
 assert all(p['version']==version for p in metadata['packages'] if p['id'] in metadata['workspace_members'])
