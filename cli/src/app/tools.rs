@@ -73,6 +73,52 @@ pub(super) fn run_native_tool_output(
         .context("failed to execute native tool")
 }
 
+pub(super) fn run_native_tool_output_with_timeout(
+    tools_dir: &Path,
+    spec: NativeToolSpec,
+    timeout: Duration,
+) -> Result<std::process::Output> {
+    use std::io::{Seek, SeekFrom};
+    use std::os::unix::process::CommandExt;
+
+    if timeout.is_zero() {
+        return run_native_tool_output(tools_dir, spec);
+    }
+    let tool = spec.tool;
+    let mut stdout = tempfile::tempfile()?;
+    let mut stderr = tempfile::tempfile()?;
+    let mut child = native_tool_command(tools_dir, spec)?
+        .stdin(Stdio::null())
+        .stdout(stdout.try_clone()?)
+        .stderr(stderr.try_clone()?)
+        .process_group(0)
+        .spawn()
+        .with_context(|| format!("failed to start {tool}"))?;
+    let started = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        let remaining = timeout.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            unsafe { libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL) };
+            child.wait()?;
+            bail!("{tool} timed out after {}s", timeout.as_secs());
+        }
+        thread::sleep(remaining.min(Duration::from_millis(25)));
+    };
+    stdout.seek(SeekFrom::Start(0))?;
+    stderr.seek(SeekFrom::Start(0))?;
+    let mut output = std::process::Output {
+        status,
+        stdout: Vec::new(),
+        stderr: Vec::new(),
+    };
+    stdout.read_to_end(&mut output.stdout)?;
+    stderr.read_to_end(&mut output.stderr)?;
+    Ok(output)
+}
+
 pub(super) fn summarize_command_bytes(bytes: &[u8]) -> String {
     const MAX: usize = 4096;
     let text = String::from_utf8_lossy(bytes);
@@ -421,18 +467,6 @@ pub(super) fn challenge_inject_attempt_timeout_secs() -> u64 {
         .unwrap_or(90)
 }
 
-pub(super) fn challenge_inject_tool_args(
-    tool_args: Vec<OsString>,
-    timeout_secs: u64,
-) -> Vec<OsString> {
-    let mut wrapped = vec![
-        OsString::from(format!("{timeout_secs}s")),
-        OsString::from("attestation-challenge-client"),
-    ];
-    wrapped.extend(tool_args);
-    wrapped
-}
-
 pub(super) fn challenge_inject(
     cli: &Cli,
     state_dir: &Path,
@@ -513,14 +547,18 @@ pub(super) fn run_challenge_inject_once(
     tee: &str,
     direct: bool,
 ) -> Result<()> {
-    let envs = challenge_inject_envs(direct, target_ip, std::env::vars());
-
-    run_attestation_tool(
-        cli,
-        state_dir,
-        "timeout",
-        challenge_inject_tool_args(
-            vec![
+    let mut envs = challenge_inject_envs(direct, target_ip, std::env::vars());
+    envs.push((
+        "ATTESTATION_CHALLENGE_CLIENT_WORK_DIR".into(),
+        ensure_attestation_workdir(state_dir)?
+            .to_string_lossy()
+            .into_owned(),
+    ));
+    let output = run_native_tool_output_with_timeout(
+        &cli.tools_dir,
+        NativeToolSpec {
+            tool: "attestation-challenge-client",
+            tool_args: vec![
                 OsString::from("inject-resource"),
                 OsString::from("--api-url"),
                 OsString::from(api_url),
@@ -533,11 +571,19 @@ pub(super) fn run_challenge_inject_once(
                 OsString::from("--policy"),
                 OsString::from("default"),
             ],
-            challenge_inject_attempt_timeout_secs(),
-        ),
-        envs,
-        false,
-    )
+            envs,
+            workdir: None,
+        },
+        Duration::from_secs(challenge_inject_attempt_timeout_secs()),
+    )?;
+    anyhow::ensure!(
+        output.status.success(),
+        "attestation-challenge-client inject-resource failed with status {}: stderr={} stdout={}",
+        output.status,
+        summarize_command_bytes(&output.stderr),
+        summarize_command_bytes(&output.stdout)
+    );
+    Ok(())
 }
 
 pub(super) fn no_proxy_with_target(existing: &str, target: &str) -> String {
@@ -778,16 +824,19 @@ mod tests {
     }
 
     #[test]
-    fn challenge_inject_tool_args_wraps_with_timeout() {
-        let inner = vec![OsString::from("--flag")];
-        let wrapped = challenge_inject_tool_args(inner, 120);
-        let strs: Vec<String> = wrapped
-            .iter()
-            .map(|a| a.to_string_lossy().to_string())
-            .collect();
-        assert_eq!(strs[0], "120s");
-        assert_eq!(strs[1], "attestation-challenge-client");
-        assert_eq!(strs[2], "--flag");
+    fn native_tool_timeout_stops_a_running_command() {
+        let error = run_native_tool_output_with_timeout(
+            Path::new("/bin"),
+            NativeToolSpec {
+                tool: "sh",
+                tool_args: vec!["-c".into(), "sleep 30".into()],
+                envs: vec![],
+                workdir: None,
+            },
+            Duration::from_millis(50),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("sh timed out"));
     }
 
     #[test]
