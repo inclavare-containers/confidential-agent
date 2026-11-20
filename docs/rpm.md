@@ -267,7 +267,8 @@ export CA_GITHUB_PROXY_URL=""
 
 1. 更新 `Cargo.toml`、`Cargo.lock`、`cagent.spec`、`hack/release-image.json` 与安装脚本中的版本号，编写 `docs/releases/vX.Y.Z.md`，运行 `python3.11 packaging/check-version.py`。
 2. 如配套 Shelter 更新，用有包写权限的账号将原样 RPM 作为一个 OCI 文件上传到 cagent 的公开 GHCR 包 `ghcr.io/inclavare-containers/confidential-agent/shelter-rpm`，用 Shelter 的版本和发行号作为标签。核对匿名按 RPM SHA-256 下载的字节后，更新 `hack/shelter-rpm.json`。正式 cagent Release 随附对应的 Shelter RPM。
-3. 在安装新 RPM 的构建机上，从干净的发布提交执行 `python3.11 packaging/produce-release-image.py build WORK_DIR`。执行 `python3.11 packaging/produce-release-image.py push WORK_DIR OUTPUT_DIR` 将已有产物推送至 GHCR 并生成 `image-index.json`、`image-release.json`，然后将两份元数据上传至 draft Release。若通过 staging 仓库交接，给 `push` 传入 `--repository REPOSITORY`，并在发布前将相同 OCI digest 提升到官方仓库。
-4. 推送 `vX.Y.Z` 标签，CI 校验标签、源码提交、Rekor 元数据、公开匿名 GHCR 可拉取性及全部附件 `SHA256SUMS` 一致后正式发布 Release。
+3. 如果这次沿用已有的官方预构建镜像，在 `hack/release-image.json` 的 `reuse_image_from` 写入已发布的镜像来源标签，例如 `v0.3.0`。发布任务沿用 OCI 摘要及 `image-release.json`，并把工具 Release 的版本写入新的 `image-index.json`。
+4. 如果这次同时更新 Guest，从干净的发布提交执行 `python3.11 packaging/produce-release-image.py build WORK_DIR`。执行 `python3.11 packaging/produce-release-image.py push WORK_DIR OUTPUT_DIR`，将已有产物推送至 GHCR，并将生成的 `image-index.json`、`image-release.json` 上传至 draft Release。若通过 staging 仓库交接，给 `push` 传入 `--repository REPOSITORY`，并在发布前将相同 OCI digest 提升到官方仓库。
+5. 将已在目标平台验证的 Linux x86_64 和 macOS arm64 部署 ZIP 上传到同一个 draft Release。推送 `vX.Y.Z` 标签后，CI 将这两份 ZIP 纳入完整 RPM 的 Release 清单。发布任务核对标签、源码提交、公开 OCI 引用和附件 SHA-256 后正式发布。
 
 `/usr/libexec/cagent/SOURCES.tsv` 记录固定原生工具（`cosign`、`aliyun`、`ossutil64`、`oras`）的版本、URL 与下载归档 SHA-256（其中 `aliyun` 与 `oras` 为压缩包摘要）；RPM 自身记录最终安装文件的摘要。

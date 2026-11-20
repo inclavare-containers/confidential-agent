@@ -119,7 +119,7 @@ printf fixture > %{{buildroot}}/usr/share/release-fixture/{name}
 
     def test_offline_installer_verifies_pair_and_rejects_tampering(self):
         source=self.prepare_release()
-        cmd=['bash',str(ROOT/'packaging/install-rpm.sh'),'--from-dir',str(source),'--download-only','--output-dir',str(self.work/'download')]
+        cmd=['bash',str(ROOT/'packaging/install-rpm.sh'),'--version','0.3.0','--from-dir',str(source),'--download-only','--output-dir',str(self.work/'download')]
         subprocess.run(cmd,capture_output=True,check=True)
         (source/self.rpms['shelter'].name).write_bytes(b'corrupted')
         result=subprocess.run(cmd,capture_output=True,text=True)
@@ -150,7 +150,7 @@ else:shutil.copy2(pathlib.Path(os.environ['FIXTURE_RELEASE'])/name,out)
                 log=self.work/('attempts-'+str(i));out=self.work/('download-'+str(i))
                 env=dict(os.environ,PATH=str(bindir)+os.pathsep+os.environ['PATH'],FIXTURE_RELEASE=str(source),
                          ATTEMPT_LOG=str(log),FAIL_MODE=mode,CA_GITHUB_PROXY_FIRST=first,CA_GITHUB_PROXY_URL=proxy)
-                cmd=['bash',str(ROOT/'packaging/install-rpm.sh'),'--download-only','--output-dir',str(out)]
+                cmd=['bash',str(ROOT/'packaging/install-rpm.sh'),'--version','0.3.0','--download-only','--output-dir',str(out)]
                 result=subprocess.run(cmd,env=env,capture_output=True,text=True)
                 self.assertEqual(result.returncode,0,result.stderr)
                 attempts=log.read_text().splitlines()
