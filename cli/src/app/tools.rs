@@ -89,6 +89,7 @@ pub(super) fn summarize_command_bytes(bytes: &[u8]) -> String {
     }
 }
 
+#[cfg(any(feature = "full", test))]
 pub(super) fn dockerhub_mirror_ref(image: &str) -> Option<String> {
     let image = image.trim();
     if image.is_empty() || image.starts_with("docker.1ms.run/") {
@@ -108,6 +109,7 @@ pub(super) fn dockerhub_mirror_ref(image: &str) -> Option<String> {
     Some(format!("docker.1ms.run/{dockerhub_path}"))
 }
 
+#[cfg(any(feature = "full", test))]
 pub(super) fn resolve_build_container_image(image: &str) -> Result<String> {
     let runtime = container_image_runtime().context(
         "build.container.image requires docker or podman on the build host to preflight image fallback",
@@ -151,6 +153,7 @@ pub(super) fn resolve_build_container_image(image: &str) -> Result<String> {
     Ok(mirror)
 }
 
+#[cfg(any(feature = "full", test))]
 fn container_image_runtime() -> Option<String> {
     for candidate in ["podman", "docker"] {
         if Command::new(candidate)
@@ -167,6 +170,7 @@ fn container_image_runtime() -> Option<String> {
     None
 }
 
+#[cfg(any(feature = "full", test))]
 fn container_image_exists(runtime: &str, image: &str) -> Result<bool> {
     let status = Command::new(runtime)
         .args(["image", "inspect", image])
@@ -177,6 +181,7 @@ fn container_image_exists(runtime: &str, image: &str) -> Result<bool> {
     Ok(status.success())
 }
 
+#[cfg(any(feature = "full", test))]
 fn is_dockerhub_registry(value: &str) -> bool {
     matches!(
         value,
@@ -184,6 +189,7 @@ fn is_dockerhub_registry(value: &str) -> bool {
     )
 }
 
+#[cfg(any(feature = "full", test))]
 fn dockerhub_library_path(value: &str) -> String {
     if value.contains('/') {
         value.to_string()
@@ -192,6 +198,7 @@ fn dockerhub_library_path(value: &str) -> String {
     }
 }
 
+#[cfg(any(feature = "full", test))]
 fn ensure_tag(value: &str) -> String {
     if value.contains('@') {
         return value.to_string();
