@@ -694,6 +694,9 @@ pub(crate) struct ImagePublishArgs {
     pub(crate) image_release: Option<PathBuf>,
     #[arg(long, requires = "artifact")]
     pub(crate) release_digest: Option<String>,
+    /// Also inspect disk structure and boot evidence with Shelter's Linux disk tools.
+    #[arg(long, requires = "artifact")]
+    pub(crate) verify_disk: bool,
     /// Write the resulting cloud image information as JSON.
     #[arg(long)]
     pub(crate) output: Option<PathBuf>,

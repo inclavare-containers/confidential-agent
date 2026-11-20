@@ -154,8 +154,9 @@ find_cpu_publication() {
 
 download_cpu_image() {
   local downloaded
-  downloaded="$(CA_TOOLS_DIR="$CA_TOOLS_DIR" one_click_python "$ROOT_DIR/hack/download-release-image.py" --output-dir "$CA_DOWNLOAD_DIR" \
-    --version "$CA_RELEASE_VERSION" --from-dir "${CA_IMAGE_RELEASE%/*}" --region "$CA_REGION" --format json)"
+  local args=(--output-dir "$CA_DOWNLOAD_DIR" --version "$CA_RELEASE_VERSION" --from-dir "${CA_IMAGE_RELEASE%/*}" --region "$CA_REGION" --format json)
+  if [[ "$CA_VERIFY_DISK" == 1 ]]; then args+=(--verify-disk); fi
+  downloaded="$(CA_TOOLS_DIR="$CA_TOOLS_DIR" one_click_python "$ROOT_DIR/hack/download-release-image.py" "${args[@]}")"
   CA_ARTIFACT="$(jq -er .artifact <<<"$downloaded")"
 }
 
@@ -164,8 +165,10 @@ publish_cpu_image() {
   if [[ "$CA_IMAGE_SOURCE" == build ]]; then
     ca_cmd image publish "$(cpu_builder_id)" --region "$CA_REGION" --output "$receipt"
   else
-    ca_cmd image publish --artifact "$CA_ARTIFACT" --image-release "$CA_IMAGE_RELEASE" \
-      --release-digest "$CA_RELEASE_DIGEST" --region "$CA_REGION" --output "$receipt"
+    local args=(--artifact "$CA_ARTIFACT" --image-release "$CA_IMAGE_RELEASE"
+                --release-digest "$CA_RELEASE_DIGEST" --region "$CA_REGION" --output "$receipt")
+    if [[ "$CA_VERIFY_DISK" == 1 ]]; then args+=(--verify-disk); fi
+    ca_cmd image publish "${args[@]}"
   fi
   CA_IMAGE_ID="$(jq -er .image_id "$receipt")"
 }
@@ -182,7 +185,12 @@ resolve_cpu_image() {
   fi
   if [[ "$CA_SKIP_DEPLOY" == 1 ]]; then return; fi
   cpu_step image-lookup find_cpu_publication
-  if [[ -n "$CA_IMAGE_ID" ]]; then return; fi
+  if [[ -n "$CA_IMAGE_ID" ]]; then
+    if [[ "$CA_VERIFY_DISK" == 1 ]]; then
+      log "using ECS image $CA_IMAGE_ID; --verify-disk checks local artifacts only, and no local disk was read"
+    fi
+    return
+  fi
   if [[ "$CA_IMAGE_SOURCE" == prebuilt && -z "$CA_ARTIFACT" && -n "${CA_DOWNLOAD_DIR:-}" ]]; then
     cpu_step download download_cpu_image
   fi

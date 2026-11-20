@@ -110,6 +110,8 @@ confidential-agent image publish allinone-builder \
 
 在安装 RPM 的机器上执行下载脚本，再运行它输出的 `image publish` 命令。下载先尝试官方 GHCR，传输失败后切换至 1ms，使用相同摘要和本地断点继续传输。
 
+首次下载、缓存复用和本地导入均根据可信 Release 核对产物清单、文件大小和 SHA-256。在有 QEMU 和 NBD 的 Linux 部署机上，可在下载脚本、`image publish --artifact` 或 CPU one-click 中加 `--verify-disk`，额外检查磁盘结构与启动材料。如果 one-click 已有可用的 ECS 镜像，它会打印复用的镜像 ID，并说明本次没有读取本地磁盘。
+
 ```bash
 python3.11 /usr/share/cagent/hack/download-release-image.py --output-dir ./prebuilt --region cn-beijing
 ```

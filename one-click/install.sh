@@ -29,6 +29,7 @@ Deployment options:
   --model MODEL          Model id; --bailian-model is an alias
   --image-source MODE    prebuilt (default) or build
   --artifact PATH        Local Shelter artifact
+  --verify-disk          Also inspect the local prebuilt disk using Linux disk tools
   --image-release PATH   Local image-release.json with --release-digest
   --release-digest HASH  Trusted SHA-256 digest of --image-release
   --image-id ID          Existing regional ECS image ID

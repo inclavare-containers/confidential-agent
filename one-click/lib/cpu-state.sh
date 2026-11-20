@@ -30,7 +30,7 @@ save_cpu_task() {
   path="$(cpu_task_path "$CA_SERVICE_ID")"
   install -d -m 0700 "${path%/*}"
   tmp="$(mktemp "${path}.XXXXXX")"
-  for field in "${cpu_task_fields[@]}" CA_HOST_CLIENT; do
+  for field in "${cpu_task_fields[@]}" CA_HOST_CLIENT CA_VERIFY_DISK; do
     printf '%s\0' "${!field-}"
   done >"$tmp"
   mv -f -- "$tmp" "$path"
@@ -46,6 +46,7 @@ load_cpu_task() {
     done
     # Older tasks did not record consent to install an application client.
     IFS= read -r -d '' CA_HOST_CLIENT || CA_HOST_CLIENT=""
+    IFS= read -r -d '' CA_VERIFY_DISK || CA_VERIFY_DISK=0
   } <"$path"
   CA_SERVICE_ID_OVERRIDE="$CA_SERVICE_ID"
   if [[ -n "$CA_CPU_ROOT" ]]; then ROOT_DIR="$CA_CPU_ROOT"; fi
