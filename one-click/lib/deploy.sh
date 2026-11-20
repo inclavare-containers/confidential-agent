@@ -356,7 +356,7 @@ expected_connect_guest_port() {
 }
 
 probe_codex_websocket() {
-  python3.11 - "$CA_CONNECT_HOST" "$CA_CONNECT_PORT" "$CA_PROJECT_DIR/secrets/app-server-token" <<'PROBE'
+  one_click_python - "$CA_CONNECT_HOST" "$CA_CONNECT_PORT" "$CA_PROJECT_DIR/secrets/app-server-token" <<'PROBE'
 import base64, http.client, os, sys
 from pathlib import Path
 

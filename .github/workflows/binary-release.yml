@@ -16,6 +16,32 @@ concurrency:
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
+  mac-one-click-python:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Run one-click with a user-installed Python on Apple Silicon
+        shell: /bin/bash {0}
+        env:
+          CA_GITHUB_PROXY_URL: ''
+        run: |
+          set -eu
+          export XDG_DATA_HOME="$RUNNER_TEMP/one-click data"
+          bin="$RUNNER_TEMP/without-python"
+          mkdir "$bin"
+          for cmd in uname curl shasum tar gzip mktemp mkdir mv rm; do
+            ln -s "$(command -v "$cmd")" "$bin/$cmd"
+          done
+          export PATH="$bin"
+          script=one-click/lib/python.sh
+          executable="$(/bin/bash "$script" -c 'import platform, ssl, sys; assert platform.machine() == "arm64"; print(sys.executable)')"
+          [[ "$executable" == "$XDG_DATA_HOME/"* ]]
+          CA_SKIP_DEPS=1 /bin/bash "$script" -c 'import sys; assert sys.executable == sys.argv[1]' "$executable"
+
   checks:
     if: github.repository == 'inclavare-containers/confidential-agent'
     runs-on: ubuntu-24.04
