@@ -21,7 +21,7 @@ class ReleaseDownloadTests(unittest.TestCase):
         cls.temp = tempfile.TemporaryDirectory()
         cls.base = Path(cls.temp.name)
         cls.rpms = {}
-        for name, version, release in [('shelter','0.3.2','3.al8'),('cagent','0.3.0','1.al8')]:
+        for name, version, release in [('shelter','0.3.2','3.al8'),('cagent','0.3.1','1.al8')]:
             specfile = cls.base/(name+'.spec')
             specfile.write_text(f'''Name: {name}
 Version: {version}
@@ -114,7 +114,7 @@ printf fixture > %{{buildroot}}/usr/share/release-fixture/{name}
             version,release=subprocess.check_output(['rpm','-qp','--qf','%{VERSION}\n%{RELEASE}',str(path)],text=True).splitlines()
             packages.append({'name':name,'version':version,'release':release,'arch':'x86_64','file':path.name,
                              'sha256':fetch.digest(path),'payload_sha256':subprocess.check_output(['rpm','-qp','--qf','%{PAYLOADDIGEST}',str(path)],text=True)})
-        (source/'release-manifest.json').write_text(json.dumps({'schema':'confidential-agent/binary-release/v1','version':'0.3.0','tag':'v0.3.0','platform':'alinux3-x86_64','packages':packages}))
+        (source/'release-manifest.json').write_text(json.dumps({'schema':'confidential-agent/binary-release/v1','version':'0.3.1','tag':'v0.3.1','platform':'alinux3-x86_64','packages':packages}))
         return source
 
     def test_offline_installer_verifies_pair_and_rejects_tampering(self):
