@@ -46,7 +46,7 @@ Confidential Agent 的保护范围包括：
 
 `one-click/install.sh` 在部署机上按以下顺序完成工作：
 
-1. 先确定目标 `--harness`（默认 `openclaw`）与接入方式 `--access`（默认 `web+tui`），仅在所选接入方式确实需要且本机缺失时按需安装对应本地客户端（本地 `confidential-agent` CLI 本身绝不自动安装客户端）。
+1. 先确定目标 `--harness`（默认 `openclaw`）与接入方式 `--access`（默认 `web+tui`），所选接入方式用到本地客户端时，one-click 单独询问是否安装，默认跳过。
 2. 安装并校验官方 `cagent` 与配套 `shelter` RPM 及原生工具（`cosign`、`aliyun`、`ossutil64`、`oras`、TNG、远程证明客户端）。
 3. 默认从官方 GitHub Release 获取 `image-index.json` 和 `image-release.json`。索引提供可信 `release_digest` 和不可变 OCI 引用。`image publish` 校验产物后导入目标地域的 ECS 镜像，同账号同地域已有该镜像时直接复用。设置 `--image-source build` 可本地构建、导出和发布。
 4. 按所选应用运行 `confidential-agent init <app>` 生成实例私有配置，并配置 operator / deployer 安全组 peering。
@@ -121,7 +121,7 @@ sh "$INSTALL_SCRIPT" deploy \
   --bailian-model qwen3.7-max
 ```
 
-交互式部署（脚本会先询问镜像来源、harness、接入方式、模型、推理端点和所需凭据，回车即可采用默认值，随后再按所选接入方式按需检查/安装本地客户端）：
+交互式部署（脚本会先询问镜像来源、harness、接入方式、模型、推理端点和所需凭据，回车即可采用默认值，本地应用客户端的安装单独确认）：
 
 ```bash
 sh "$INSTALL_SCRIPT"
@@ -171,18 +171,18 @@ sh "$INSTALL_SCRIPT" deploy --non-interactive --yes \
   --model qwen4-max
 ```
 
-| `--harness` | 默认 `--access`（可选值） | 原生服务 / 运行方式 | 按需安装的宿主机客户端 | `--api-base-url` 协议 |
+| `--harness` | 默认 `--access`（可选值） | 原生服务 / 运行方式 | 可选的宿主机客户端 | `--api-base-url` 协议 |
 | --- | --- | --- | --- | --- |
-| `openclaw`（默认） | `web+tui`（`web+tui` / `web` / `tui` / `ssh`） | 原生 OpenClaw Gateway（`:18789`，支持 Web、TUI、钉钉、A2A）或 SSH | 仅 `web+tui` / `tui` 安装 `openclaw`；`web` / `ssh` 不安装 | OpenAI Chat Completions |
+| `openclaw`（默认） | `web+tui`（`web+tui` / `web` / `tui` / `ssh`） | 原生 OpenClaw Gateway（`:18789`，支持 Web、TUI、钉钉、A2A）或 SSH | 仅 `web+tui` / `tui` 可选装 `openclaw`；`web` / `ssh` 不安装 | OpenAI Chat Completions |
 | `hermes` | `http`（`http` / `ssh`） | 原生 Hermes HTTP API（`:8642`，Bearer `API_SERVER_KEY`）或 SSH | 不安装 | OpenAI 兼容接口 |
-| `codex` | `ws`（`ws` / `ssh`） | 原生带能力令牌鉴权的 WebSocket `app-server`（`:4500`）或 SSH | 仅 `ws` 安装 `codex`；`ssh` 不安装 | OpenAI Responses |
-| `opencode` | `web+attach`（`web+attach` / `web` / `attach` / `ssh`） | 原生带密码鉴权的 OpenCode Web / attach（`:4096`）或 SSH | 仅 `web+attach` / `attach` 安装 `opencode`；`web` / `ssh` 不安装 | OpenAI Chat Completions |
+| `codex` | `ws`（`ws` / `ssh`） | 原生带能力令牌鉴权的 WebSocket `app-server`（`:4500`）或 SSH | 仅 `ws` 可选装 `codex`；`ssh` 不安装 | OpenAI Responses |
+| `opencode` | `web+attach`（`web+attach` / `web` / `attach` / `ssh`） | 原生带密码鉴权的 OpenCode Web / attach（`:4096`）或 SSH | 仅 `web+attach` / `attach` 可选装 `opencode`；`web` / `ssh` 不安装 | OpenAI Chat Completions |
 | `dsh` | `web`（`web` / `ssh`） | 原生带鉴权令牌的 DSH Web（`:3080`）或 SSH `cai-agent headless` | 不安装 | OpenAI Chat Completions |
 | `claude-code` | `ssh` | 认证实例管理 SSH：`confidential-agent ssh ... --tty -- cai-agent` | 不安装 | Anthropic Messages（默认百炼 `/apps/anthropic`） |
 | `qodercli` | `ssh` | 认证实例管理 SSH，进入会话后登录 Qoder 账户 | 不安装 | 使用 Qoder 账户自身配置 |
 | `pi` | `ssh` | 认证实例管理 SSH（终端 TUI 或 `cai-agent --print '任务'`） | 不安装 | OpenAI Chat Completions |
 
-传入 `--skip-host-client`（OpenClaw 也可使用 `--skip-host-openclaw`）跳过宿主机客户端安装。
+CPU one-click 和 OpenClaw + vLLM 均在交互时询问是否安装适用的本地客户端，回车跳过。传入 `--install-host-client` 可显式同意安装；`--skip-host-client` 可跳过询问和安装。非交互模式默认跳过，即使同时传入 `--yes`。
 
 OpenClaw 的对等连接通过 Agent Card 发现对端，再经 TNG 隧道调用对端 Gateway 的 `/v1/responses`。当前 OpenClaw 卡片列出的 `/a2a` 在 Gateway 上没有对应的处理器。标准 A2A JSON-RPC `message/send` 的处理器见[独立的 data-collab 示例](../../examples/a2a-data-collab/files/agent-server.mjs)。
 

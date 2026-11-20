@@ -21,6 +21,8 @@ Bootstrap options:
   --help                 Show this help
 
 Deployment options:
+  --install-host-client  Install the local application CLI for the selected access method
+  --skip-host-client     Skip the local application CLI installation and prompt
   --harness NAME         openclaw (default), hermes, codex, claude-code, qodercli, opencode, pi, dsh
   --api-base-url URL     Inference API base URL; defaults to Bailian
   --api-key KEY          Inference API key (or CA_API_KEY); --bailian-api-key is an alias

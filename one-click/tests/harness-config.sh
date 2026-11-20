@@ -42,6 +42,47 @@ export CA_SLSA_GENERATOR=/bin/true
   [[ "$CA_API_BASE_URL" == https://dashscope.aliyuncs.com/apps/anthropic ]]
 )
 
+# Access selection alone must never authorize a host package install.
+(
+  export CA_NON_INTERACTIVE=0 CA_HARNESS=openclaw CA_IMAGE_SOURCE=prebuilt
+  export CA_MODEL=test-model CA_API_BASE_URL=https://inference.example/v1
+  unset CA_INSTALL_HOST_CLIENT CA_SKIP_HOST_CLIENT CA_SKIP_HOST_OPENCLAW
+  collect_cpu_inputs() { :; }
+  collect_gpu_inputs() { :; }
+  # Capture the installation calls without changing globally installed packages.
+  ensure_host_openclaw_runtime() { echo openclaw >>"$task_tmp/host-client"; }
+  ensure_host_node22() { :; }
+  npm_global_package_version() { return 1; }
+  npm() { printf '%s\n' "$@" >>"$task_tmp/host-client"; }
+  codex() { :; }
+  opencode() { :; }
+  run_deploy_cpu() { ensure_host_access_client; }
+  run_deploy_openclaw_vllm() { ensure_host_access_client; }
+  check_client() {
+    local expected="$1" answer="$2"
+    shift 2
+    : >"$task_tmp/host-client"
+    (main "$@" --state-dir "$task_tmp/host-state") <<<"$answer"
+    if [[ -n "$expected" ]]; then
+      grep -Fxq -- "$expected" "$task_tmp/host-client"
+    else
+      [[ ! -s "$task_tmp/host-client" ]]
+    fi
+  }
+
+  check_client '' '' --access web+tui --yes
+  check_client openclaw y --access tui
+  check_client '' y --access web+tui --skip-host-openclaw
+  check_client '' y --access web --install-host-client
+  check_client '' y --harness codex --access ws --non-interactive --yes
+  check_client "@openai/codex@$(ca_software_version codex)" '' --harness codex --access ws --non-interactive --install-host-client
+  check_client '' y --harness codex --access ssh --install-host-client
+  check_client "opencode-ai@$(ca_software_version opencode)" y --harness opencode --access web+attach
+  check_client '' y --harness opencode --access attach --skip-host-client
+  CA_ONE_CLICK_TARGET=openclaw-vllm check_client '' n --yes
+  CA_ONE_CLICK_TARGET=openclaw-vllm check_client openclaw '' --non-interactive --install-host-client
+)
+
 # Exercise the public entry point without running deployment or host setup.
 (
   run_deploy_cpu() { :; }

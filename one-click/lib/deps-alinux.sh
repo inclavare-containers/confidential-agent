@@ -81,20 +81,6 @@ needs_local_image_build() {
   esac
 }
 
-needs_host_node_runtime() {
-  case "${CA_MODE:-deploy-openclaw}" in
-    deploy-openclaw-vllm)
-      [[ "${CA_SKIP_HOST_OPENCLAW:-0}" != "1" && "${CA_SKIP_HOST_CLIENT:-0}" != "1" ]]
-      ;;
-    deploy-openclaw)
-      [[ -n "$(selected_host_client)" ]]
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
 install_os_dependencies() {
   if [[ "${CA_SKIP_DEPS:-0}" == "1" ]]; then
     log "skipping OS dependency installation"
@@ -131,12 +117,12 @@ install_os_dependencies() {
       pkgconf-pkg-config
     )
   fi
-  if [[ "${CA_MODE:-}" == deploy-openclaw && "$(selected_host_client)" == codex ]]; then
+  if [[ "$CA_HOST_CLIENT" == codex ]]; then
     common_packages+=(procps-ng)
   fi
   install_packages_best_effort "$pm" "${common_packages[@]}"
 
-  if needs_host_node_runtime; then
+  if [[ -n "$CA_HOST_CLIENT" ]]; then
     if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
       if ! install_packages_best_effort "$pm" nodejs npm; then
         warn "failed to install nodejs/npm; install them manually before installing the selected host client"
@@ -282,8 +268,7 @@ ensure_host_openclaw_runtime() {
 }
 
 ensure_host_access_client() {
-  local client package version
-  client="$(selected_host_client)"
+  local client="$CA_HOST_CLIENT" package version
   case "$client" in
     '') return ;;
     openclaw) ensure_host_openclaw_runtime; return ;;
