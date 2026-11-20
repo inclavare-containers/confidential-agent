@@ -163,6 +163,7 @@ Common options:
 CPU shared image options:
   --image-source MODE            prebuilt (default) or build
   --artifact PATH                Local Shelter artifact directory or manifest
+  --verify-disk                  Also inspect the local prebuilt disk using Linux disk tools
   --image-release PATH           Explicit local image-release.json (requires --release-digest)
   --release-digest sha256:HEX    Trusted SHA-256 digest of --image-release
   --image-id ID                  Existing regional cloud ECS image ID (skips pull and publish)
@@ -255,6 +256,7 @@ init_defaults() {
   CA_API_BASE_URL="${CA_API_BASE_URL:-}"
   CA_IMAGE_SOURCE="${CA_IMAGE_SOURCE:-}"
   CA_ARTIFACT="${CA_ARTIFACT:-}"
+  CA_VERIFY_DISK="${CA_VERIFY_DISK:-0}"
   CA_IMAGE_ID="${CA_IMAGE_ID:-}"
   CA_IMAGE_RELEASE="${CA_IMAGE_RELEASE:-}"
   CA_RELEASE_DIGEST="${CA_RELEASE_DIGEST:-}"
@@ -347,6 +349,7 @@ parse_args() {
       --model|--bailian-model) CA_MODEL="${2:?missing model}"; shift 2 ;;
       --image-source) CA_IMAGE_SOURCE="${2:?missing value for --image-source}"; shift 2 ;;
       --artifact) CA_ARTIFACT="${2:?missing value for --artifact}"; shift 2 ;;
+      --verify-disk) CA_VERIFY_DISK=1; shift ;;
       --image-id) CA_IMAGE_ID="${2:?missing value for --image-id}"; shift 2 ;;
       --image-release) CA_IMAGE_RELEASE="${2:?missing value for --image-release}"; shift 2 ;;
       --release-digest) CA_RELEASE_DIGEST="${2:?missing value for --release-digest}"; shift 2 ;;
@@ -514,6 +517,7 @@ validate_options() {
       *) die "--image-source must be prebuilt or build" ;;
     esac
     if [[ "$CA_IMAGE_SOURCE" == "build" ]]; then
+      [[ "$CA_VERIFY_DISK" != 1 ]] || die "--verify-disk applies to prebuilt artifacts"
       if [[ -n "$CA_ARTIFACT" || -n "$CA_IMAGE_RELEASE" || -n "$CA_RELEASE_DIGEST" || -n "$CA_IMAGE_ID" ]]; then
         die "--image-source build cannot be combined with --artifact, --image-release, --release-digest, or --image-id"
       fi
@@ -530,6 +534,7 @@ validate_options() {
       die "CLI harnesses require --replicas 1; use separate service instances"
     fi
   elif [[ "$CA_MODE" == "deploy-openclaw-vllm" || "$CA_MODE" == "deploy-vllm-inference" ]]; then
+    [[ "$CA_VERIFY_DISK" != 1 ]] || die "--verify-disk applies to the CPU prebuilt image"
     if [[ "$CA_IMAGE_SOURCE" != prebuilt || -n "$CA_ARTIFACT" || -n "$CA_IMAGE_RELEASE" || -n "$CA_RELEASE_DIGEST" || -n "$CA_IMAGE_ID" || -n "$CA_ACCESS_METHOD" ]]; then
       die "CPU shared-image options (--image-source/--artifact/--image-release/--release-digest/--image-id/--access) apply to one-click/install.sh only"
     fi

@@ -309,6 +309,20 @@ fn portable_artifact_requires_matching_release_manifest_and_disk() {
 }
 
 #[test]
+fn prebuilt_publish_runs_deep_disk_inspection_only_on_request() {
+    let fixture = Fixture::new();
+    fixture.publish_image("artifact", ACCOUNT, REGION);
+    assert_success(
+        fixture
+            .publish("artifact", ACCOUNT, REGION)
+            .args(["--release-digest", &fixture.release_digest, "--verify-disk"])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(fixture.calls("verify"), [MANIFEST, "deep"]);
+}
+
+#[test]
 fn portable_artifact_requires_release_authentication_and_existing_source() {
     let fixture = Fixture::new();
     assert_failure(
@@ -366,6 +380,7 @@ def shel():
             sys.exit("release digest mismatch")
         return json.loads(data)
     if operation == "verify":
+        log("verify", arg("--release-manifest") if "--release-manifest" in args else "deep")
         path = Path(source)
         manifest = json.loads(path.read_text())
         disk, = manifest["outputs"]

@@ -17,7 +17,7 @@
 | OpenSSH、CA 证书、coreutils、bash、jq | RPM 依赖 | SSH、脚本和 ALB 查询 |
 | Python 3.11 及以上 | 全功能 RPM 通过 DNF 安装 Python 3.11。部署 ZIP 的 one-click 优先使用本机解释器，缺少时按需安装到当前用户目录 | one-click 的发布元数据解析、预构建镜像下载和 Codex WebSocket 就绪探针 |
 
-导入预构建镜像时，Shelter 使用 QEMU 磁盘工具校验产物。已有 ECS 镜像 ID 时，部署直接使用云镜像和描述文件。Rust/Cargo/gcc 用于源码编译或打包 CA。
+导入预构建镜像时，Shelter 根据可信 Release 校验产物清单以及文件大小和 SHA-256。Linux 上可加 `--verify-disk`，使用 QEMU 和 NBD 检查磁盘结构与启动材料。已有 ECS 镜像 ID 时，部署直接使用云镜像和描述文件。Rust/Cargo/gcc 用于源码编译或打包 CA。
 
 Node/npm、Python 应用包、CUDA/vLLM 等在 Guest 镜像内准备。RPM 与部署 ZIP 均不附带宿主机应用客户端。使用 one-click 的 OpenClaw TUI、Codex 远程 CLI 或 OpenCode attach 时，交互模式会询问是否在本机安装客户端及其 Node.js/npm 依赖，默认跳过。非交互安装需显式传入 `--install-host-client`；`--yes` 仅用于其他部署确认。显式配置 `build.container.image` 的构建需要宿主机 Podman 或 Docker。
 
