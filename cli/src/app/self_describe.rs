@@ -227,26 +227,6 @@ const SCRIPT_TOOL_REQUIREMENTS: &[ScriptToolRequirement] = &[
         hint: "`unzip`",
     },
     ScriptToolRequirement {
-        command: "node",
-        packages: &["nodejs", "npm"],
-        hint: "`nodejs`",
-    },
-    ScriptToolRequirement {
-        command: "npm",
-        packages: &["npm"],
-        hint: "`npm`",
-    },
-    ScriptToolRequirement {
-        command: "npx",
-        packages: &["npm"],
-        hint: "`npm`",
-    },
-    ScriptToolRequirement {
-        command: "corepack",
-        packages: &["nodejs"],
-        hint: "`nodejs`",
-    },
-    ScriptToolRequirement {
         command: "gcc",
         packages: &["gcc"],
         hint: "`gcc`",
