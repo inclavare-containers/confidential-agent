@@ -21,6 +21,10 @@
 
 Node/npm、Python 应用包、CUDA/vLLM 等在 Guest 镜像内准备。RPM 与部署 ZIP 均不附带宿主机应用客户端。使用 one-click 的 OpenClaw TUI、Codex 远程 CLI 或 OpenCode attach 时，交互模式会询问是否在本机安装客户端及其 Node.js/npm 依赖，默认跳过。非交互安装需显式传入 `--install-host-client`；`--yes` 仅用于其他部署确认。显式配置 `build.container.image` 的构建需要宿主机 Podman 或 Docker。
 
+部署 ZIP 的 one-click 在获准安装客户端后，将客户端和缺少的 Node.js
+装到当前用户的 `${XDG_DATA_HOME:-$HOME/.local/share}/cagent/one-click/`，
+并打印新终端所需的 `PATH`。
+
 原生工具可以直接访问宿主机文件和代理配置。凭证仍通过进程环境或临时
 0600 OSS 配置传递，临时文件使用后删除，不放入命令参数。
 每个 CA state 保留独立的证明策略与参考值目录。后台 TNG 的日志为 0600，

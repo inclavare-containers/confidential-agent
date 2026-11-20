@@ -510,18 +510,19 @@ impl AttestationVerifier {
             "ATTESTATION_CHALLENGE_CLIENT_WORK_DIR".to_string(),
             self.workdir.to_string_lossy().to_string(),
         ));
-        let output = run_native_tool_output(
+        let output = run_native_tool_output_with_timeout(
             &self.tools_dir,
             NativeToolSpec {
-                tool: "timeout",
-                tool_args: challenge_inject_tool_args(tool_args, timeout.as_secs()),
+                tool: "attestation-challenge-client",
+                tool_args,
 
                 envs,
                 workdir: None,
             },
+            timeout,
         )
         .with_context(|| format!("failed to run attestation-challenge-client {action}"))?;
-        interpret_attestation_output(output, action, timeout)
+        interpret_attestation_output(output, action)
     }
 }
 
@@ -590,19 +591,10 @@ fn fetch_evidence_with_proxy_fallback(
         })
 }
 
-const TIMEOUT_COMMAND_EXIT_CODE: i32 = 124;
-
 fn interpret_attestation_output(
     output: std::process::Output,
     action: &str,
-    timeout: Duration,
 ) -> Result<std::process::Output> {
-    if output.status.code() == Some(TIMEOUT_COMMAND_EXIT_CODE) {
-        bail!(
-            "attestation-challenge-client {action} timed out after {}s",
-            timeout.as_secs()
-        );
-    }
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -1269,19 +1261,6 @@ mod tests {
     }
 
     #[test]
-    fn interpret_attestation_output_maps_timeout_exit_code() {
-        use std::os::unix::process::ExitStatusExt;
-        let output = std::process::Output {
-            status: std::process::ExitStatus::from_raw(TIMEOUT_COMMAND_EXIT_CODE << 8),
-            stdout: Vec::new(),
-            stderr: Vec::new(),
-        };
-        let error = interpret_attestation_output(output, "get-evidence", Duration::from_secs(20))
-            .unwrap_err();
-        assert!(error.to_string().contains("timed out after 20s"));
-    }
-
-    #[test]
     fn interpret_attestation_output_reports_failure_streams() {
         use std::os::unix::process::ExitStatusExt;
         let output = std::process::Output {
@@ -1289,7 +1268,7 @@ mod tests {
             stdout: b"partial".to_vec(),
             stderr: b"boom".to_vec(),
         };
-        let error = interpret_attestation_output(output, "verify", Duration::from_secs(20))
+        let error = interpret_attestation_output(output, "verify")
             .unwrap_err()
             .to_string();
         assert!(error.contains("verify failed"));
@@ -1305,8 +1284,7 @@ mod tests {
             stdout: b"jwt".to_vec(),
             stderr: Vec::new(),
         };
-        let output =
-            interpret_attestation_output(output, "verify", Duration::from_secs(20)).unwrap();
+        let output = interpret_attestation_output(output, "verify").unwrap();
         assert_eq!(output.stdout, b"jwt");
     }
 
