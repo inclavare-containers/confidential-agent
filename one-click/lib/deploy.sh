@@ -44,6 +44,7 @@ ensure_shelter_cleanup() {
   [[ -n "$CA_SHELTER_BIN" && -x "$CA_SHELTER_BIN" ]] ||
     die "Shelter is required for cleanup; install a compatible CLI or set CA_SHELTER_BIN"
   export CA_SHELTER_BIN
+  if [[ "${CA_DEPLOY_ONLY:-0}" == 1 ]]; then return; fi
   "$ROOT_DIR/hack/check-shelter.sh" "$CA_SHELTER_BIN" --cleanup ||
     die "Shelter lacks the managed removal/network commands required for cleanup"
   "$CA_SHELTER_BIN" --version >/dev/null

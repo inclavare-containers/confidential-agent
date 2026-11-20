@@ -517,6 +517,7 @@ validate_options() {
       *) die "--image-source must be prebuilt or build" ;;
     esac
     if [[ "$CA_IMAGE_SOURCE" == "build" ]]; then
+      [[ "${CA_DEPLOY_ONLY:-0}" != 1 ]] || die "--image-source build requires the full edition"
       [[ "$CA_VERIFY_DISK" != 1 ]] || die "--verify-disk applies to prebuilt artifacts"
       if [[ -n "$CA_ARTIFACT" || -n "$CA_IMAGE_RELEASE" || -n "$CA_RELEASE_DIGEST" || -n "$CA_IMAGE_ID" ]]; then
         die "--image-source build cannot be combined with --artifact, --image-release, --release-digest, or --image-id"
@@ -598,10 +599,10 @@ validate_openclaw_vllm_build_variants() {
 }
 
 normalize_workspace_paths() {
-  CA_STATE_DIR="$(realpath -m -- "$CA_STATE_DIR")"
+  CA_STATE_DIR="$(workspace_absolute_path "$CA_STATE_DIR")"
   if [[ "$CA_WORK_DIR_EXPLICIT" != "1" ]]; then CA_WORK_DIR="$CA_STATE_DIR/one-click"; fi
-  CA_WORK_DIR="$(realpath -m -- "$CA_WORK_DIR")"
-  CA_TOOLS_DIR="$(realpath -m -- "$CA_TOOLS_DIR")"
+  CA_WORK_DIR="$(workspace_absolute_path "$CA_WORK_DIR")"
+  CA_TOOLS_DIR="$(workspace_absolute_path "$CA_TOOLS_DIR")"
   export PATH="$CA_TOOLS_DIR:$PATH"
   if [[ "$CA_PACKAGED_INSTALL" == "1" ]]; then
     export CA_SHELTER_RPM_CACHE="${CA_SHELTER_RPM_CACHE:-$CA_STATE_DIR/cache/shelter}"
@@ -609,12 +610,17 @@ normalize_workspace_paths() {
   fi
   local variable
   for variable in CA_IMAGE_SPEC CA_MODEL_KEY_FILE CA_COSIGN_KEY CA_IMAGE_RELEASE CA_READY_JSON; do
-    if [[ -n "${!variable:-}" ]]; then printf -v "$variable" '%s' "$(realpath -m -- "${!variable}")"; fi
+    if [[ -n "${!variable:-}" ]]; then printf -v "$variable" '%s' "$(workspace_absolute_path "${!variable}")"; fi
   done
-  if [[ -e "$CA_ARTIFACT" ]]; then CA_ARTIFACT="$(realpath -m -- "$CA_ARTIFACT")"; fi
+  if [[ -e "$CA_ARTIFACT" ]]; then CA_ARTIFACT="$(workspace_absolute_path "$CA_ARTIFACT")"; fi
 }
 
 print_startup_config() {
+  if [[ "${CA_DEPLOY_ONLY:-0}" == 1 ]]; then
+    log "deploy-only edition ($CA_BIN)"
+  else
+    log "full edition"
+  fi
   log "mode: $CA_MODE"
   log "service: $CA_SERVICE_ID"
   log "source: $ROOT_DIR"
@@ -678,7 +684,7 @@ main() {
   else
     if [[ "$CA_MODE" == deploy-openclaw && -n "$CA_SERVICE_ID_OVERRIDE" ]]; then
       [[ "$CA_SERVICE_ID_OVERRIDE" =~ ^[A-Za-z0-9_-]+$ ]] || die "invalid service ID: $CA_SERVICE_ID_OVERRIDE"
-      CA_STATE_DIR="$(realpath -m -- "$CA_STATE_DIR")"
+      CA_STATE_DIR="$(workspace_absolute_path "$CA_STATE_DIR")"
       CA_SERVICE_ID="$CA_SERVICE_ID_OVERRIDE" reject_pending_cpu_task
     fi
     resolve_harness_options

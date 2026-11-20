@@ -619,6 +619,13 @@ pub(super) fn shelter_command(cli: &Cli, args: &[OsString]) -> Result<Command> {
 }
 
 pub(super) fn effective_shelter_bin(cli: &Cli) -> PathBuf {
+    #[cfg(not(feature = "full"))]
+    {
+        let bundled = cli.tools_dir.join("shelter");
+        if bundled.is_file() {
+            return effective_shelter_bin_from_candidates(cli, &[bundled]);
+        }
+    }
     effective_shelter_bin_from_candidates(
         cli,
         &[
