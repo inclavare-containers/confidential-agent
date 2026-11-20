@@ -1300,6 +1300,7 @@ pub(super) fn collect_reference_values_from_state(
     Ok(ReferenceValueArtifacts { sample, rekor })
 }
 
+#[cfg(any(feature = "full", test))]
 pub(super) fn latest_built_image(state_dir: &Path, spec: &AgentSpec) -> Result<PathBuf> {
     let paths = context_paths(state_dir, &spec.service.id);
     let build_id = read_service_state_file(&paths.service_state)?

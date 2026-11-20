@@ -6,9 +6,22 @@ const DAEMON_STATUS_WAIT_TIMEOUT: Duration = Duration::from_secs(180);
 const DAEMON_STATUS_WAIT_INTERVAL: Duration = Duration::from_secs(5);
 
 pub(crate) fn run(cli: &Cli) -> Result<()> {
+    if matches!(
+        &cli.command,
+        Commands::Deploy(_)
+            | Commands::Destroy(_)
+            | Commands::Image(ImageArgs {
+                command: ImageCommands::Publish(_)
+            })
+    ) {
+        eprintln!("[ca] {} edition", crate::cli::EDITION);
+    }
     match &cli.command {
         Commands::Init(args) => cmd_init(cli, args),
+        #[cfg(feature = "full")]
         Commands::Build(args) => cmd_build(cli, args),
+        #[cfg(not(feature = "full"))]
+        Commands::Build(_) => bail!("build requires the full edition"),
         Commands::Deploy(args) => cmd_deploy(cli, args),
         Commands::Docs(args) => cmd_docs(args),
         Commands::Spec(args) => cmd_spec(args),
@@ -35,6 +48,7 @@ pub(crate) fn run(cli: &Cli) -> Result<()> {
     }
 }
 
+#[cfg(any(feature = "full", test))]
 pub(super) fn cmd_build(cli: &Cli, args: &BuildArgs) -> Result<()> {
     let spec = AgentSpec::from_path(&args.spec)?;
     let _operation = lock_service_operation(&cli.state_dir, &spec.service.id)?;
@@ -161,6 +175,7 @@ pub(super) fn cmd_build(cli: &Cli, args: &BuildArgs) -> Result<()> {
     Ok(())
 }
 
+#[cfg(any(feature = "full", test))]
 pub(super) fn validate_build_start(existing: Option<&LocalServiceState>) -> Result<()> {
     let Some(state) = existing else {
         return Ok(());
@@ -269,6 +284,7 @@ fn spec_requires_a2a_signing(spec: &AgentSpec) -> bool {
         .is_some_and(|a2a| a2a.enabled && a2a.signing.required)
 }
 
+#[cfg(any(feature = "full", test))]
 fn ensure_build_variant_present(
     state: &LocalServiceState,
     variant: &str,
@@ -301,6 +317,8 @@ fn ensure_build_variant_present(
 pub(super) fn cmd_deploy(cli: &Cli, args: &DeployArgs) -> Result<()> {
     let mut snapshot = deployment_snapshot_with_image_id(&args.spec, args.image_id.as_deref())?;
     let spec = snapshot.spec.clone();
+    #[cfg(not(feature = "full"))]
+    anyhow::ensure!(spec.deploy.image.is_some(), "deploy-only requires a published image definition; local build deployments require the full edition");
     let operation = lock_service_operation(&cli.state_dir, &spec.service.id)?;
     let trustee_mode = spec.attestation.mode == AttestationMode::Trustee;
     if !trustee_mode && trustee::is_managed_service(&cli.state_dir, &spec.service.id)? {
@@ -348,15 +366,21 @@ pub(super) fn cmd_deploy(cli: &Cli, args: &DeployArgs) -> Result<()> {
             Some(image.image_id.clone()),
         )
     } else {
-        let state = current_state
-            .as_ref()
-            .context("deploy requires a local build; run build first")?;
-        let variant = current_manifest.variant(&deploy_variant, Some(&state.build.variant))?;
-        let published = publish::published_image_for_deploy(cli, state, &spec, &variant, || {
-            publish::caller_account(cli, &spec.deploy.region)
-        })?;
-        ensure_build_variant_present(state, &deploy_variant, &variant, published.is_some())?;
-        (variant, published)
+        #[cfg(not(feature = "full"))]
+        bail!("deploy-only requires a published image manifest");
+        #[cfg(feature = "full")]
+        {
+            let state = current_state
+                .as_ref()
+                .context("deploy requires a local build; run build first")?;
+            let variant = current_manifest.variant(&deploy_variant, Some(&state.build.variant))?;
+            let published =
+                publish::published_image_for_deploy(cli, state, &spec, &variant, || {
+                    publish::caller_account(cli, &spec.deploy.region)
+                })?;
+            ensure_build_variant_present(state, &deploy_variant, &variant, published.is_some())?;
+            (variant, published)
+        }
     };
     if let Some(image_id) = published_image_id.as_deref() {
         println!("[ca] using published image {image_id} for deploy (skipping upload+import)");
@@ -434,6 +458,9 @@ pub(super) fn cmd_deploy(cli: &Cli, args: &DeployArgs) -> Result<()> {
     } else if current_manifest.image.is_some() {
         images::prepare(&paths, &spec, &current_manifest, &options)?
     } else {
+        #[cfg(not(feature = "full"))]
+        bail!("deploy-only requires a published image manifest");
+        #[cfg(feature = "full")]
         prepare(cli, &cli.state_dir, &args.spec, options)?
     };
     let mut deploy_manifest = read_build_manifest(&paths.manifest)?;
@@ -1283,6 +1310,7 @@ pub(super) fn cmd_image(cli: &Cli, args: &ImageArgs) -> Result<()> {
             }
             Ok(())
         }
+        #[cfg(feature = "full")]
         ImageCommands::Export {
             service,
             image_id,
@@ -1297,6 +1325,8 @@ pub(super) fn cmd_image(cli: &Cli, args: &ImageArgs) -> Result<()> {
             region.as_deref(),
             variant.as_deref(),
         ),
+        #[cfg(not(feature = "full"))]
+        ImageCommands::Export { .. } => bail!("image export requires the full edition"),
         ImageCommands::Unpublish(args) => publish::cmd_image_unpublish(cli, args),
         ImageCommands::Prune(args) => publish::cmd_image_prune(cli, args),
     }

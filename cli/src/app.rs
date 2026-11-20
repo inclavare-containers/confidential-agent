@@ -1,5 +1,7 @@
+#[cfg(any(feature = "full", test))]
+use crate::cli::BuildArgs;
 use crate::cli::{
-    A2aArgs, A2aCommands, BuildArgs, Cli, Commands, ConnectArgs, ConnectCommands, ConnectStartArgs,
+    A2aArgs, A2aCommands, Cli, Commands, ConnectArgs, ConnectCommands, ConnectStartArgs,
     ConnectStopArgs, DeployArgs, DestroyArgs, DocsArgs, DocsTopic, ImageArgs, ImageCommands,
     ImagePruneArgs, ImagePublishArgs, ImageUnpublishArgs, InitArgs, InitReferenceValues, InitStage,
     InitTarget, InjectArgs, KeyArgs, KeyCommands, MeshArgs, MeshCommands, MigrateArgs,
@@ -41,10 +43,9 @@ use confidential_agent_core::spec::{
     AgentSpec, AttestationMode, AttestationTee, EncryptionMode, ReferenceValueMode,
 };
 use confidential_agent_core::util::{hex_encode, rekor_payload, sha256_file};
-use confidential_agent_shelter::{
-    render_build_config, render_runtime_config, shelter_build_id, GuestAssets, GuestFileAsset,
-    ShelterRenderOptions,
-};
+#[cfg(any(feature = "full", test))]
+use confidential_agent_shelter::{render_build_config, shelter_build_id, GuestAssets};
+use confidential_agent_shelter::{render_runtime_config, GuestFileAsset, ShelterRenderOptions};
 use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, scalar::Scalar};
 use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
@@ -201,6 +202,7 @@ impl BuildManifest {
         }
     }
 
+    #[cfg(any(feature = "full", test))]
     fn guest_assets(&self) -> GuestAssets {
         GuestAssets {
             agentd_bin: self.agentd_bin.clone(),
@@ -227,6 +229,7 @@ impl BuildManifest {
     }
 }
 
+#[cfg(any(feature = "full", test))]
 fn manifest_variant_from(manifest: &BuildManifest) -> BuildManifestVariant {
     manifest.fallback_variant()
 }
@@ -595,6 +598,7 @@ impl DeployObservation {
 }
 
 const DEFAULT_POLICY: &str = include_str!("../../tools/policies/trustee-opa-default.rego");
+#[cfg(any(feature = "full", test))]
 const LOCAL_DEV_POLICY: &str = include_str!("../../tools/policies/trustee-opa-local-dev.rego");
 
 mod commands;
@@ -611,6 +615,7 @@ use self_describe::*;
 
 mod trustee;
 
+#[cfg(any(feature = "full", test))]
 fn prepare(
     cli: &Cli,
     state_dir: &Path,
@@ -917,7 +922,9 @@ fn current_utc_timestamp() -> String {
 
 mod debug_ssh;
 use debug_ssh::*;
+#[cfg(any(feature = "full", test))]
 mod guest_assets;
+#[cfg(any(feature = "full", test))]
 use guest_assets::*;
 
 mod state;
@@ -981,10 +988,12 @@ fn timestamped_shelter_build_id(spec: &AgentSpec, run_id: &str) -> String {
     format!("{}-{run_id}", shelter_build_id(spec))
 }
 
+#[cfg(any(feature = "full", test))]
 fn shelter_build_id_for_variant(spec: &AgentSpec, variant: &str) -> String {
     format!("{}-{variant}", spec.image_id())
 }
 
+#[cfg(any(feature = "full", test))]
 fn timestamped_shelter_build_id_for_variant(
     spec: &AgentSpec,
     variant: &str,
@@ -993,6 +1002,7 @@ fn timestamped_shelter_build_id_for_variant(
     format!("{}-{run_id}", shelter_build_id_for_variant(spec, variant))
 }
 
+#[cfg(any(feature = "full", test))]
 fn enabled_build_variants(spec: &AgentSpec) -> Vec<String> {
     let mut variants = Vec::new();
     if spec.build.variants.release.enabled {
@@ -1314,6 +1324,7 @@ fn write_private_file(path: &Path, content: &[u8], mode: u32) -> Result<()> {
 mod tools;
 use tools::*;
 
+#[cfg(any(feature = "full", test))]
 fn agentd_service_unit() -> &'static str {
     r#"[Unit]
 Description=Confidential Agent Daemon
@@ -1332,6 +1343,7 @@ WantedBy=multi-user.target
 "#
 }
 
+#[cfg(any(feature = "full", test))]
 fn gateway_service_unit() -> &'static str {
     r#"[Unit]
 Description=Confidential Agent Gateway
@@ -1352,6 +1364,7 @@ WantedBy=multi-user.target
 "#
 }
 
+#[cfg(any(feature = "full", test))]
 fn tng_service_unit() -> &'static str {
     r#"[Unit]
 Description=Trusted Network Gateway
@@ -1371,6 +1384,7 @@ WantedBy=multi-user.target
 "#
 }
 
+#[cfg(any(feature = "full", test))]
 fn guest_setup_script() -> &'static str {
     r#"#!/bin/bash
 set -euo pipefail
@@ -1447,6 +1461,7 @@ systemctl reset-failed trusted-network-gateway.service || true
 "#
 }
 
+#[cfg(any(feature = "full", test))]
 fn cryptpilot_fde_config() -> &'static str {
     r#"[rootfs]
 delta_location = "disk-persist"

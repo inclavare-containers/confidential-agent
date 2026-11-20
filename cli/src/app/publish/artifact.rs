@@ -22,6 +22,7 @@ pub(super) struct ArtifactManifest {
 }
 
 impl ArtifactManifest {
+    #[cfg(any(feature = "full", test))]
     pub(super) fn check_disk(&self, sha: &str, size: u64) -> Result<()> {
         let disk = self
             .outputs
@@ -101,6 +102,7 @@ fn directory(state: &Path, manifest: &str) -> Result<PathBuf> {
         .join(digest))
 }
 
+#[cfg(any(feature = "full", test))]
 pub(super) fn catalog_for_disk(state: &Path, disk: &Path) -> Result<Option<String>> {
     let manifest = disk.with_file_name("artifact-manifest.json");
     if !state.join("image-publications").is_dir() || !manifest.is_file() {
@@ -159,6 +161,7 @@ impl Location {
         Ok(())
     }
 
+    #[cfg(any(feature = "full", test))]
     pub(super) fn record_builder(&self, service: &str, key: &str) -> Result<()> {
         write_json_atomic(
             &self.path,

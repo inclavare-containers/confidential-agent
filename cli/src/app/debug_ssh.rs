@@ -1,5 +1,6 @@
 use super::*;
 
+#[cfg(any(feature = "full", test))]
 pub(super) fn ensure_debug_ssh_key(
     paths: &ContextPaths,
     spec: &mut AgentSpec,
@@ -10,6 +11,7 @@ pub(super) fn ensure_debug_ssh_key(
     })
 }
 
+#[cfg(any(feature = "full", test))]
 pub(super) fn ensure_debug_ssh_key_with_generator<F>(
     paths: &ContextPaths,
     spec: &mut AgentSpec,
@@ -56,6 +58,7 @@ where
     }))
 }
 
+#[cfg(any(feature = "full", test))]
 pub(super) fn stage_mkosi_debug_ssh_authorized_keys(
     assets: &mut GuestAssets,
     paths: &ContextPaths,
@@ -87,6 +90,7 @@ pub(super) fn stage_mkosi_debug_ssh_authorized_keys(
     Ok(())
 }
 
+#[cfg(any(feature = "full", test))]
 pub(super) fn generate_debug_ssh_key(
     service_id: &str,
     private_key: &Path,

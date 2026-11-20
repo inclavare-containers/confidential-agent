@@ -9,6 +9,10 @@ version.workspace = true
 name = "confidential-agent"
 path = "src/main.rs"
 
+[features]
+default = ["full"]
+full = []
+
 [dependencies]
 anyhow.workspace = true
 base64.workspace = true

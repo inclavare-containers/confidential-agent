@@ -25,6 +25,7 @@ pub(super) struct ImageRuntimeContract {
 }
 
 impl ImageRuntimeContract {
+    #[cfg(any(feature = "full", test))]
     pub(super) fn ensure_export_variant(&self, variant: &str) -> Result<()> {
         anyhow::ensure!(
             self.image_variant.as_deref() == Some(variant),
@@ -33,6 +34,7 @@ impl ImageRuntimeContract {
         Ok(())
     }
 
+    #[cfg(any(feature = "full", test))]
     pub(super) fn set_rekor_entry_uuids(&mut self, uuids: Vec<String>) -> Result<()> {
         anyhow::ensure!(
             uuids.iter().all(|uuid| !uuid.is_empty()
@@ -56,6 +58,7 @@ impl ImageRuntimeContract {
             .collect()
     }
 
+    #[cfg(any(feature = "full", test))]
     pub(super) fn for_build(spec: &AgentSpec, guest: &Path) -> Result<Self> {
         let output = Command::new(guest).arg("describe-runtime").output()
             .context("failed to inspect the guest runtime; update the cagent RPM guest binaries before building a new release")?;

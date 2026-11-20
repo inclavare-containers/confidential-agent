@@ -141,9 +141,14 @@ mod tests {
     }
 }
 
+#[cfg(feature = "full")]
+pub(crate) const EDITION: &str = "full";
+#[cfg(not(feature = "full"))]
+pub(crate) const EDITION: &str = "deploy-only";
+
 #[derive(Debug, Parser)]
 #[command(name = "confidential-agent")]
-#[command(about = "Confidential Agent host CLI")]
+#[command(about = format!("Confidential Agent host CLI ({EDITION})"))]
 #[command(version)]
 pub(crate) struct Cli {
     #[command(subcommand)]
