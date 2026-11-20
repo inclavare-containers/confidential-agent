@@ -5,6 +5,7 @@ import argparse
 from pathlib import Path
 import re
 import shutil
+import stat
 import tempfile
 import zipfile
 
@@ -63,6 +64,10 @@ def main():
             for path in sorted(bundle.rglob('*')):
                 if path.is_file():
                     zipped.write(path, path.relative_to(bundle.parent))
+            alias = zipfile.ZipInfo(f'{name}/bin/confidential-agent')
+            alias.create_system = 3
+            alias.external_attr = (stat.S_IFLNK | 0o777) << 16
+            zipped.writestr(alias, 'cagent')
         archive.replace(output / archive.name)
     print(output / archive.name)
 

@@ -16,6 +16,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('rpm_root', type=Path)
     parser.add_argument('output', type=Path)
+    parser.add_argument('--deploy-bundles', type=Path, help='directory containing both tested deployment ZIPs')
     args = parser.parse_args()
     version = re.search(r'^version = "([^"]+)"', (root / 'Cargo.toml').read_text(), re.M)[1]
     spec = (root / 'cagent.spec').read_text()
@@ -52,6 +53,10 @@ def main():
                    'packaging/native-tools.tsv', 'packaging/release-build.json']:
         path = root / source
         shutil.copy2(path, output / path.name)
+    if args.deploy_bundles:
+        for platform in ('linux-amd64', 'darwin-arm64'):
+            name = f'cagent-deploy-{version}-{platform}.zip'
+            shutil.copy2(args.deploy_bundles / name, output / name)
     environment = args.rpm_root / 'build-environment.txt'
     if environment.exists():
         shutil.copy2(environment, output / environment.name)
