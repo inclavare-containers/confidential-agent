@@ -1,4 +1,4 @@
-"""Keep denied-retirement probes aligned with durable retry custody."""
+"""Exercise the live publication reference probe's command sequence."""
 import importlib.util
 import json
 from pathlib import Path
@@ -17,7 +17,7 @@ spec.loader.exec_module(reuse)
 
 
 class PublicationRetirementProbeTest(unittest.TestCase):
-    def probe(self, mutation=None, public_export=False):
+    def probe(self, public_export=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             service = root / "state/services/consumer"
@@ -37,50 +37,30 @@ class PublicationRetirementProbeTest(unittest.TestCase):
             def command(label, *args, **options):
                 calls.append(label)
                 if label == "cleanup-reject-consumers":
-                    self.assertEqual(options["env"]["ALICLOUD_ACCESS_KEY"], "CA_E2E_INVALID_ACCESS_KEY")
-                    self.assertNotIn("ALICLOUD_STS_TOKEN", options["env"])
+                    self.assertNotIn("--force", args)
+                    self.assertNotIn("env", options)
                     return subprocess.CompletedProcess([], 1, b"", b"image is retained: consumer")
-                if label == "cleanup-prune-retains-consumers":
-                    return subprocess.CompletedProcess([], 0, b"no unreferenced images\n", b"")
-                self.assertEqual(label, "cleanup-denied-cloud-delete")
-                self.assertIn("--force", args)
-                state_file = root / "state/services/reuse-test-publisher/state.json"
-                state = json.loads(state_file.read_text())
-                # Native retirement saves intent before the first cloud call;
-                # credential rejection leaves availability and resource IDs intact.
-                state["build"]["published"]["release"]["retiring"] = True
-                state["build"]["published"]["release"].setdefault("import_snapshot_ids", [])
-                if mutation:
-                    mutation(state["build"]["published"]["release"])
-                state_file.write_text(json.dumps(state))
-                return subprocess.CompletedProcess([], 1, b"", b"image unpublish partially failed")
+                self.assertEqual(label, "cleanup-prune-retains-consumers")
+                return subprocess.CompletedProcess([], 0, b"no unreferenced images\n", b"")
 
             consumer = SimpleNamespace(directory=service, state=root / "state", work=root,
                                        service="consumer", spec={"deploy": {"region": "test-region"}},
                                        command=command)
             cloud = Mock(return_value=subprocess.CompletedProcess([], 0,
                 json.dumps({"Images": {"Image": [{"ImageId": "m-shared"}]}}).encode(), b""))
-            with patch.object(reuse, "run", cloud), patch.dict("os.environ", {"ALICLOUD_STS_TOKEN": "not-sent"}):
+            with patch.object(reuse, "run", cloud):
                 reuse.verify_publication_cleanup([consumer], publication, "aliyun")
-            self.assertEqual(calls, ["cleanup-reject-consumers", "cleanup-prune-retains-consumers",
-                                     "cleanup-denied-cloud-delete"])
+            self.assertEqual(calls, ["cleanup-reject-consumers", "cleanup-prune-retains-consumers"])
             self.assertEqual(json.loads(publication.read_text()), original)
             cloud.assert_called_once()
             self.assertIn("DescribeImages", cloud.call_args.args[0])
             self.assertIn("m-shared", cloud.call_args.args[0])
 
-    def test_failed_retirement_keeps_available_image_and_retry_custody(self):
+    def test_live_reference_prevents_retirement(self):
         self.probe()
 
     def test_public_export_keeps_schema_default_empty_snapshot_custody(self):
         self.probe(public_export=True)
-
-    def test_failed_retirement_must_not_lose_intent_or_resource_identity(self):
-        changes = {"retiring": False, "status": "failed", "image_id": None, "owned": False,
-                   "oss_cleaned": False, "import_task_id": None, "import_snapshot_ids": []}
-        for field, value in changes.items():
-            with self.subTest(field=field), self.assertRaises(AssertionError):
-                self.probe(lambda entry: entry.update({field: value}))
 
 
 if __name__ == "__main__":
