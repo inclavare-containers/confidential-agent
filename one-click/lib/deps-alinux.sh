@@ -82,6 +82,7 @@ needs_local_image_build() {
 }
 
 install_os_dependencies() {
+  if [[ "${CA_DEPLOY_ONLY:-0}" == 1 ]]; then return; fi
   if [[ "${CA_SKIP_DEPS:-0}" == "1" ]]; then
     log "skipping OS dependency installation"
     return

@@ -2,6 +2,19 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::ffi::OsString;
 use std::path::PathBuf;
 
+fn default_tools_dir() -> PathBuf {
+    #[cfg(not(feature = "full"))]
+    if let Ok(executable) = std::env::current_exe() {
+        if let Some(bin) = executable
+            .parent()
+            .filter(|dir| dir.join("shelter").is_file())
+        {
+            return bin.to_owned();
+        }
+    }
+    PathBuf::from("/usr/libexec/cagent/bin")
+}
+
 fn default_state_dir() -> PathBuf {
     std::env::var_os("HOME")
         .map(PathBuf::from)
@@ -169,7 +182,7 @@ pub(crate) struct Cli {
     #[arg(
         long,
         env = "CA_TOOLS_DIR",
-        default_value = "/usr/libexec/cagent/bin",
+        default_value_os_t = default_tools_dir(),
         global = true
     )]
     pub(crate) tools_dir: PathBuf,

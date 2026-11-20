@@ -87,7 +87,7 @@ reject_pending_cpu_task() {
   if [[ -f "$path" ]]; then
     load_cpu_task "$CA_SERVICE_ID"
     log "service '$CA_SERVICE_ID' has an unfinished task at $CA_CPU_NEXT"
-    entry="$ROOT_DIR/one-click/install.sh"
+    entry="${CA_DEPLOY_ENTRY:-$ROOT_DIR/one-click/install.sh}"
     if [[ -n "$CA_ONE_CLICK_ENTRY_URL" ]] && ! cpu_step_done bootstrap; then
       printf '  curl -fsSL %q | sh -s --' "$CA_ONE_CLICK_ENTRY_URL"
       if [[ "$CA_BOOTSTRAP_ACTION" == source ]]; then
