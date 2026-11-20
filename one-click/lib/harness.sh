@@ -93,23 +93,22 @@ harness_guest_port() {
   esac
 }
 
-selected_host_client() {
-  if [[ "${CA_SKIP_HOST_CLIENT:-0}" == "1" || "${CA_HARNESS_MODE:-cli}" == "cli" ]]; then
+resolve_host_client_install() {
+  local client
+  case "$CA_MODE:$CA_HARNESS:$CA_ACCESS_METHOD" in
+    deploy-openclaw:openclaw:web+tui|deploy-openclaw:openclaw:tui|deploy-openclaw-vllm:*) client=openclaw ;;
+    deploy-openclaw:codex:ws) client=codex ;;
+    deploy-openclaw:opencode:web+attach|deploy-openclaw:opencode:attach) client=opencode ;;
+    *) return 0 ;;
+  esac
+  if [[ "$CA_SKIP_HOST_CLIENT" == 1 || ( "$client" == openclaw && "$CA_SKIP_HOST_OPENCLAW" == 1 ) ]]; then
     return 0
   fi
-  case "${CA_HARNESS:-openclaw}:${CA_HARNESS_MODE:-gateway}:${CA_ACCESS_METHOD:-web+tui}" in
-    openclaw:gateway:web+tui|openclaw:gateway:tui)
-      if [[ "${CA_SKIP_HOST_OPENCLAW:-0}" != "1" ]]; then
-        printf 'openclaw\n'
-      fi
-      ;;
-    codex:app-server:*)
-      printf 'codex\n'
-      ;;
-    opencode:web:web+attach|opencode:web:attach)
-      printf 'opencode\n'
-      ;;
-  esac
+  if [[ "$CA_INSTALL_HOST_CLIENT" != 1 ]]; then
+    [[ "$CA_NON_INTERACTIVE" != 1 ]] || return 0
+    confirm "Install or update the local $client CLI (including Node.js/npm if needed)?" n || return 0
+  fi
+  CA_HOST_CLIENT="$client"
 }
 
 cpu_builder_id() {

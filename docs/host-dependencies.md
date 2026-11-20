@@ -18,7 +18,7 @@
 
 导入预构建镜像时，Shelter 使用 QEMU 磁盘工具校验产物。已有 ECS 镜像 ID 时，部署直接使用云镜像和描述文件。Rust/Cargo/gcc 用于源码编译或打包 CA。
 
-Node/npm、Python 应用包、CUDA/vLLM 等在 Guest 镜像内准备。`one-click/install.sh` 按所选接入方式安装本地应用客户端，例如 OpenClaw TUI、Codex 远程 CLI 和 OpenCode attach。显式配置 `build.container.image` 的构建需要宿主机 Podman 或 Docker。
+Node/npm、Python 应用包、CUDA/vLLM 等在 Guest 镜像内准备。RPM 与部署 ZIP 均不附带宿主机应用客户端。使用 one-click 的 OpenClaw TUI、Codex 远程 CLI 或 OpenCode attach 时，交互模式会询问是否在本机安装客户端及其 Node.js/npm 依赖，默认跳过。非交互安装需显式传入 `--install-host-client`；`--yes` 仅用于其他部署确认。显式配置 `build.container.image` 的构建需要宿主机 Podman 或 Docker。
 
 原生工具可以直接访问宿主机文件和代理配置。凭证仍通过进程环境或临时
 0600 OSS 配置传递，临时文件使用后删除，不放入命令参数。

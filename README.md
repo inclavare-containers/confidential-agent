@@ -85,7 +85,7 @@ flowchart TB
 
 ### 一键部署（One-Click）
 
-`one-click/install.sh deploy` 默认采用 **CPU OpenClaw 官方预构建共享镜像**并开启 Web / TUI 接入。传入 `--image-source build` 可本地构建镜像。脚本按选定的 `--harness` 和 `--access` 安装所需的本地客户端。
+`one-click/install.sh deploy` 默认采用 **CPU OpenClaw 官方预构建共享镜像**并开启 Web / TUI 接入。传入 `--image-source build` 可本地构建镜像。选择需要本地应用客户端的接入方式后，脚本会询问是否安装，默认跳过。自动化部署可用 `--install-host-client` 同意安装，或用 `--skip-host-client` 跳过询问。
 
 - **原生网络服务（经 TNG `connect` 隧道接入）**：OpenClaw Gateway（`web+tui` / `web` / `tui`）、Hermes HTTP API（`http`）、Codex 带鉴权 WebSocket CLI（`ws`）、OpenCode Web/attach（`web+attach` / `web` / `attach`）、DSH 带鉴权 Web（`web`）。
 - **认证管理 SSH 接入**：Claude Code（`claude-code`）、Qoder（`qodercli`）、Pi（`pi`）通过远程证明下发的实例级密钥执行 `confidential-agent ssh <id> --tty -- cai-agent`（上述原生网络服务也可通过 `--access ssh` 切换为 SSH CLI）。

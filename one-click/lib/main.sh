@@ -40,6 +40,8 @@ Common options:
   --skip-rustup                  Do not install Rust with rustup (default)
   --allow-rustup                 Allow rustup fallback if OS cargo/rust is unavailable
   --skip-cargo-build             Reuse existing target/release binaries
+  --install-host-client          Install the local OpenClaw CLI and its prerequisites
+  --skip-host-client             Skip the local CLI installation and prompt
   --skip-host-openclaw           Do not install Node.js/OpenClaw CLI on the deploy host
   --help                         Show this help
 
@@ -152,7 +154,8 @@ Common options:
   --skip-rustup                  Do not install Rust with rustup (default)
   --allow-rustup                 Allow rustup fallback if OS cargo/rust is unavailable
   --skip-cargo-build             Reuse existing target/release binaries
-  --skip-host-client             Do not install hosted CLI clients (OpenClaw/Codex/OpenCode)
+  --install-host-client          Install the client for the selected access method
+  --skip-host-client             Skip the local CLI installation and prompt
   --skip-host-openclaw           Do not install Node.js/OpenClaw CLI on the deploy host
   --disable-pep                  Do not install or enable the OpenClaw cai-pep policy service
   --help                         Show this help
@@ -232,6 +235,8 @@ init_defaults() {
   CA_SKIP_DEPLOY="${CA_SKIP_DEPLOY:-0}"
   CA_SKIP_HOST_OPENCLAW="${CA_SKIP_HOST_OPENCLAW:-0}"
   CA_SKIP_HOST_CLIENT="${CA_SKIP_HOST_CLIENT:-0}"
+  CA_INSTALL_HOST_CLIENT="${CA_INSTALL_HOST_CLIENT:-0}"
+  CA_HOST_CLIENT=""
   CA_ENABLE_DINGTALK="${CA_ENABLE_DINGTALK:-0}"
   CA_DISABLE_PEP="${CA_DISABLE_PEP:-0}"
   CA_START_CONNECT="${CA_START_CONNECT:-1}"
@@ -316,6 +321,7 @@ parse_args() {
       --skip-rustup) CA_SKIP_RUSTUP=1; shift ;;
       --allow-rustup) CA_SKIP_RUSTUP=0; shift ;;
       --skip-cargo-build) CA_SKIP_CARGO_BUILD=1; shift ;;
+      --install-host-client) CA_INSTALL_HOST_CLIENT=1; shift ;;
       --skip-host-client) CA_SKIP_HOST_CLIENT=1; shift ;;
       --skip-host-openclaw) CA_SKIP_HOST_OPENCLAW=1; shift ;;
       --disable-pep) CA_DISABLE_PEP=1; shift ;;
@@ -674,12 +680,13 @@ main() {
   fi
   normalize_workspace_paths
   apply_target_defaults
-  if [[ "${CA_CPU_RESUMING:-0}" != 1 ]]; then validate_options; fi
+  if [[ "${CA_CPU_RESUMING:-0}" != 1 ]]; then
+    validate_options
+    if [[ "$CA_MODE" == deploy-openclaw ]]; then reject_pending_cpu_task; fi
+    resolve_host_client_install
+  fi
   case "$CA_MODE" in
-    deploy-openclaw)
-      if [[ "${CA_CPU_RESUMING:-0}" != 1 ]]; then reject_pending_cpu_task; fi
-      collect_cpu_inputs
-      ;;
+    deploy-openclaw) collect_cpu_inputs ;;
     deploy-openclaw-vllm|deploy-vllm-inference) collect_gpu_inputs ;;
     cleanup-openclaw-vllm|cleanup-vllm-inference) collect_aliyun_credentials ;;
   esac

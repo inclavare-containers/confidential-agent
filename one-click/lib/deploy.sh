@@ -517,7 +517,7 @@ run_install_only() {
 
 run_deploy_openclaw_vllm() {
   install_os_dependencies
-  ensure_host_openclaw_runtime
+  ensure_host_access_client
   ensure_shelter
   build_confidential_agent
   install_confidential_agent_cli
