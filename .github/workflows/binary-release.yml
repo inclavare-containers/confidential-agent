@@ -61,6 +61,7 @@ jobs:
       - name: Build the native challenge client with the Rust TDX verifier
         working-directory: trustee
         run: |
+          brew install protobuf
           cargo build --locked --release -p attestation-service --bin attestation-challenge-client --no-default-features --features attestation-challenge-client,tdx-dcap-rust
           ./target/release/attestation-challenge-client --help
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
