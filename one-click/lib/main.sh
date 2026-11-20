@@ -36,7 +36,7 @@ Common options:
   --state-dir PATH               Confidential Agent state directory
   --work-dir PATH                One-click generated files/log directory
   --tools-dir PATH               Native tools directory
-  --skip-deps                    Do not install OS packages
+  --skip-deps                    Skip OS package and one-click Python installation
   --skip-rustup                  Do not install Rust with rustup (default)
   --allow-rustup                 Allow rustup fallback if OS cargo/rust is unavailable
   --skip-cargo-build             Reuse existing target/release binaries
@@ -95,7 +95,7 @@ Common options:
   --state-dir PATH               Confidential Agent state directory
   --work-dir PATH                One-click generated files/log directory
   --tools-dir PATH               Native tools directory
-  --skip-deps                    Do not install OS packages
+  --skip-deps                    Skip OS package and one-click Python installation
   --skip-rustup                  Do not install Rust with rustup (default)
   --allow-rustup                 Allow rustup fallback if OS cargo/rust is unavailable
   --skip-cargo-build             Reuse existing target/release binaries
@@ -150,7 +150,7 @@ Common options:
   --state-dir PATH               Confidential Agent state directory
   --work-dir PATH                One-click generated files/log directory
   --tools-dir PATH               Native tools directory
-  --skip-deps                    Do not install OS packages
+  --skip-deps                    Skip OS package and one-click Python installation
   --skip-rustup                  Do not install Rust with rustup (default)
   --allow-rustup                 Allow rustup fallback if OS cargo/rust is unavailable
   --skip-cargo-build             Reuse existing target/release binaries

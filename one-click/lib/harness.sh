@@ -140,7 +140,7 @@ resolve_cpu_release_metadata() {
   CA_DOWNLOAD_DIR="$CA_WORK_DIR/prebuilt/v$CA_RELEASE_VERSION"
   local args=(--output-dir "$CA_DOWNLOAD_DIR" --version "$CA_RELEASE_VERSION")
   if [[ -n "${CA_OFFICIAL_METADATA_DIR:-}" ]]; then args+=(--from-dir "$CA_OFFICIAL_METADATA_DIR"); fi
-  metadata="$("$ROOT_DIR/hack/resolve-release-image.sh" "${args[@]}")"
+  metadata="$(one_click_python "$ROOT_DIR/hack/fetch-release-image.py" "${args[@]}")"
   CA_IMAGE_RELEASE="$(jq -er .image_release <<<"$metadata")"
   CA_RELEASE_DIGEST="${CA_RELEASE_DIGEST:-$(jq -er .release_digest <<<"$metadata")}"
 }
@@ -154,7 +154,7 @@ find_cpu_publication() {
 
 download_cpu_image() {
   local downloaded
-  downloaded="$(CA_TOOLS_DIR="$CA_TOOLS_DIR" python3.11 "$ROOT_DIR/hack/download-release-image.py" --output-dir "$CA_DOWNLOAD_DIR" \
+  downloaded="$(CA_TOOLS_DIR="$CA_TOOLS_DIR" one_click_python "$ROOT_DIR/hack/download-release-image.py" --output-dir "$CA_DOWNLOAD_DIR" \
     --version "$CA_RELEASE_VERSION" --from-dir "${CA_IMAGE_RELEASE%/*}" --region "$CA_REGION" --format json)"
   CA_ARTIFACT="$(jq -er .artifact <<<"$downloaded")"
 }
