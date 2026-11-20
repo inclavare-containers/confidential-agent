@@ -11,7 +11,7 @@
 %global __brp_strip_comment_note %{nil}
 
 Name:           cagent
-Version:        0.3.0
+Version:        0.3.1
 Release:        1%{?dist}
 Summary:        Confidential Agent host CLI and guest image assets
 License:        Apache-2.0
@@ -117,6 +117,10 @@ native-tools/oras version >/dev/null
 %{_datadir}/cagent/
 
 %changelog
+* Fri Nov 20 2026 Weidong Sun <sunweidong@linux.alibaba.com> - 0.3.1-1
+- Package all-in-one with a 30 GB base disk and compress final QCOW2 images using Shelter 0.3.2-5.
+- Use a 120 GiB default CPU one-click disk and ship slimmer application runtimes.
+
 * Wed Nov 18 2026 Weidong Sun <sunweidong@linux.alibaba.com> - 0.3.0-1
 - Require Shelter 0.3.2-4 and package the official image downloader and ORAS 1.3.0.
 - Package one-click scripts and shared version/dependency helpers under /usr/share/cagent.

@@ -268,7 +268,7 @@ Deployment summary
   service:      openclaw
   harness:      openclaw (gateway, access: web+tui)
   image_source: prebuilt
-  release:      /root/.confidential-agent/cache/release-image/v0.3.0/image-release.json (sha256:...)
+  release:      /root/.confidential-agent/cache/release-image/v0.3.1/image-release.json (sha256:...)
   region:       cn-beijing
   zone_id:      cn-beijing-i
   instance:     ecs.g9i.xlarge

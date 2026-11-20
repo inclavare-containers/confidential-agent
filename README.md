@@ -81,7 +81,7 @@ flowchart TB
 
 ## 快速开始 (Quick Start)
 
-只安装宿主机控制面与原生工具时，推荐从 [v0.3.0 Release](https://github.com/inclavare-containers/confidential-agent/releases/tag/v0.3.0) 下载 `install-rpm.sh`，运行 `sudo bash install-rpm.sh --version 0.3.0`。它会校验并安装 `cagent` 与配套 `shelter` RPM（支持 Alibaba Cloud Linux 3 `x86_64`），无需编译 Rust 源码；本地 `confidential-agent` CLI 从不在宿主机自动安装任何应用客户端，详见 [RPM 安装与预构建镜像流程](docs/rpm.md) 和 [宿主机依赖](docs/host-dependencies.md)。
+只安装宿主机控制面与原生工具时，推荐从 [v0.3.1 Release](https://github.com/inclavare-containers/confidential-agent/releases/tag/v0.3.1) 下载 `install-rpm.sh`，运行 `sudo bash install-rpm.sh --version 0.3.1`。它会校验并安装 `cagent` 与配套 `shelter` RPM（支持 Alibaba Cloud Linux 3 `x86_64`），无需编译 Rust 源码；本地 `confidential-agent` CLI 从不在宿主机自动安装任何应用客户端，详见 [RPM 安装与预构建镜像流程](docs/rpm.md) 和 [宿主机依赖](docs/host-dependencies.md)。
 
 ### 一键部署（One-Click）
 
