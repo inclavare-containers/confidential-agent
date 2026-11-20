@@ -12,7 +12,7 @@ v0.3.0 已发布 AliLinux 3 全功能 RPM。下表是下一版多平台 Release 
 | 其他受支持的 Linux x86_64 发行版（Ubuntu、Debian，以及 Rocky Linux 9 等 RHEL 9 系列兼容发行版） | **仅部署版（`deploy-only`）** | 仅提供 Linux x86_64 部署 ZIP |
 | macOS（Apple Silicon，arm64） | **仅部署版（`deploy-only`）** | 仅提供 macOS arm64 部署 ZIP |
 
-`--image-source` 选择本次使用的镜像来源。在 AliLinux 3 上，直接运行 one-click 或指定 `--image-source prebuilt`，都会默认安装全功能 RPM 并部署预构建镜像。要精简本机依赖，请显式选择 `deploy-only`，或在新 Release 发布后直接下载部署 ZIP。`--image-source build` 需要 AliLinux 3 全功能版。部署 ZIP 首版面向官方 CPU/TDX 共享预构建镜像。
+`--image-source` 选择本次使用的镜像来源。AliLinux 3 如果已经装了全功能 RPM，直接运行 one-click 就能用它部署官方预构建镜像，无需另装 ZIP。新装 AliLinux 3 时，one-click 默认安装全功能 RPM。如果这台机器只负责部署，希望省去 mkosi、QEMU 等本地构建依赖，可以在首次安装时显式选择 `deploy-only`，也可以在新 Release 发布后直接下载部署 ZIP。部署 ZIP 首版支持官方 CPU/TDX 共享预构建镜像。`--image-source build` 需要 AliLinux 3 全功能版。
 
 部署 ZIP 提供原生 CLI、部署组件和模板。解压和直接运行 CLI 无需 Python。实验版 one-click 在运行镜像下载器或服务探针时，优先使用本机的 Python 3.11 及以上版本。缺少兼容解释器时，脚本下载固定版本的 Python，校验 SHA-256 后装到 `${XDG_DATA_HOME:-$HOME/.local/share}/cagent/one-click/python/`，后续运行可离线复用。这个步骤以当前用户身份运行，无需 sudo 或 Homebrew。`--skip-deps` 只使用已有解释器。手动单独运行现有预构建镜像下载脚本需要 Python 3.11 或更高版本。
 
