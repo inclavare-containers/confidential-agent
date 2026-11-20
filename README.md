@@ -81,7 +81,9 @@ flowchart TB
 
 ## 快速开始 (Quick Start)
 
-只安装宿主机控制面与原生工具时，推荐从 [v0.3.1 Release](https://github.com/inclavare-containers/confidential-agent/releases/tag/v0.3.1) 下载 `install-rpm.sh`，运行 `sudo bash install-rpm.sh --version 0.3.1`。它会校验并安装 `cagent` 与配套 `shelter` RPM（支持 Alibaba Cloud Linux 3 `x86_64`），无需编译 Rust 源码；本地 `confidential-agent` CLI 从不在宿主机自动安装任何应用客户端，详见 [RPM 安装与预构建镜像流程](docs/rpm.md) 和 [宿主机依赖](docs/host-dependencies.md)。
+**Alibaba Cloud Linux 3（AliLinux 3，x86_64）默认安装全功能版 `full`**，即使使用官方预构建镜像也安装 cagent 和 Shelter RPM。安装 v0.3.0 时，从 Release 下载 `install-rpm.sh`，执行 `sudo bash install-rpm.sh --version 0.3.0`。[v0.3.0 Release](https://github.com/inclavare-containers/confidential-agent/releases/tag/v0.3.0)
+
+**下一版多平台 Release** 将在同一版本下提供仅部署版 `deploy-only` ZIP。AliLinux 3 用户显式选择仅部署时使用 Linux ZIP。其他受支持的 Linux x86_64 发行版和 Apple Silicon Mac 只提供各自平台的部署 ZIP。本地构建镜像请使用 AliLinux 3 全功能版。[安装形态与平台范围](docs/rpm.md#按部署机选择安装形态)
 
 ### 一键部署（One-Click）
 

@@ -1,6 +1,18 @@
 # confidential-agent RPM 安装与预构建镜像流程
 
-当前支持 Alibaba Cloud Linux 3（`x86_64`）。`confidential-agent`（兼容别名 `cagent`）使用原生宿主机工具，预构建镜像导入、本地构建和云端部署均不需要宿主机安装 Docker 或 Podman；Guest 内应用如启用 PEP，仍使用 Guest 自身的容器沙箱隔离。本地 `confidential-agent` CLI 从不在宿主机自动安装任何应用客户端。
+全功能 RPM 支持 Alibaba Cloud Linux 3（AliLinux 3，`x86_64`）。`confidential-agent`（兼容别名 `cagent`）使用原生宿主机工具，预构建镜像导入、本地构建和云端部署均不需要宿主机安装 Docker 或 Podman；Guest 内应用如启用 PEP，仍使用 Guest 自身的容器沙箱隔离。本地 `confidential-agent` CLI 从不在宿主机自动安装任何应用客户端。
+
+## 按部署机选择安装形态
+
+v0.3.0 已发布 AliLinux 3 全功能 RPM。下表是下一版多平台 Release 的安装规则，部署 ZIP 目前处于实验阶段。
+
+| 部署机 | 公开 one-click 默认安装 | 该平台的安装选择 |
+| --- | --- | --- |
+| AliLinux 3 x86_64 | **全功能 RPM（`full`）** | 只有显式选择 `deploy-only` 时才使用 Linux x86_64 部署 ZIP |
+| 其他受支持的 Linux x86_64 发行版（Ubuntu、Debian，以及 Rocky Linux 9 等 RHEL 9 系列兼容发行版） | **仅部署版（`deploy-only`）** | 仅提供 Linux x86_64 部署 ZIP |
+| macOS（Apple Silicon，arm64） | **仅部署版（`deploy-only`）** | 仅提供 macOS arm64 部署 ZIP |
+
+`--image-source` 选择本次使用的镜像来源。在 AliLinux 3 上，直接运行 one-click 或指定 `--image-source prebuilt`，都会默认安装全功能 RPM 并部署预构建镜像。要精简本机依赖，请显式选择 `deploy-only`，或在新 Release 发布后直接下载部署 ZIP。`--image-source build` 需要 AliLinux 3 全功能版。部署 ZIP 首版面向官方 CPU/TDX 共享预构建镜像。
 
 ## 从 Release 安装
 
