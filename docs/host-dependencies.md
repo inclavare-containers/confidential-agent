@@ -14,7 +14,8 @@
 | rekor-cli | Shelter 的 `/usr/libexec/shelter/bin/rekor-cli` | 参考值上传；cagent 通过符号链接复用 |
 | Shelter、Terraform/providers | Shelter RPM | 镜像构建、预构建产物校验和云资源生命周期 |
 | mkosi、QEMU、LVM、cryptsetup、文件系统工具 | Shelter RPM 及其依赖 | 磁盘镜像构建与产物校验 |
-| OpenSSH、CA 证书、coreutils、bash、jq、Python 3.11 | RPM 依赖 | SSH、脚本、发布元数据解析和 ALB 查询 |
+| OpenSSH、CA 证书、coreutils、bash、jq | RPM 依赖 | SSH、脚本和 ALB 查询 |
+| Python 3.11 | 全功能 RPM 通过 DNF 安装；部署 ZIP 不内置解释器 | one-click 的发布元数据解析、预构建镜像下载和 Codex WebSocket 就绪探针 |
 
 导入预构建镜像时，Shelter 使用 QEMU 磁盘工具校验产物。已有 ECS 镜像 ID 时，部署直接使用云镜像和描述文件。Rust/Cargo/gcc 用于源码编译或打包 CA。
 

@@ -14,6 +14,8 @@ v0.3.0 已发布 AliLinux 3 全功能 RPM。下表是下一版多平台 Release 
 
 `--image-source` 选择本次使用的镜像来源。在 AliLinux 3 上，直接运行 one-click 或指定 `--image-source prebuilt`，都会默认安装全功能 RPM 并部署预构建镜像。要精简本机依赖，请显式选择 `deploy-only`，或在新 Release 发布后直接下载部署 ZIP。`--image-source build` 需要 AliLinux 3 全功能版。部署 ZIP 首版面向官方 CPU/TDX 共享预构建镜像。
 
+部署 ZIP 提供原生 CLI、部署组件和模板。解压 ZIP 和直接运行 CLI 无需 Python。下一版多平台 one-click 会在运行下载器或服务探针前复用本机可用的 Python，缺少兼容解释器时由脚本安装。手动单独运行现有预构建镜像下载脚本需要 Python 3.11。
+
 同一台 AliLinux 3 机器上，同一用户运行同一版本的全功能 RPM 或部署 ZIP 时，两者默认共用 `~/.confidential-agent`。切换工具后可继续查看和管理同一批实例。需要独立的实验环境时，给 one-click 和后续 CLI 命令传入同一个单独的 `--state-dir`。
 
 ## 从 Release 安装
