@@ -97,3 +97,11 @@ remain unchanged; PM still verifies the downloaded bytes before publishing them.
 The adapter change is recorded in `/usr/local/lib/cai-hermes/binary-downloads.json`.
 Non-GitHub binary URLs keep their original download behavior. This applies to
 both the standalone Hermes image and all-in-one builds.
+
+The all-in-one build packages Hermes as an image-managed release. The upstream
+installer builds the terminal UI and web dashboard during image construction.
+The image runs those outputs with Hermes's resident package manager and
+retains TypeScript for runtime linting. It uses the checksum-pinned shared
+build of the same FFmpeg release for `ffmpeg`, `ffprobe` and `ffplay`.
+Frontend development with `hermes --tui --dev` requires a source checkout.
+Upgrade the bundled Hermes runtime by deploying a newer all-in-one image.

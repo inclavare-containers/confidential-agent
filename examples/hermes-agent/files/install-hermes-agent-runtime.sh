@@ -169,6 +169,16 @@ hermes_payload_installed() {
 installed_ref_matches() {
     local actual branch expected
 
+    if [[ "${HERMES_PREBUILT_RELEASE:-0}" == 1 ]]; then
+        test ! -e "$HERMES_INSTALL_DIR/.git" &&
+            test -s "$HERMES_PAYLOAD_DIR/pm-runtime/pm-runtime.json" &&
+            test -s "$HERMES_PAYLOAD_DIR/manifest.json" &&
+            hermes_entrypoint >/dev/null &&
+            actual="$(hermes_release_commit)" &&
+            [[ "$actual" == "$HERMES_COMMIT" ]]
+        return
+    fi
+
     hermes_payload_installed || return 1
     actual="$(git -C "$HERMES_INSTALL_DIR" rev-parse HEAD 2>/dev/null)" || return 1
 
@@ -180,6 +190,11 @@ installed_ref_matches() {
 
     branch="$(git -C "$HERMES_INSTALL_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null)" || return 1
     [[ "$branch" == "$HERMES_BRANCH" ]]
+}
+
+hermes_release_commit() {
+    python3.11 -c 'import json, sys; print(json.load(open(sys.argv[1]))["commit"])' \
+        "$HERMES_INSTALL_DIR/install-stamp.json"
 }
 
 run_official_installer_with_github_proxy() {
@@ -353,6 +368,26 @@ payload.mkdir(parents=True, exist_ok=True)
 PY
 }
 
+prepare_hermes_shared_ffmpeg() {
+    python3.11 - "$HERMES_INSTALL_DIR/pm/lock.json" <<'PY'
+import json, sys
+from pathlib import Path
+
+filename = Path(sys.argv[1])
+lock = json.loads(filename.read_text())
+ffmpeg = lock['packages']['ffmpeg']['artifacts']
+base = ('https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-31-13-27/'
+        'ffmpeg-n9.0.1-11-ge47273f4d9-linux64-gpl')
+source = {'url': base + '-9.0.tar.xz',
+          'sha256': '182c1b509720e939bb47bfb47dc29cc0c298640401128e3dce8627d10707eb5a'}
+shared = {'url': base + '-shared-9.0.tar.xz',
+          'sha256': '30801e00d25f823c6da339378ea63c38e5265f237741909e1d6164b6b5bd3d33'}
+assert ffmpeg['linux-x64'] == source, 'refresh the shared FFmpeg pin for this Hermes release'
+ffmpeg['linux-x64'] = shared
+filename.write_text(json.dumps(lock, indent=2) + '\n')
+PY
+}
+
 run_hermes_installer_stages() {
     local installer="$1"
     shift
@@ -375,6 +410,9 @@ print("\n".join(names))
             prepare_hermes_locked_downloads
             prepare_hermes_binary_downloads
             prepare_hermes_stripped_python
+            if [[ "${HERMES_PREBUILT_RELEASE:-0}" == 1 ]]; then
+                prepare_hermes_shared_ffmpeg
+            fi
         fi
     done <<< "$stages"
 }
@@ -395,8 +433,16 @@ install_hermes() (
         args+=(--commit "$HERMES_COMMIT")
     fi
 
-    export UV_PYTHON_INSTALL_DIR="${UV_PYTHON_INSTALL_DIR:-/usr/local/share/uv/python}"
-    export UV_PYTHON_BIN_DIR="${UV_PYTHON_BIN_DIR:-/usr/local/share/uv/bin}"
+    if [[ "${HERMES_PREBUILT_RELEASE:-0}" == 1 ]]; then
+        local bootstrap
+        bootstrap="$(mktemp -d)"
+        trap 'rm -rf "$bootstrap"' EXIT
+        export UV_PYTHON_INSTALL_DIR="$bootstrap/python"
+        export UV_PYTHON_BIN_DIR="$bootstrap/bin"
+    else
+        export UV_PYTHON_INSTALL_DIR="${UV_PYTHON_INSTALL_DIR:-/usr/local/share/uv/python}"
+        export UV_PYTHON_BIN_DIR="${UV_PYTHON_BIN_DIR:-/usr/local/share/uv/bin}"
+    fi
     export UV_PYTHON_INSTALL_MIRROR="${UV_PYTHON_INSTALL_MIRROR:-$(github_proxy_url https://github.com/astral-sh/python-build-standalone/releases/download)}"
     export UV_INDEX_URL="${UV_INDEX_URL:-${UV_DEFAULT_INDEX:-$HERMES_PYPI_INDEX_URL}}"
     export UV_HTTP_TIMEOUT="${UV_HTTP_TIMEOUT:-$HERMES_UV_HTTP_TIMEOUT}"
@@ -411,7 +457,21 @@ install_hermes() (
     export HERMES_RUNTIME_DIR="$HERMES_PAYLOAD_DIR/tools"
     run_hermes_installer_stages "$installer" "${args[@]}"
     seal_hermes_runtime
+    if [[ "${HERMES_PREBUILT_RELEASE:-0}" == 1 ]]; then
+        package_hermes_release
+    fi
 )
+
+package_hermes_release() {
+    # Keep the compiled frontends and TypeScript for runtime linting,
+    # following upstream's Docker runtime layout.
+    find "$HERMES_INSTALL_DIR/node_modules" -mindepth 1 -maxdepth 1 \
+        ! -name typescript -exec rm -rf -- {} +
+    install -d "$HERMES_INSTALL_DIR/node_modules/.bin"
+    ln -s ../typescript/bin/tsc "$HERMES_INSTALL_DIR/node_modules/.bin/tsc"
+    rm -rf "$HERMES_INSTALL_DIR"/{web,ui-tui,ui-tui/packages/hermes-ink}/node_modules \
+        "$HERMES_INSTALL_DIR"/{tests,website,apps/desktop,.git}
+}
 
 seal_hermes_runtime() {
     # Hermes PM selects dependencies per data home. Its supported payload
@@ -421,23 +481,32 @@ seal_hermes_runtime() {
     local hermes_bin runtime_python
     hermes_bin="$(hermes_entrypoint)"
     runtime_python="$("$hermes_bin" --print-runtime-command | python3.11 -c 'import json,sys; print(json.load(sys.stdin)[0])')"
-    "$runtime_python" - "$HERMES_INSTALL_DIR" "$HERMES_PAYLOAD_DIR" <<'PY'
+    "$runtime_python" - "$HERMES_INSTALL_DIR" "$HERMES_PAYLOAD_DIR" "$HERMES_INSTALL_HOME" \
+        "${HERMES_PREBUILT_RELEASE:-0}" <<'PY'
 import json,sys
 from pathlib import Path
-repo,payload = (Path(value).resolve() for value in sys.argv[1:])
+repo,payload,home = (Path(value).resolve() for value in sys.argv[1:4])
+prebuilt = sys.argv[4] == '1'
 sys.path.insert(0, str(repo))
 from pm.environments import committed_venv, store_root
 venv = committed_venv(repo)
 assert venv is not None and (venv / 'pyvenv.cfg').is_file(), 'Hermes dependencies are not committed'
 store = store_root(repo)
+stamp = repo / 'install-stamp.json'
+metadata = json.loads(stamp.read_text())
+metadata.update(updateMechanism='external', runtimeDir=str(store))
+if prebuilt:
+    from pm import installed_package
+    from scripts.bundles.native import stage_pm_runtime
+
+    python = installed_package('python').binary.resolve()
+    stage_pm_runtime(payload, python, repo, offline=True, cache=home / 'cache/uv')
+    metadata['distribution'] = 'confidential-agent'
+stamp.write_text(json.dumps(metadata, indent=2) + '\n')
 manifest = {'repo': str(repo.relative_to(payload)), 'venv': str(venv.relative_to(payload)),
             'store': str(store.relative_to(payload)),
             'runtime': {'commands': {'hermes': str((repo / '.hermes/bin/hermes').relative_to(payload))}}}
 (payload / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
-stamp = repo / 'install-stamp.json'
-metadata = json.loads(stamp.read_text())
-metadata.update(updateMechanism='external', runtimeDir=str(store))
-stamp.write_text(json.dumps(metadata, indent=2) + '\n')
 PY
     rm -f "$HERMES_INSTALL_HOME/.env" "$HERMES_INSTALL_HOME/config.yaml"
     chmod -R a+rX "$HERMES_PAYLOAD_DIR"
@@ -451,14 +520,24 @@ install_hermes_shim() {
     }
 
     install -d -m 0755 /usr/local/bin
-    cat >/usr/local/bin/hermes <<EOF
+    {
+        cat <<EOF
 #!/usr/bin/env bash
 unset PYTHONPATH
 unset PYTHONHOME
 export HERMES_RUNTIME_DIR="$HERMES_PAYLOAD_DIR/tools"
 export HERMES_DISABLE_LAZY_INSTALLS=1
+EOF
+        if [[ "${HERMES_PREBUILT_RELEASE:-0}" == 1 ]]; then
+            cat <<EOF
+export HERMES_TUI_DIR="$HERMES_INSTALL_DIR/ui-tui"
+export HERMES_WEB_DIST="$HERMES_INSTALL_DIR/hermes_cli/web_dist"
+EOF
+        fi
+        cat <<EOF
 exec "$hermes_bin" "\$@"
 EOF
+    } >/usr/local/bin/hermes
     chmod 0755 /usr/local/bin/hermes
 }
 
@@ -481,8 +560,9 @@ command -v xz >/dev/null 2>&1 || {
 
 ensure_hermes_user
 if installed_ref_matches; then
-    echo "Hermes Agent is already installed at $HERMES_INSTALL_DIR; skipping source install" >&2
+    echo "Hermes Agent is already installed at $HERMES_INSTALL_DIR; skipping install" >&2
 else
+    rm -f "$HERMES_PAYLOAD_DIR/manifest.json"
     clone_hermes_source
     pin_hermes_commit
     install_hermes
@@ -507,7 +587,9 @@ chown -R "$HERMES_USER:$HERMES_USER" "$HERMES_HOME"
 install -d -m 0755 /usr/local/share/confidential-agent
 {
     printf 'branch=%s\n' "$HERMES_BRANCH"
-    if [[ -n "$HERMES_COMMIT" ]]; then
+    if [[ "${HERMES_PREBUILT_RELEASE:-0}" == 1 ]]; then
+        printf 'commit=%s\n' "$(hermes_release_commit)"
+    elif [[ -n "$HERMES_COMMIT" ]]; then
         printf 'commit=%s\n' "$HERMES_COMMIT"
     else
         git -C "$HERMES_INSTALL_DIR" rev-parse HEAD | sed 's/^/commit=/'

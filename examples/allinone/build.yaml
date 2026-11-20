@@ -7,7 +7,8 @@ service:
 build:
   image_name: allinone
   runtime_contract: ./runtime-contract.json
-  resize: 80G
+  resize: 30G
+  qcow2_compression: zlib
   repos:
     - name: alinux-os
       baseurl: https://mirrors.aliyun.com/alinux/3/os/$basearch/
@@ -24,7 +25,7 @@ build:
     - name: alinux-powertools
       baseurl: https://mirrors.aliyun.com/alinux/3/powertools/$basearch/
       gpgkey: https://mirrors.aliyun.com/alinux/3/RPM-GPG-KEY-ALINUX-3
-  packages: [ca-certificates, curl, findutils, git, jq, libatomic, nodejs, npm, openssh-server, podman, procps-ng, python3.11, shadow-utils, tar, util-linux, xz]
+  packages: [ca-certificates, curl, findutils, git, jq, libatomic, openssh-server, podman, procps-ng, python3.11, shadow-utils, tar, util-linux, xz]
   files:
     - source: /usr/bin/cai-pep
       target: /usr/local/bin/cai-pep
@@ -85,7 +86,7 @@ deploy:
   region: cn-beijing
   zone_id: cn-beijing-i
   instance_type: ecs.g9i.xlarge
-  disk_gb: 80
+  disk_gb: 120
 attestation:
   tee: tdx
   mode: challenge

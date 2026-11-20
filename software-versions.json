@@ -9,9 +9,9 @@
   "codex": "0.162.1",
   "claude-code": "2.1.299",
   "node": "24.21.0",
-  "pnpm": "10.33.0",
-  "dingtalk": "e7ec428d8a38208ce43b4c825239355cd279f686",
-  "pnpm_integrity": "sha512-EFaLtKavtYyes2MNqQzJUWQXq+vT+rvmc58K55VyjaFJHp21pUTHatjrdXD1xLs9bGN7LLQb/c20f6gjyGSTGQ==",
+  "node_linux_x64_sha256": "fd8e59d5a511510f6a298afb548f18c7d2b1be404d8b4a27d94fbe49f56cb2d6",
+  "dingtalk": "3.9.1",
+  "dingtalk_integrity": "sha256-+GSvaH//mNH3ZezDRBmhvOCyG+BJiVbR1CsfsTLqRPs=",
   "bailian_model": "qwen4-max",
   "vllm": "0.28.0"
 }

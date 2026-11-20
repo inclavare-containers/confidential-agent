@@ -456,7 +456,7 @@ apply_target_defaults() {
       fi
       CA_ZONE_ID="${CA_ZONE_ID:-cn-beijing-i}"
       CA_INSTANCE_TYPE="${CA_INSTANCE_TYPE:-ecs.g9i.xlarge}"
-      CA_DISK_GB="${CA_DISK_GB:-200}"
+      CA_DISK_GB="${CA_DISK_GB:-120}"
       if [[ -z "${CA_CONNECT_READINESS_PATH:-}" ]]; then
         case "$harness" in
           openclaw) CA_CONNECT_READINESS_PATH="/openclaw" ;;

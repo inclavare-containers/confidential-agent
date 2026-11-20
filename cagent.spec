@@ -28,7 +28,7 @@ BuildRequires:  glibc-devel
 BuildRequires:  python3.11
 BuildRequires:  /usr/bin/pkg-config
 
-Requires:       shelter >= 0.3.2-4
+Requires:       shelter >= 0.3.2-5
 Requires:       attestation-challenge-client
 Requires:       libtdx-verify
 Requires:       trusted-network-gateway = 2.9.2-1.al8
