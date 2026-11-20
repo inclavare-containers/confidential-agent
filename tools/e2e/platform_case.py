@@ -24,7 +24,7 @@ def add_platform_fixtures(work, selected, prefix):
             write_json(runtime, configuration)
             native = fixture / 'openclaw.json'
             configuration = json.loads(native.read_text())
-            configuration['gateway']['port'] = 8642
+            configuration['gateway'].update(port=8642, bind='loopback')
             write_json(native, configuration)
         probe = fixture / 'probe.json'
         configuration = json.loads(probe.read_text())

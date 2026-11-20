@@ -70,7 +70,8 @@ def generate(directory, image, mode, region, prefix, *, harnesses=None, ssh=True
                          "cai-pep": {"enabled": True, "config": {"socketPath": "/run/cai/pep.sock",
                              "pepRequired": True, "defaultWorkdir": "/opt/data/allinone/workspace"}},
                          "cai-a2a": {"enabled": True, "config": {"peers": {}}}}},
-                     "gateway": {"mode": "local", "bind": "loopback", "port": 18789,
+                     "gateway": {"mode": "local", "bind": "lan", "port": 18789,
+                     "controlUi": {"enabled": False},
                      "http": {"endpoints": {"responses": {"enabled": True}}},
                      "auth": {"mode": "token", "token": native["token"]}}}, "/opt/data/allinone/home/.openclaw/openclaw.json")
             runtime = "cai-agent health --json"
