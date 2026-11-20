@@ -172,5 +172,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          version="${GITHUB_REF_NAME#v}"
+          for platform in linux-amd64 darwin-arm64; do
+            gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+              --pattern "cagent-deploy-$version-$platform.zip" --dir release-files
+          done
+          reuse_image_from="$(jq -r '.reuse_image_from // empty' hack/release-image.json)"
+          args=()
+          if [[ -n "$reuse_image_from" ]]; then args+=(--reuse-image-from "$reuse_image_from"); fi
           tar -xOzf release-files/cagent-*-build-inputs.tar.gz SOURCES/cagent-native-tools.tar.gz | tar -xz native-tools/oras
-          PATH="$PWD/native-tools:$PATH" python3 packaging/publish-release.py release-files
+          PATH="$PWD/native-tools:$PATH" python3 packaging/publish-release.py release-files "${args[@]}"

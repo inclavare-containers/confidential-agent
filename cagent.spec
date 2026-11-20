@@ -11,7 +11,7 @@
 %global __brp_strip_comment_note %{nil}
 
 Name:           cagent
-Version:        0.3.1
+Version:        0.4.0
 Release:        1%{?dist}
 Summary:        Confidential Agent host CLI and guest image assets
 License:        Apache-2.0

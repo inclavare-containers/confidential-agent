@@ -3,7 +3,7 @@ set -eu
 
 DEFAULT_REPO="https://github.com/inclavare-containers/confidential-agent.git"
 DEFAULT_BRANCH="master"
-RELEASE_VERSION="0.3.1"
+RELEASE_VERSION="0.4.0"
 PACKAGED_DIR="/usr/share/cagent/one-click"
 
 usage() {
