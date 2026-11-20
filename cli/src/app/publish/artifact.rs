@@ -321,6 +321,10 @@ pub(super) fn publish_artifact(
     args: &ImagePublishArgs,
     input: &Path,
 ) -> Result<PublishedImage> {
+    anyhow::ensure!(
+        !args.verify_disk || cfg!(target_os = "linux"),
+        "--verify-disk requires Linux disk tools"
+    );
     let release = release_identity(
         cli,
         args.image_release

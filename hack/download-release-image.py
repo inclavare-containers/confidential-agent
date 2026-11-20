@@ -226,6 +226,8 @@ def main():
     parser.add_argument('--verify-disk', action='store_true',
                         help="also inspect disk structure and boot evidence using Shelter's Linux disk tools")
     args = parser.parse_args()
+    if args.verify_disk and sys.platform != 'linux':
+        parser.error('--verify-disk requires Linux disk tools')
     output = args.output_dir.resolve()
     resolver = [sys.executable, HERE / 'fetch-release-image.py', '--output-dir', output,
                 '--version', args.version]
