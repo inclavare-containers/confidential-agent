@@ -13,7 +13,6 @@ OPENCLAW_USER_HOME="${2:?missing OpenClaw user home}"
 OPENCLAW_CONFIG_DIR="${OPENCLAW_USER_HOME%/}/.openclaw"
 OPENCLAW_VERSION="${OPENCLAW_VERSION:-$(ca_software_version openclaw)}"
 OPENCLAW_NODE_VERSION="${OPENCLAW_NODE_VERSION:-$(ca_software_version node)}"
-OPENCLAW_GIT_TIMEOUT_SEC="${OPENCLAW_GIT_TIMEOUT_SEC:-120}"
 export PATH=/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin
 
 install -d -m 1777 /tmp
@@ -185,115 +184,25 @@ preinstall_openclaw_bundled_runtime_deps() {
     done < <(find "$extensions_dir" -mindepth 2 -maxdepth 2 -name package.json -print0 | sort -z)
 }
 
-git_with_timeout() {
-    local git_env=(
-        "GIT_TERMINAL_PROMPT=0"
-        "GIT_HTTP_LOW_SPEED_LIMIT=${GIT_HTTP_LOW_SPEED_LIMIT:-1024}"
-        "GIT_HTTP_LOW_SPEED_TIME=${GIT_HTTP_LOW_SPEED_TIME:-20}"
-    )
-    if command -v timeout >/dev/null 2>&1; then
-        env "${git_env[@]}" timeout "$OPENCLAW_GIT_TIMEOUT_SEC" git "$@"
-    else
-        env "${git_env[@]}" git "$@"
-    fi
-}
-
-clone_github_snapshot() {
-    local url="$1" directory="$2" commit="$3"
-    git_with_timeout clone --depth 1 --no-checkout "$url" "$directory" || return 1
-    if [[ -n "$commit" ]]; then
-        if [[ "$(git -C "$directory" rev-parse HEAD)" != "$commit" ]]; then
-            git_with_timeout -C "$directory" fetch --depth 1 origin "$commit" || return 1
-        fi
-        git_with_timeout -C "$directory" checkout --detach "$commit" || return 1
-    else
-        git_with_timeout -C "$directory" reset --hard HEAD || return 1
-    fi
-}
-
-clone_github_with_fallback() {
-    local repo_path="$1"
-    local dest_dir="$2"
-    local commit="${3:-}"
-    local primary_url="https://github.com/${repo_path}"
-    local proxy="${CA_GITHUB_PROXY_URL:-https://gh-proxy.org/}"
-    local fallback_url="${proxy%/}/https://github.com/${repo_path}"
-
-    rm -rf "${dest_dir}.tmp-direct" "${dest_dir}.tmp-proxy"
-    if clone_github_snapshot "$primary_url" "${dest_dir}.tmp-direct" "$commit"; then
-        rm -rf "$dest_dir"
-        mv "${dest_dir}.tmp-direct" "$dest_dir"
-        return 0
-    fi
-
-    echo "Direct GitHub clone failed, retrying via gh-proxy..."
-    rm -rf "${dest_dir}.tmp-direct"
-    if clone_github_snapshot "$fallback_url" "${dest_dir}.tmp-proxy" "$commit"; then
-        rm -rf "$dest_dir"
-        mv "${dest_dir}.tmp-proxy" "$dest_dir"
-        return 0
-    fi
-
-    rm -rf "${dest_dir}.tmp-proxy"
-    echo "failed to clone ${repo_path} from GitHub and gh-proxy" >&2
-    return 1
-}
-
-install_pinned_pnpm() (
-    local version integrity work
-    version="$(ca_software_version pnpm)"
-    integrity="$(ca_software_version pnpm_integrity)"
-    work="$(mktemp -d)"
-    trap 'rm -rf "$work"' EXIT
-    local registry="${NPM_REGISTRY:-https://registry.npmmirror.com/}"
-    if ! curl --fail --location --retry 3 --connect-timeout 20 --max-time 180 \
-        "${registry%/}/pnpm/-/pnpm-$version.tgz" --output "$work/pnpm-$version.tgz"; then
-        # Preserve npm's authentication and custom tarball layout for private registries.
-        npm pack "pnpm@$version" --registry "$registry" --ignore-scripts \
-            --pack-destination "$work" --json --no-update-notifier > "$work/pack.json" || exit 1
-    fi
-    # Mirror transport must preserve the independently pinned npm tarball bytes.
-    node - "$work" "$version" "$integrity" <<'JS' || exit 1
-const fs = require('node:fs');
-const crypto = require('node:crypto');
-const [work, version, expected] = process.argv.slice(2);
-const bytes = fs.readFileSync(`${work}/pnpm-${version}.tgz`);
-const actual = 'sha512-' + crypto.createHash('sha512').update(bytes).digest('base64');
-if (actual !== expected) throw new Error('pinned pnpm tarball integrity mismatch');
-JS
-    npm install -g "$work/pnpm-$version.tgz" --ignore-scripts --no-audit --no-fund --no-update-notifier
-)
-
 install_dingtalk_extension() {
-    local extension_dir="$OPENCLAW_CONFIG_DIR/extensions/dingtalk"
-    command -v git >/dev/null 2>&1 || {
-        echo "git is required to install the DingTalk OpenClaw plugin" >&2
-        exit 1
-    }
-    if [[ ! -d "$extension_dir" ]]; then
-        clone_github_with_fallback "soimy/openclaw-channel-dingtalk" "$extension_dir" \
-            "$(ca_software_version dingtalk)" || return 1
+    local version integrity
+    version="${DINGTALK_VERSION:-$(ca_software_version dingtalk)}"
+    integrity="$(ca_software_version dingtalk_integrity)"
+    local command=()
+    if [[ "$OPENCLAW_USER" != root ]]; then
+        command=(runuser -u "$OPENCLAW_USER" --)
     fi
-    # Match the plugin's declared manager before entering its directory, so an
-    # ambient newer pnpm cannot initiate another package-manager download.
-    node - "$extension_dir/package.json" "$(ca_software_version pnpm)" <<'JS' || return 1
-const fs = require('node:fs');
-const [manifest, version] = process.argv.slice(2);
-const declared = JSON.parse(fs.readFileSync(manifest, 'utf8')).packageManager;
-if (declared !== `pnpm@${version}`) {
-    throw new Error(`DingTalk requires ${declared}; update the checked-in pnpm pin`);
-}
-JS
-    install_pinned_pnpm || return 1
-    hash -r
-    (
-        cd "$extension_dir"
-        [[ "$(pnpm --version)" == "$(ca_software_version pnpm)" ]] || exit 1
-        pnpm install --registry "${NPM_REGISTRY:-https://registry.npmmirror.com/}" || exit 1
-        pnpm build || exit 1
-        test -f dist/index.js
-    ) || return 1
-    chown -R "$OPENCLAW_USER:openclaw" "$extension_dir" || true
+    command+=(env "HOME=$OPENCLAW_USER_HOME" "OPENCLAW_STATE_DIR=$OPENCLAW_CONFIG_DIR"
+        "OPENCLAW_CONFIG_PATH=$OPENCLAW_CONFIG_DIR/openclaw.json"
+        "npm_config_registry=${NPM_REGISTRY:-https://registry.npmmirror.com/}" "$OPENCLAW_BIN")
+    if [[ ! -d "$OPENCLAW_CONFIG_DIR/extensions/dingtalk" ]]; then
+        "${command[@]}" plugins install "clawhub:@soimy/dingtalk@$version" --no-enable --accept-capabilities
+    fi
+    if ! "${command[@]}" plugins inspect dingtalk --json |
+        jq -e --arg integrity "$integrity" '.install.integrity == $integrity' >/dev/null; then
+        echo "DingTalk package integrity does not match the checked-in pin" >&2
+        return 1
+    fi
 }
 
 ensure_openclaw_dirs

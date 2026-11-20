@@ -2,7 +2,7 @@
 
 本目录定义一个共享 CPU `release` 机密镜像，内置 **OpenClaw、Hermes、Codex、OpenCode、DeepSeek Harness (DSH)、Claude Code、QoderCLI、Pi** 八种 Agent harness。每台部署的 TDX 虚拟机在远程证明通过后接收各自的 `/opt/data/allinone/runtime.json` 与原生配置文件，按实例激活其中一种 harness 及对应运行模式。
 
-根文件系统启用 dm-verity 完整性保护，可写增量层由 CryptPilot / LUKS2 加密（基础镜像 `80G`，实例系统盘至少 `120G` 以预留加密可写空间）。`service.ssh: true` 为每个实例生成独立的客户端与主机 Ed25519 密钥并通过远程证明下发，共享镜像内不内置任何 SSH 密钥或模型凭据。本地 `confidential-agent` CLI 不会在宿主机自动安装任何应用客户端。
+基础镜像的虚拟容量为 `30G`，最终 QCOW2 制品使用 zlib 压缩。根文件系统启用 dm-verity 完整性保护，可写增量层由 Cryptpilot / LUKS2 加密。实例系统盘默认 120 GiB，给加密可写层预留空间。`service.ssh: true` 为每个实例生成独立的客户端与主机 Ed25519 密钥并通过远程证明下发，共享镜像内不内置任何 SSH 密钥或模型凭据。本地 `confidential-agent` CLI 不会在宿主机自动安装任何应用客户端。
 
 ## 信任模型
 

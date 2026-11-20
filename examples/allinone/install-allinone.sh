@@ -1,6 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 umask 022
+export PATH="/usr/local/bin:$PATH"
 export NPM_REGISTRY="${NPM_REGISTRY:-https://registry.npmmirror.com/}"
 export UV_INDEX_URL="${UV_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}"
 export PLAYWRIGHT_DOWNLOAD_HOST="${PLAYWRIGHT_DOWNLOAD_HOST:-https://npmmirror.com/mirrors/playwright}"
@@ -11,7 +12,7 @@ export CODEX_VERSION="$(jq -er '.software_versions.codex' "$contract")"
 export CLAUDE_CODE_VERSION="$(jq -er '.software_versions["claude-code"]' "$contract")"
 export HERMES_COMMIT="$(jq -er '.software_versions.hermes' "$contract")"
 export OPENCLAW_VERSION="$(jq -er '.software_versions.openclaw' "$contract")"
-DINGTALK_COMMIT="$(jq -er '.software_versions.dingtalk' "$contract")"
+export DINGTALK_VERSION="$(jq -er '.software_versions.dingtalk' "$contract")"
 QODER_VERSION="$(jq -er '.software_versions.qodercli' "$contract")"
 OPENCODE_VERSION="$(jq -er '.software_versions.opencode' "$contract")"
 PI_VERSION="$(jq -er '.software_versions.pi' "$contract")"
@@ -20,11 +21,24 @@ DSH_VERSION="$(jq -er '.software_versions.dsh' "$contract")"
 cli=/usr/local/libexec/confidential-agent/cli-agent/install-cli-agent-runtime.sh
 test -x /usr/local/bin/cai-pep
 test -s /opt/data/allinone/home/.agents/skills/tdx-remote-attestation/SKILL.md
+(
+    source /usr/local/libexec/confidential-agent/software-versions.sh
+    node_version="$(ca_software_version node)"
+    node_sha256="$(ca_software_version node_linux_x64_sha256)"
+    node_archive="node-v${node_version}-linux-x64.tar.xz"
+    node_work="$(mktemp -d)"
+    trap 'rm -rf -- "$node_work"' EXIT
+    curl -fsSL "${N_NODE_MIRROR:-https://npmmirror.com/mirrors/node}/v${node_version}/${node_archive}" \
+        -o "$node_work/$node_archive"
+    printf '%s  %s\n' "$node_sha256" "$node_work/$node_archive" | sha256sum --check
+    tar -xJf "$node_work/$node_archive" -C /usr/local --strip-components=1 \
+        --no-same-owner --no-overwrite-dir
+)
 "$cli" codex
 "$cli" claude-code
 install -d -m 0755 /opt/data/allinone
 install -d -m 0700 /opt/data/allinone/home
-HERMES_HOME=/opt/data/allinone/hermes HERMES_COMPACT_RUNTIME=1 \
+HERMES_HOME=/opt/data/allinone/hermes HERMES_COMPACT_RUNTIME=1 HERMES_PREBUILT_RELEASE=1 \
     /usr/local/libexec/confidential-agent/hermes/install-hermes-agent-runtime.sh
 npm config set registry "$NPM_REGISTRY"
 npm install -g --no-audit --no-fund \
@@ -46,10 +60,8 @@ CA_DISABLE_PEP=0 "$pep" setup-runtime root "$claw_home"
 CA_DISABLE_PEP=0 /usr/local/libexec/confidential-agent/openclaw/install-openclaw-runtime.sh \
     root /opt/data/allinone/home
 test -f "$claw_home/extensions/dingtalk/dist/index.js"
-test "$(git -C "$claw_home/extensions/dingtalk" rev-parse HEAD)" = "$DINGTALK_COMMIT"
 test -d "$claw_home/extensions/cai-a2a"
 test -d "$claw_home/extensions/cai-pep"
-rm -rf /root/.local/share/pnpm/store /root/.cache/pnpm
 install -d -m 0700 /opt/data/allinone/workspace
 policy=/etc/cai/pep/policy.json
 jq '.workspace_host_path = "/opt/data/allinone/workspace"
@@ -85,8 +97,8 @@ systemctl enable cai-ssh.path
 install -d -m 0755 /usr/local/share/confidential-agent
 {
     npm list -g --depth=0 --json
-    git -C /usr/local/lib/hermes-agent rev-parse HEAD
-    git -C "$claw_home/extensions/dingtalk" rev-parse HEAD
+    sed -n 's/^commit=//p' /usr/local/share/confidential-agent/hermes-install.txt
+    jq -er '.version' "$claw_home/extensions/dingtalk/package.json"
 } > /usr/local/share/confidential-agent/allinone-versions.txt
 python3.11 /usr/local/libexec/confidential-agent/allinone/finalize-runtime.py
 for command in openclaw hermes qoder opencode codex claude pi dsh; do

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-source <(sed -n '/^normalize_openclaw_bundled_manifest()/,/^git_with_timeout()/p' \
+source <(sed -n '/^normalize_openclaw_bundled_manifest()/,/^install_dingtalk_extension()/p' \
     "$ROOT_DIR/examples/openclaw/files/install-openclaw-runtime.sh" | sed '$d')
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT

@@ -322,7 +322,7 @@ class Consumer:
 root = pathlib.Path(subprocess.check_output(['npm','root','-g'],text=True).strip())
 packages = {'openclaw':'openclaw','codex':'@openai/codex','claude-code':'@anthropic-ai/claude-code','qodercli':'@qoder-ai/qodercli','opencode':'opencode-ai','pi':'@earendil-works/pi-coding-agent','dsh':'@deepseek-ai/dsh'}
 actual = {name: json.loads((root / package / 'package.json').read_text())['version'] for name,package in packages.items()}
-actual['hermes'] = subprocess.check_output(['git','-C','/usr/local/lib/hermes-agent','rev-parse','HEAD'],text=True).strip()
+actual['hermes'] = json.loads(pathlib.Path('/usr/local/lib/hermes-agent/install-stamp.json').read_text())['commit']
 actual['node'] = subprocess.check_output(['node','--version'],text=True).strip().removeprefix('v')
 print(json.dumps(actual))
 """

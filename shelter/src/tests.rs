@@ -849,6 +849,17 @@ fn managed_peer_connect_routes_are_allowed_at_workload_and_load_balancer() {
 }
 
 #[test]
+fn renders_qcow2_compression_without_a_fixed_disk_size() {
+    let mut spec = AgentSpec::from_yaml(SPEC, Path::new("/project")).unwrap();
+    spec.build.resize = None;
+    spec.build.qcow2_compression = Some(Qcow2Compression::Zlib);
+    let rendered = render_build_config(&spec, &assets(), &ShelterRenderOptions::default()).unwrap();
+    let config: serde_yaml::Value = serde_yaml::from_str(&rendered).unwrap();
+    assert_eq!(config["output"]["qcow2_compression"], "zlib");
+    assert!(config["output"].get("disk_size").is_none());
+}
+
+#[test]
 fn runtime_disk_defaults_preserve_explicit_sizes_and_fit_the_build_image() {
     for (disk, resize, expected) in [
         (None, None, 32),

@@ -62,7 +62,7 @@ Confidential Agent 的保护范围包括：
 | 部署机系统 | Alibaba Cloud Linux 3（`x86_64`） | Alibaba Cloud Linux 3（`x86_64`） |
 | 部署机磁盘 | 预构建模式建议不低于 40 GB；`--image-source build` 不低于 80 GB | 建议不低于 200 GB |
 | 目标实例 | `ecs.g9i.xlarge`，默认 `cn-beijing-i` | `ecs.gn8v-tee.4xlarge`，默认 `cn-beijing-l` |
-| 目标系统盘 | 默认 200 GB | 默认 512 GB |
+| 目标系统盘 | 默认 120 GiB | 默认 512 GiB |
 | 阿里云权限 | ECS、VPC、安全组、OSS、自定义镜像、`AliyunECSImageImportDefaultRole` | 同左，并需要 GPU TEE 实例库存和购买权限 |
 | 模型凭据 | DashScope API Key（或其他兼容推理 API Key） | 不需要 DashScope API Key |
 | 可选集成 | 钉钉企业内部应用凭据 | 钉钉企业内部应用凭据 |
@@ -117,7 +117,7 @@ sh "$INSTALL_SCRIPT" deploy \
   --region cn-beijing \
   --zone-id cn-beijing-i \
   --instance-type ecs.g9i.xlarge \
-  --disk-gb 200 \
+  --disk-gb 120 \
   --bailian-model qwen3.7-max
 ```
 

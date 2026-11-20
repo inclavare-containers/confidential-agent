@@ -13,7 +13,7 @@ rpm --dbpath "$work/db" --initdb
 ca_version="$(awk '$1 == "Version:" { print $2 }' "$repo/cagent.spec")"
 ca_release="$(awk '$1 == "Release:" { sub(/%.*/, "", $2); print $2 }' "$repo/cagent.spec")"
 required="$(awk '$1 == "Requires:" && $2 == "shelter" { print $2, $3, $4 }' "$repo/cagent.spec")"
-[[ "$required" == 'shelter >= 0.3.2-4' ]]
+[[ "$required" == 'shelter >= 0.3.2-5' ]]
 old_ca_version=0.2.0
 old_ca_release=1
 
@@ -39,12 +39,12 @@ SPEC
   mv "$work/build/RPMS/noarch/$name-$version-$release.noarch.rpm" "$work/packages/"
 }
 
-make_package shelter 0.3.2 2 ''
 make_package shelter 0.3.2 4 ''
+make_package shelter 0.3.2 5 ''
 make_package cagent "$old_ca_version" "$old_ca_release" 'Requires: shelter >= 0.3.2-2'
 make_package cagent "$ca_version" "$ca_release" "Requires: $required"
-old_shelter="$work/packages/shelter-0.3.2-2.noarch.rpm"
-new_shelter="$work/packages/shelter-0.3.2-4.noarch.rpm"
+old_shelter="$work/packages/shelter-0.3.2-4.noarch.rpm"
+new_shelter="$work/packages/shelter-0.3.2-5.noarch.rpm"
 old_ca="$work/packages/cagent-$old_ca_version-$old_ca_release.noarch.rpm"
 new_ca="$work/packages/cagent-$ca_version-$ca_release.noarch.rpm"
 rpm --dbpath "$work/db" -U --noscripts "$old_shelter" "$old_ca"
@@ -55,6 +55,6 @@ fi
 grep -Fq "$required" "$work/rejected"
 rpm --dbpath "$work/db" -U --test --noscripts "$new_shelter" "$new_ca"
 rpm --dbpath "$work/db" -U --noscripts "$new_shelter" "$new_ca"
-[[ "$(rpm --dbpath "$work/db" -q --qf '%{VERSION}-%{RELEASE}' shelter)" == 0.3.2-4 ]]
+[[ "$(rpm --dbpath "$work/db" -q --qf '%{VERSION}-%{RELEASE}' shelter)" == 0.3.2-5 ]]
 [[ "$(rpm --dbpath "$work/db" -q --qf '%{VERSION}-%{RELEASE}' cagent)" == "$ca_version-$ca_release" ]]
 printf '%s\n' 'Paired RPM upgrade rejects old Shelter and upgrades both releases: PASS'

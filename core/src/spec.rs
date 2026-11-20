@@ -100,6 +100,8 @@ pub struct BuildSpec {
     pub kernel_cmdline_append: Option<String>,
     #[serde(default)]
     pub resize: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qcow2_compression: Option<Qcow2Compression>,
     #[serde(default)]
     pub container: Option<BuildContainerSpec>,
     #[serde(default)]
@@ -114,6 +116,12 @@ pub struct BuildSpec {
     pub variants: BuildVariantsSpec,
     #[serde(default, skip_serializing_if = "BuildCleanupSpec::is_empty")]
     pub cleanup: BuildCleanupSpec,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Qcow2Compression {
+    Zlib,
 }
 
 /// Additional signed RPM repositories passed to Shelter's native build input.
@@ -610,6 +618,7 @@ impl AgentSpec {
                 || !self.build.repos.is_empty()
                 || self.build.container.is_some()
                 || self.build.resize.is_some()
+                || self.build.qcow2_compression.is_some()
                 || self.build.runtime_contract.is_some()
                 || self.build.kernel_cmdline_append.is_some()
                 || self.build.cleanup != BuildCleanupSpec::default()

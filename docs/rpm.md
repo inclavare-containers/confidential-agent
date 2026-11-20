@@ -30,15 +30,15 @@ packaging/build-rpm.sh
 
 产物位于 `target/rpm/RPMS/x86_64/cagent-0.3.0-1.al8.x86_64.rpm`，SRPM 位于 `target/rpm/SRPMS/`。源码准备阶段缓存并校验固定版本的 `cosign`、`aliyun`、`ossutil64` 和 `oras`；`target/rpm/SOURCES/SHA256SUMS` 记录源码、Cargo vendor 和原生工具归档的哈希，rpmbuild 内使用 `--locked --offline` 编译与测试。
 
-输出目录同时包含配套 Shelter RPM（`cagent` 依赖 `shelter >= 0.3.2-4`）、`shelter-rpm.json` 与 `SHA256SUMS`。`hack/shelter-rpm.json` 记录 GHCR 仓库、源码提交、RPM SHA-256 和 payload 摘要。缓存中缺少该 RPM 时，`hack/resolve-shelter-rpm.sh` 获取固定版本的 ORAS，按 RPM SHA-256 匿名下载，并校验包文件和 payload 后写入缓存。`CAGENT_BUILD_JOBS` 控制打包并行度（默认 `4`）。
+输出目录同时包含配套 Shelter RPM（`cagent` 依赖 `shelter >= 0.3.2-5`）、`shelter-rpm.json` 与 `SHA256SUMS`。`hack/shelter-rpm.json` 记录 GHCR 仓库、源码提交、RPM SHA-256 和 payload 摘要。缓存中缺少该 RPM 时，`hack/resolve-shelter-rpm.sh` 获取固定版本的 ORAS，按 RPM SHA-256 匿名下载，并校验包文件和 payload 后写入缓存。`CAGENT_BUILD_JOBS` 控制打包并行度（默认 `4`）。
 
 ## 在干净机器手动安装本地 RPM
 
 将 `cagent` 与配套 `shelter` RPM 放在同一目录后安装：
 
 ```bash
-grep -E '  (cagent-0\.3\.0-1\.al8\.x86_64|shelter-0\.3\.2-3\.al8\.x86_64)\.rpm$' SHA256SUMS | sha256sum -c -
-sudo dnf install -y ./shelter-0.3.2-4.al8.x86_64.rpm ./cagent-0.3.0-1.al8.x86_64.rpm
+grep -E '  (cagent-0\.3\.0-1\.al8\.x86_64|shelter-0\.3\.2-5\.al8\.x86_64)\.rpm$' SHA256SUMS | sha256sum -c -
+sudo dnf install -y ./shelter-0.3.2-5.al8.x86_64.rpm ./cagent-0.3.0-1.al8.x86_64.rpm
 confidential-agent version
 rpm -q cagent shelter attestation-challenge-client libtdx-verify trusted-network-gateway
 ```

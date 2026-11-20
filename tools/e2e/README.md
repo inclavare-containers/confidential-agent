@@ -314,10 +314,12 @@ reporting acceptance results. Standard cloud/Bailian credentials are read
 from the environment. Version defaults come from the root
 [`software-versions.json`](../../software-versions.json); the eight-harness tests
 also inspect the actual guest versions and make real model calls.
-Fresh OpenClaw builds pin the DingTalk plugin commit and its pnpm version in the
-same manifest. The pnpm tarball can come from the configured npm mirror, but its
-bytes must match the checked-in SHA-512 digest before installation. CLI agent
-and Node bootstrap downloads use the mainland npm mirror by default.
+Fresh OpenClaw builds install the pinned DingTalk release using the standard
+OpenClaw ClawHub installer. The installer verifies the archive against its
+registry metadata, and the build checks the recorded integrity against
+`software-versions.json`. The deployment configuration enables DingTalk per
+instance. CLI agent and Node bootstrap downloads use the mainland npm mirror by
+default.
 Published consumers configure Rekor using the installed Shelter tool path,
 without a build-time signing key. Their reference metadata is authenticated
 through the trusted digest of the image release. Image export binds runtime metadata to the

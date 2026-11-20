@@ -3,7 +3,7 @@ use confidential_agent_core::peerings::{PeeringScope, PeeringsFile};
 use confidential_agent_core::schema::{confidential_ports, AGENT_CARD_PORT, DAEMON_STATUS_PORT};
 use confidential_agent_core::spec::{
     AgentSpec, AttestationMode, AttestationTee, BuildCleanupSpec, BuildContainerSpec,
-    BuildRepositorySpec, ReferenceValueMode, RekorSpec,
+    BuildRepositorySpec, Qcow2Compression, ReferenceValueMode, RekorSpec,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -63,9 +63,12 @@ pub fn render_build_config(
         // The supported V1 build schema retains CA's initrd, Rekor and
         // container mount settings, which have no lossless V2 representation.
         version: 1,
-        output: spec.build.resize.as_ref().map(|size| ShelterOutputConfig {
-            disk_size: Some(size.clone()),
-        }),
+        output: (spec.build.resize.is_some() || spec.build.qcow2_compression.is_some()).then(
+            || ShelterOutputConfig {
+                disk_size: spec.build.resize.clone(),
+                qcow2_compression: spec.build.qcow2_compression,
+            },
+        ),
         container: spec.build.container.clone(),
         packages: shelter_packages(spec, assets),
         repos: spec.build.repos.clone(),
@@ -513,6 +516,8 @@ struct ShelterKernel {
 struct ShelterOutputConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     disk_size: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    qcow2_compression: Option<Qcow2Compression>,
 }
 
 #[derive(Debug, Serialize)]

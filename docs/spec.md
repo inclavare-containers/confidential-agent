@@ -68,7 +68,8 @@ CA 使用 Shelter 主线的 mkosi 构建流程；普通构建允许安装脚本�
 ```yaml
 build:
   image_name: openclaw-agent                  # 必填，构建产物名 + cloud 镜像名 prefix
-  resize: 30G                                 # 可选，渲染为 Shelter disk.size
+  resize: 30G                                 # 可选，渲染为 Shelter output.disk_size
+  qcow2_compression: zlib                      # 可选，压缩最终 QCOW2
   kernel_cmdline_append: "swiotlb=4194304,any" # 可选，UKI cmdline 追加项
   cleanup:                                    # 可选，透传给 Shelter cleanup
     remove_static_libs: false                 # 可选，保留 *.a 静态库
@@ -101,7 +102,8 @@ build:
 | 字段 | 类型 | 必填 | 默认 | 校验 |
 |---|---|:-:|---|---|
 | `image_name` | string | ✅ | — | 仅 `[A-Za-z0-9_-]` |
-| `resize` | string | ❌ | `None` | 例如 `30G`，渲染为 Shelter `disk.size` |
+| `resize` | string | ❌ | `None` | 例如 `30G`，渲染为 Shelter `output.disk_size` |
+| `qcow2_compression` | string | ❌ | `None` | 设为 `zlib` 时，Shelter 压缩最终 QCOW2 文件 |
 | `kernel_cmdline_append` | string | ❌ | `None` | 透传到 `security.disk.cryptpilot.uki_append_cmdline` |
 | `cleanup.remove_static_libs` | bool | ❌ | Shelter 默认值 | 透传给 Shelter 顶层 `cleanup.remove_static_libs`；vLLM 等需要在运行期编译 Python 扩展的镜像可设为 `false` 保留静态库 |
 | `container` | object | ❌ | `None` | 原样渲染为 Shelter 顶层 `container:`；用于 OCI workload |
@@ -291,7 +293,7 @@ targets:
         confidential-agent-image-variant: <variant>
 ```
 
-Build 输出使用显式 `version: 1` 的 Shelter 主线构建配置：`build.resize` 渲染为顶层 `disk.size`，`build.cleanup` 渲染为顶层 `cleanup`，cryptpilot 渲染为 `security.disk.engine: cryptpilot` 和 `security.disk.cryptpilot.*`，保留 `initrd.binaries`、Rekor 与容器挂载字段。部署使用上面的独立 V2 运行目标，构建快照不会随部署或网络更新改写。CA 验证 TDX 证据并释放密钥，因此目标明确声明外部认证方。
+Build 输出使用显式 `version: 1` 的 Shelter 主线构建配置。`build.resize` 和 `build.qcow2_compression` 分别渲染为 `output.disk_size` 和 `output.qcow2_compression`。`build.cleanup` 渲染为顶层 `cleanup`，cryptpilot 渲染为 `security.disk.engine: cryptpilot` 和 `security.disk.cryptpilot.*`，保留 `initrd.binaries`、Rekor 与容器挂载字段。部署使用上面的独立 V2 运行目标，构建快照不会随部署或网络更新改写。CA 验证 TDX 证据并释放密钥，因此目标明确声明外部认证方。
 
 ---
 
