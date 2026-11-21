@@ -18,6 +18,7 @@ class OneClickImageSpecTest(unittest.TestCase):
                                        'deploy': {'image': {'release': 'signed-release.json'}}}))
             script = '''
 set -euo pipefail
+source "$ROOT_DIR/one-click/lib/common.sh"
 source "$ROOT_DIR/one-click/lib/openclaw.sh"
 ensure_gateway_token() { :; }
 ensure_cosign_key() { touch "$TEST_WORK/unexpected-key"; return 99; }
@@ -42,13 +43,14 @@ prepare_vllm_inference_specs
                 spec.write_text(json.dumps(value))
                 result = subprocess.run(['bash', '-c', '''
 set -euo pipefail
+source "$ROOT_DIR/one-click/lib/common.sh"
 source "$ROOT_DIR/one-click/lib/openclaw.sh"
 ensure_gateway_token() { :; }
 ca_cmd() { exit 99; }
 prepare_vllm_inference_specs
 '''], env=dict(os.environ, ROOT_DIR=str(ROOT), CA_IMAGE_SPEC=str(spec)), capture_output=True)
                 self.assertNotEqual(result.returncode, 0)
-                self.assertNotEqual(result.returncode, 99)
+                self.assertIn(b'--image-spec requires a published-image AppSpec', result.stderr)
 
 
 if __name__ == '__main__':
