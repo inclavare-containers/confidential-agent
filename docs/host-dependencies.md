@@ -14,15 +14,21 @@
 | rekor-cli | Shelter 的 `/usr/libexec/shelter/bin/rekor-cli` | 参考值上传；cagent 通过符号链接复用 |
 | Shelter、Terraform/providers | Shelter RPM | 镜像构建、预构建产物校验和云资源生命周期 |
 | mkosi、QEMU、LVM、cryptsetup、文件系统工具 | Shelter RPM 及其依赖 | 磁盘镜像构建与产物校验 |
-| OpenSSH、CA 证书、coreutils、bash、jq、Python 3.11 | RPM 依赖 | SSH、脚本、发布元数据解析和 ALB 查询 |
+| OpenSSH、CA 证书、coreutils、bash、jq | RPM 依赖 | SSH、脚本和 ALB 查询 |
+| Python 3.11 及以上 | 全功能 RPM 通过 DNF 安装 Python 3.11。部署 ZIP 的 one-click 优先使用本机解释器，缺少时按需安装到当前用户目录 | one-click 的发布元数据解析、预构建镜像下载和 Codex WebSocket 就绪探针 |
 
-导入预构建镜像时，Shelter 使用 QEMU 磁盘工具校验产物。已有 ECS 镜像 ID 时，部署直接使用云镜像和描述文件。Rust/Cargo/gcc 用于源码编译或打包 CA。
+导入预构建镜像时，Shelter 根据可信 Release 校验产物清单以及文件大小和 SHA-256。Linux 上可加 `--verify-disk`，使用 QEMU 和 NBD 检查磁盘结构与启动材料。已有 ECS 镜像 ID 时，部署直接使用云镜像和描述文件。Rust/Cargo/gcc 用于源码编译或打包 CA。
 
-Node/npm、Python 应用包、CUDA/vLLM 等在 Guest 镜像内准备。`one-click/install.sh` 按所选接入方式安装本地应用客户端，例如 OpenClaw TUI、Codex 远程 CLI 和 OpenCode attach。显式配置 `build.container.image` 的构建需要宿主机 Podman 或 Docker。
+Node/npm、Python 应用包、CUDA/vLLM 等在 Guest 镜像内准备。RPM 与部署 ZIP 均不附带宿主机应用客户端。使用 one-click 的 OpenClaw TUI、Codex 远程 CLI 或 OpenCode attach 时，交互模式会询问是否在本机安装客户端及其 Node.js/npm 依赖，默认跳过。非交互安装需显式传入 `--install-host-client`；`--yes` 仅用于其他部署确认。显式配置 `build.container.image` 的构建需要宿主机 Podman 或 Docker。
+
+部署 ZIP 的 one-click 在获准安装客户端后，将客户端和缺少的 Node.js
+装到当前用户的 `${XDG_DATA_HOME:-$HOME/.local/share}/cagent/one-click/`，
+并打印新终端所需的 `PATH`。
 
 原生工具可以直接访问宿主机文件和代理配置。凭证仍通过进程环境或临时
 0600 OSS 配置传递，临时文件使用后删除，不放入命令参数。
-每个 CA state 保留独立的证明策略与参考值目录。后台 TNG 的日志为 0600，
-PID、启动时刻与 boot ID 共同识别进程，并通过 pidfd 发送停止信号。
+每个 CA state 保留独立的证明策略与参考值目录。后台 TNG 的日志权限为
+0600，使用 PID、启动时刻和系统启动标识确认进程身份。Linux 通过
+pidfd 发送信号，macOS 使用 Darwin 进程信息确认身份后发送信号。
 
 安装和完整构建部署步骤见 [RPM 使用说明](rpm.md)。

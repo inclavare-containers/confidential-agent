@@ -189,6 +189,7 @@ pub(super) fn prepare(
     })
 }
 
+#[cfg(any(feature = "full", test))]
 pub(super) fn export(
     cli: &Cli,
     service: &str,
@@ -274,6 +275,7 @@ pub(super) fn export(
     Ok(())
 }
 
+#[cfg(any(feature = "full", test))]
 fn export_runtime_contract(
     manifest: &BuildManifest,
     built: &BuildManifestVariant,

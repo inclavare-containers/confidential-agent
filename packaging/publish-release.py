@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Upload a tested binary release, preserving already uploaded asset contents."""
+import argparse
 import json
 import os
 from pathlib import Path
@@ -16,7 +17,11 @@ def gh(*args):
 
 
 def main():
-    directory = Path(sys.argv[1]).resolve()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('directory', type=Path)
+    parser.add_argument('--reuse-image-from', help='published release tag providing the same tested guest image')
+    args = parser.parse_args()
+    directory = args.directory.resolve()
     manifest = json.loads((directory / 'release-manifest.json').read_text())
     tag = manifest['tag']
     repo = os.environ['GITHUB_REPOSITORY']
@@ -35,12 +40,23 @@ def main():
     assert release['draft'], 'Published releases are immutable in this workflow'
     existing = {a['name']: a for a in release['assets']}
     with tempfile.TemporaryDirectory() as tmp:
-        gh('release', 'download', tag, '--repo', repo, '--pattern', 'image-index.json',
+        image_tag = args.reuse_image_from or tag
+        if args.reuse_image_from:
+            assert re.fullmatch(r'v\d+\.\d+\.\d+', image_tag), 'Expected a versioned release tag'
+            published = gh('release', 'view', image_tag, '--repo', repo, '--json', 'isDraft', '--jq', '.isDraft')
+            assert published.strip() == 'false', 'Reuse requires a published guest image'
+        gh('release', 'download', image_tag, '--repo', repo, '--pattern', 'image-index.json',
            '--pattern', 'image-release.json', '--dir', tmp)
         resolver = Path(__file__).resolve().parents[1] / 'hack/fetch-release-image.py'
         index = json.loads(subprocess.check_output([
-            sys.executable, resolver, '--from-dir', tmp, '--output-dir', directory, '--version', manifest['version']]))
-        assert index['source_commit'] == commit, 'Image and RPMs were built from different commits'
+            sys.executable, resolver, '--from-dir', tmp, '--output-dir', directory, '--version', image_tag[1:]]))
+        if args.reuse_image_from:
+            path = directory / 'image-index.json'
+            published_index = json.loads(path.read_text())
+            published_index['version'] = manifest['version']
+            path.write_text(json.dumps(published_index, indent=2) + '\n')
+        else:
+            assert index['source_commit'] == commit, 'Image and RPMs were built from different commits'
         config = Path(tmp) / 'anonymous.json'
         config.write_text('{"auths":{}}')
         oci = json.loads(subprocess.check_output([

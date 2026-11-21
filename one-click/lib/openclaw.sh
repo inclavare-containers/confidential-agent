@@ -18,8 +18,11 @@ ensure_gateway_token() {
     fi
     return
   fi
-  require_cmd openssl
-  CA_GATEWAY_TOKEN="$(openssl rand "-${2:-hex}" 32)"
+  if [[ "${2:-hex}" == base64 ]]; then
+    CA_GATEWAY_TOKEN="$(head -c 32 /dev/urandom | base64)"
+  else
+    CA_GATEWAY_TOKEN="$(od -An -v -tx1 -N32 /dev/urandom | tr -d '[:space:]')"
+  fi
   printf '%s\n' "$CA_GATEWAY_TOKEN" >"$token_file"
   chmod 0600 "$token_file"
 }
@@ -119,7 +122,7 @@ append_vllm_inference_args() {
 prepare_vllm_inference_specs() {
   ensure_gateway_token
   if [[ -n "${CA_IMAGE_SPEC:-}" ]]; then
-    CA_SPEC_PATH="$(python3.11 - "$CA_IMAGE_SPEC" <<'PY'
+    CA_SPEC_PATH="$(one_click_python - "$CA_IMAGE_SPEC" <<'PY'
 import json
 from pathlib import Path
 import sys

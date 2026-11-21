@@ -11,8 +11,9 @@ docker run --rm -v "$release_dir:/release:ro" \
   cd /release
   sha256sum -c SHA256SUMS
   bash install-rpm.sh --from-dir /release
-  test "$(rpm -q --qf "%{VERSION}-%{RELEASE}" cagent)" = "0.3.1-1.al8"
-  confidential-agent --version | grep -Fx "confidential-agent 0.3.1"
+  expected="$(rpm -qp --qf "%{VERSION}-%{RELEASE}" /release/cagent-*.x86_64.rpm)"
+  test "$(rpm -q --qf "%{VERSION}-%{RELEASE}" cagent)" = "$expected"
+  confidential-agent --version | grep -Fx "confidential-agent ${expected%-*}"
   for binary in confidential-agent confidential-agentd cai-gateway cai-pep; do
     if ldd "/usr/bin/$binary" | grep -F "not found"; then exit 1; fi
   done

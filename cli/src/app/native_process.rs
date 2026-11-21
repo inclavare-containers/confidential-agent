@@ -1,5 +1,6 @@
 //! Detached tunnel ownership, including PID reuse and reboot protection.
 use super::*;
+#[cfg(target_os = "linux")]
 use std::os::fd::{FromRawFd, OwnedFd};
 use std::os::unix::{fs::OpenOptionsExt, process::CommandExt};
 
@@ -11,6 +12,7 @@ pub(super) struct ProcessIdentity {
 }
 
 impl ProcessIdentity {
+    #[cfg(target_os = "linux")]
     pub fn capture(pid: u32) -> Result<Self> {
         anyhow::ensure!(pid > 1, "invalid tunnel PID");
         let stat = fs::read_to_string(format!("/proc/{pid}/stat"))?;
@@ -35,10 +37,52 @@ impl ProcessIdentity {
         })
     }
 
+    #[cfg(target_os = "macos")]
+    pub fn capture(pid: u32) -> Result<Self> {
+        anyhow::ensure!(pid > 1, "invalid tunnel PID");
+        let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::uninit();
+        let size = std::mem::size_of::<libc::proc_bsdinfo>() as i32;
+        let result = unsafe {
+            libc::proc_pidinfo(
+                pid as libc::pid_t,
+                libc::PROC_PIDTBSDINFO,
+                0,
+                info.as_mut_ptr().cast(),
+                size,
+            )
+        };
+        anyhow::ensure!(result == size, "cannot read tunnel process information");
+        let info = unsafe { info.assume_init() };
+        anyhow::ensure!(info.pbi_status != libc::SZOMB, "tunnel process exited");
+        anyhow::ensure!(info.pbi_pgid == pid, "tunnel is not its own process group");
+
+        let mut boot = std::mem::MaybeUninit::<libc::timeval>::uninit();
+        let mut boot_size = std::mem::size_of::<libc::timeval>();
+        let result = unsafe {
+            libc::sysctlbyname(
+                b"kern.boottime\0".as_ptr().cast(),
+                boot.as_mut_ptr().cast(),
+                &mut boot_size,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if result != 0 {
+            return Err(std::io::Error::last_os_error()).context("cannot read system boot time");
+        }
+        let boot = unsafe { boot.assume_init() };
+        Ok(Self {
+            pid,
+            start_ticks: info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec,
+            boot_id: format!("{}:{}", boot.tv_sec, boot.tv_usec),
+        })
+    }
+
     pub fn running(&self) -> bool {
         Self::capture(self.pid).is_ok_and(|actual| actual == *self)
     }
 
+    #[cfg(target_os = "linux")]
     fn signal(&self, signal: i32) -> Result<()> {
         if !self.running() {
             return Ok(());
@@ -67,6 +111,17 @@ impl ProcessIdentity {
             )
         };
         if result < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() != Some(libc::ESRCH) {
+                return Err(error).context("cannot signal tunnel process");
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    fn signal(&self, signal: i32) -> Result<()> {
+        if self.running() && unsafe { libc::kill(self.pid as libc::pid_t, signal) } != 0 {
             let error = std::io::Error::last_os_error();
             if error.raw_os_error() != Some(libc::ESRCH) {
                 return Err(error).context("cannot signal tunnel process");

@@ -144,7 +144,8 @@ count_step cleanup 1
 
 : >"$CPU_CONTINUE_FIXTURE/reuse"
 printf 'none\n' >"$CPU_CONTINUE_FIXTURE/phase"
-run 27 deploy --harness codex --service-id reuse
+run 27 deploy --harness codex --service-id reuse --verify-disk
+grep -Fq 'using ECS image m-existing; --verify-disk checks local artifacts only, and no local disk was read' "$CPU_CONTINUE_FIXTURE/output"
 count_step download 5
 count_step publish 2
 printf 'CPU one-click checkpoints, task selection, guarded deploy resume, access, and cleanup passed\n'

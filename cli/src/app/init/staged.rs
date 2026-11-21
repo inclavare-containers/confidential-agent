@@ -3,6 +3,18 @@ use super::*;
 use serde_json::{json, Value};
 
 pub(super) fn resolve_plan_and_interactive(args: &mut InitArgs) -> Result<InitPlan> {
+    #[cfg(not(feature = "full"))]
+    {
+        anyhow::ensure!(
+            args.stage != Some(InitStage::Build),
+            "init --stage build requires the full edition"
+        );
+        anyhow::ensure!(
+            !args.target.is_some_and(InitTarget::is_gpu),
+            "GPU initialization requires the full edition"
+        );
+        args.stage = Some(InitStage::Deploy);
+    }
     if args.non_interactive {
         return match (args.target, args.stage) {
             (None, Some(InitStage::Build)) => Ok(InitPlan::SharedCpuBuild),
@@ -208,8 +220,11 @@ fn prompt_deploy_target() -> Result<InitTarget> {
     println!("  6) claude-code");
     println!("  7) qodercli");
     println!("  8) pi");
-    println!("  9) openclaw-vllm");
-    println!(" 10) vllm-inference");
+    #[cfg(feature = "full")]
+    {
+        println!("  9) openclaw-vllm");
+        println!(" 10) vllm-inference");
+    }
     loop {
         let value = prompt_default("Target", "1")?;
         match value.as_str() {
@@ -221,9 +236,11 @@ fn prompt_deploy_target() -> Result<InitTarget> {
             "6" | "claude-code" | "claudecode" => return Ok(InitTarget::Claudecode),
             "7" | "qodercli" => return Ok(InitTarget::Qodercli),
             "8" | "pi" => return Ok(InitTarget::Pi),
+            #[cfg(feature = "full")]
             "9" | "openclaw-vllm" => return Ok(InitTarget::OpenclawVllm),
+            #[cfg(feature = "full")]
             "10" | "vllm-inference" => return Ok(InitTarget::VllmInference),
-            _ => println!("Enter 1-10 or a target name."),
+            _ => println!("Enter a number or target name from the list."),
         }
     }
 }
@@ -399,6 +416,7 @@ pub(super) fn validate_args(args: &InitArgs, plan: InitPlan) -> Result<()> {
     Ok(())
 }
 
+#[cfg(any(feature = "full", test))]
 pub(super) fn pep_binary(args: &InitArgs) -> Result<PathBuf> {
     if args.stage == Some(InitStage::Deploy) {
         Ok("/usr/bin/cai-pep".into())
@@ -452,6 +470,7 @@ fn cpu_target_mode(args: &InitArgs, target: InitTarget) -> Result<(&'static str,
     Ok((mode, port))
 }
 
+#[cfg(any(feature = "full", test))]
 pub(super) fn write_shared_cpu_build(args: &InitArgs, project: &InitProject) -> Result<()> {
     let assets = find_assets_root()?;
     let base = assets.join("examples/allinone");
@@ -847,11 +866,13 @@ pub(super) fn read_pinned_release(args: &InitArgs) -> Result<PinnedRelease> {
     Ok(PinnedRelease { bytes, mode })
 }
 
+#[cfg(any(feature = "full", test))]
 pub(super) struct GpuRelease {
     pinned: PinnedRelease,
     ssh: bool,
 }
 
+#[cfg(any(feature = "full", test))]
 pub(super) fn read_gpu_release(args: &InitArgs) -> Result<GpuRelease> {
     let pinned = read_pinned_release(args)?;
     let mut release: Value = serde_json::from_slice(&pinned.bytes)?;
@@ -867,6 +888,7 @@ pub(super) fn read_gpu_release(args: &InitArgs) -> Result<GpuRelease> {
     Ok(GpuRelease { pinned, ssh })
 }
 
+#[cfg(any(feature = "full", test))]
 pub(super) fn finish_gpu(
     args: &InitArgs,
     project: &InitProject,
@@ -919,6 +941,7 @@ pub(super) fn finish_gpu(
     write_file(&project.spec_path, &serde_yaml::to_string(&spec)?, 0o644)
 }
 
+#[cfg(any(feature = "full", test))]
 fn add_management_ssh(project: &InitProject, spec: &mut Value) -> Result<()> {
     let source = find_assets_root()?.join("examples/allinone/files");
     let directory = project.dir.join("management-ssh");

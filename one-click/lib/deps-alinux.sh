@@ -81,21 +81,8 @@ needs_local_image_build() {
   esac
 }
 
-needs_host_node_runtime() {
-  case "${CA_MODE:-deploy-openclaw}" in
-    deploy-openclaw-vllm)
-      [[ "${CA_SKIP_HOST_OPENCLAW:-0}" != "1" && "${CA_SKIP_HOST_CLIENT:-0}" != "1" ]]
-      ;;
-    deploy-openclaw)
-      [[ -n "$(selected_host_client)" ]]
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
 install_os_dependencies() {
+  if [[ "${CA_DEPLOY_ONLY:-0}" == 1 ]]; then return; fi
   if [[ "${CA_SKIP_DEPS:-0}" == "1" ]]; then
     log "skipping OS dependency installation"
     return
@@ -131,12 +118,12 @@ install_os_dependencies() {
       pkgconf-pkg-config
     )
   fi
-  if [[ "${CA_MODE:-}" == deploy-openclaw && "$(selected_host_client)" == codex ]]; then
+  if [[ "$CA_HOST_CLIENT" == codex ]]; then
     common_packages+=(procps-ng)
   fi
   install_packages_best_effort "$pm" "${common_packages[@]}"
 
-  if needs_host_node_runtime; then
+  if [[ -n "$CA_HOST_CLIENT" ]]; then
     if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
       if ! install_packages_best_effort "$pm" nodejs npm; then
         warn "failed to install nodejs/npm; install them manually before installing the selected host client"
@@ -281,16 +268,72 @@ ensure_host_openclaw_runtime() {
   log "host OpenClaw CLI is ready: $(command -v openclaw) ($cli_version)"
 }
 
+install_user_node() (
+  set -euo pipefail
+  local parent="$1" archive="$2"
+  local base="${N_NODE_MIRROR:-https://nodejs.org/dist}/v$CA_NODE_VERSION"
+  local stage
+  mkdir -p "$parent"
+  stage="$(mktemp -d "$parent/.install.XXXXXX")"
+  trap 'rm -rf "$stage"' EXIT
+  cd "$stage"
+  curl -fsSL --retry 2 -o "$archive.tar.gz" "$base/$archive.tar.gz"
+  curl -fsSL --retry 2 -o SHASUMS256.txt "$base/SHASUMS256.txt"
+  awk -v file="$archive.tar.gz" '$2 == file {print}' SHASUMS256.txt > checksum
+  case "$(uname -s)" in
+    Darwin) shasum -a 256 -c checksum ;;
+    Linux) sha256sum -c checksum ;;
+  esac
+  tar -xzf "$archive.tar.gz"
+  mv "$archive" "$parent/" || [[ -x "$parent/$archive/bin/node" ]]
+)
+
+ensure_portable_host_client() {
+  local client="$1" package="$2" version="$3"
+  local root="${XDG_DATA_HOME:-$HOME/.local/share}/cagent/one-click"
+  local target archive node_path=""
+  case "$(uname -s)/$(uname -m)" in
+    Linux/x86_64) target=linux-x64 ;;
+    Darwin/arm64) target=darwin-arm64 ;;
+  esac
+  archive="node-v$CA_NODE_VERSION-$target"
+  node_path="$root/node/$archive/bin"
+  if [[ ! -x "$node_path/node" ]] && { ! host_node22_usable || ! command -v npm >/dev/null 2>&1; }; then
+    install_user_node "$root/node" "$archive"
+  fi
+  if [[ -x "$node_path/node" ]]; then
+    export PATH="$node_path:$PATH"
+  else
+    node_path=""
+  fi
+  export npm_config_prefix="$root/clients"
+  export PATH="$npm_config_prefix/bin:$PATH"
+  if [[ "$(npm_global_package_version "$package")" != "$version" ]]; then
+    npm install --global --registry "$CA_NPM_REGISTRY" --no-audit --no-fund "$package@$version"
+  fi
+  "$client" --version
+  printf '[one-click] Use %s in a new terminal with export PATH=%q:"$PATH"\n' \
+    "$client" "$npm_config_prefix/bin${node_path:+:$node_path}"
+}
+
 ensure_host_access_client() {
-  local client package version
-  client="$(selected_host_client)"
+  local client="$CA_HOST_CLIENT" package version
   case "$client" in
     '') return ;;
-    openclaw) ensure_host_openclaw_runtime; return ;;
+    openclaw) package=openclaw ;;
     codex) package=@openai/codex ;;
     opencode) package=opencode-ai ;;
   esac
-  version="$(ca_software_version "$client")"
+  if [[ "$client" == openclaw ]]; then
+    version="$CA_OPENCLAW_VERSION"
+  else
+    version="$(ca_software_version "$client")"
+  fi
+  if [[ "${CA_DEPLOY_ONLY:-0}" == 1 ]]; then
+    ensure_portable_host_client "$client" "$package" "$version"
+    return
+  fi
+  if [[ "$client" == openclaw ]]; then ensure_host_openclaw_runtime; return; fi
   if [[ "$(npm_global_package_version "$package")" == "$version" ]] && command -v "$client" >/dev/null; then return; fi
   ensure_host_node22
   npm install --global --registry "$CA_NPM_REGISTRY" --no-audit --no-fund "$package@$version"

@@ -60,6 +60,7 @@ impl Default for VllmBuildVariants {
 }
 
 impl VllmBuildVariants {
+    #[cfg(any(feature = "full", test))]
     fn deploy_variant(self) -> &'static str {
         if self.debug {
             "debug"
@@ -75,16 +76,25 @@ pub(super) fn cmd_init(cli: &Cli, args: &InitArgs) -> Result<()> {
     let args = &resolved_args;
 
     staged::validate_args(args, plan)?;
-    let (cpu_release, gpu_release) = match plan {
-        InitPlan::SharedCpuDeploy(_) => (Some(staged::read_pinned_release(args)?), None),
-        InitPlan::GpuStaged(_, InitStage::Deploy) => (None, Some(staged::read_gpu_release(args)?)),
-        _ => (None, None),
+    let cpu_release = if matches!(plan, InitPlan::SharedCpuDeploy(_)) {
+        Some(staged::read_pinned_release(args)?)
+    } else {
+        None
     };
-    let mut project = resolve_project(args, plan)?;
+    #[cfg(feature = "full")]
+    let gpu_release = if matches!(plan, InitPlan::GpuStaged(_, InitStage::Deploy)) {
+        Some(staged::read_gpu_release(args)?)
+    } else {
+        None
+    };
+    let project = resolve_project(args, plan)?;
+    #[cfg(feature = "full")]
+    let mut project = project;
     guard_output_dir(&project.dir, args.force)?;
     fs::create_dir_all(&project.dir)
         .with_context(|| format!("failed to create '{}'", project.dir.display()))?;
     set_mode(&project.dir, 0o755)?;
+    #[cfg(feature = "full")]
     if matches!(
         plan,
         InitPlan::SharedCpuBuild
@@ -96,15 +106,18 @@ pub(super) fn cmd_init(cli: &Cli, args: &InitArgs) -> Result<()> {
     }
 
     match plan {
+        #[cfg(feature = "full")]
         InitPlan::SharedCpuBuild => staged::write_shared_cpu_build(args, &project)?,
         InitPlan::SharedCpuDeploy(target) => {
             staged::write_shared_cpu_deploy(args, &project, target, cpu_release.as_ref().unwrap())?
         }
+        #[cfg(feature = "full")]
         InitPlan::GpuDirect(InitTarget::OpenclawVllm)
         | InitPlan::GpuStaged(InitTarget::OpenclawVllm, _) => {
             write_openclaw_vllm_project(cli, args, &project)?;
             staged::finish_gpu(args, &project, gpu_release.as_ref())?;
         }
+        #[cfg(feature = "full")]
         InitPlan::GpuDirect(InitTarget::VllmInference)
         | InitPlan::GpuStaged(InitTarget::VllmInference, _) => {
             write_vllm_inference_project(cli, args, &project)?;
@@ -120,6 +133,7 @@ pub(super) fn cmd_init(cli: &Cli, args: &InitArgs) -> Result<()> {
         )
     })?;
     match plan {
+        #[cfg(feature = "full")]
         InitPlan::GpuDirect(_) => write_next_steps(cli, &project)?,
         _ => staged::write_next_steps(cli, args, &project, spec.service.ssh)?,
     }
@@ -375,6 +389,7 @@ fn parse_vllm_build_variants(value: &str) -> Result<VllmBuildVariants> {
     Ok(variants)
 }
 
+#[cfg(any(feature = "full", test))]
 fn resolve_or_generate_cosign_key(
     cli: &Cli,
     args: &InitArgs,
@@ -457,6 +472,7 @@ fn read_stdin_line() -> Result<String> {
     Ok(value)
 }
 
+#[cfg(any(feature = "full", test))]
 fn write_vllm_inference_project(cli: &Cli, args: &InitArgs, project: &InitProject) -> Result<()> {
     let _ = cli;
     if args.stage != Some(InitStage::Deploy) {
@@ -505,6 +521,7 @@ fn write_vllm_inference_project(cli: &Cli, args: &InitArgs, project: &InitProjec
     Ok(())
 }
 
+#[cfg(any(feature = "full", test))]
 fn write_openclaw_vllm_project(_cli: &Cli, args: &InitArgs, project: &InitProject) -> Result<()> {
     if args.stage != Some(InitStage::Deploy) {
         let repo = find_assets_root()?;
@@ -555,6 +572,7 @@ fn write_openclaw_vllm_project(_cli: &Cli, args: &InitArgs, project: &InitProjec
     Ok(())
 }
 
+#[cfg(any(feature = "full", test))]
 fn write_install_script_with_exports(
     src: &Path,
     dst: &Path,
@@ -749,6 +767,7 @@ fn openclaw_json(
     }))
 }
 
+#[cfg(any(feature = "full", test))]
 fn openclaw_vllm_yaml(project: &InitProject, pep_bin: &Path) -> Result<String> {
     let files = openclaw_vllm_files_yaml(pep_bin)?;
     let variants = openclaw_vllm_variants_yaml(project.vllm_build_variants);
@@ -823,6 +842,7 @@ resources:
     ))
 }
 
+#[cfg(any(feature = "full", test))]
 fn openclaw_vllm_variants_yaml(variants: VllmBuildVariants) -> String {
     let mut out = format!("    release:\n      enabled: {}\n", variants.release);
     if variants.debug {
@@ -831,6 +851,7 @@ fn openclaw_vllm_variants_yaml(variants: VllmBuildVariants) -> String {
     out
 }
 
+#[cfg(any(feature = "full", test))]
 fn vllm_inference_yaml(project: &InitProject) -> Result<String> {
     let connect_line = format!("[{{port: {}, encryption: ohttp}}]", project.vllm_port);
     let multinode = if project.replicas > 1 {
@@ -911,6 +932,7 @@ resources:
     ))
 }
 
+#[cfg(any(feature = "full", test))]
 fn openclaw_vllm_files_yaml(pep_bin: &Path) -> Result<String> {
     let mut out = String::new();
     out.push_str("    - source: ./nvidia-persistenced.service\n      target: /usr/local/share/cai/nvidia-persistenced.service\n");
@@ -929,6 +951,7 @@ fn openclaw_vllm_files_yaml(pep_bin: &Path) -> Result<String> {
     Ok(out)
 }
 
+#[cfg(any(feature = "full", test))]
 fn rekor_block(project: &InitProject) -> Result<String> {
     if project.reference_values != InitReferenceValues::Rekor
         || matches!(project.plan, InitPlan::GpuStaged(_, InitStage::Deploy))
@@ -968,6 +991,7 @@ fn write_project_next_steps(cli: &Cli, project: &InitProject, body: &str) -> Res
     )
 }
 
+#[cfg(any(feature = "full", test))]
 fn write_next_steps(cli: &Cli, project: &InitProject) -> Result<()> {
     let connect = format!(
         "\n5. Start connect when the service is active:\n\n```bash\nconfidential-agent connect start --service {} --ready-json ./{}-connect-ready.json --wait-ready 180\n```\n",
@@ -1035,13 +1059,20 @@ fn find_assets_root() -> Result<PathBuf> {
             return Ok(base.to_path_buf());
         }
     }
-    let packaged = PathBuf::from("/usr/share/cagent");
-    if packaged.join("examples").is_dir() {
-        return Ok(packaged);
+    if let Some(prefix) = exe.parent().and_then(Path::parent) {
+        let packaged = prefix.join("share/cagent");
+        if packaged.join("examples").is_dir() {
+            return Ok(packaged);
+        }
     }
-    bail!("could not locate application templates; install the cagent RPM or run init from a source checkout")
+    let system = PathBuf::from("/usr/share/cagent");
+    if system.join("examples").is_dir() {
+        return Ok(system);
+    }
+    bail!("could not locate the cagent application templates in share/cagent or a source checkout")
 }
 
+#[cfg(any(feature = "full", test))]
 fn find_cai_pep_binary_for_init() -> Result<PathBuf> {
     if let Some(path) = std::env::var_os("CA_PEP_BIN").map(PathBuf::from) {
         return require_executable(path, "CA_PEP_BIN");
@@ -1068,6 +1099,7 @@ fn find_cai_pep_binary_for_init() -> Result<PathBuf> {
     bail!("cai-pep binary is required for this target; build it with `cargo build -p cai-pep` or set CA_PEP_BIN")
 }
 
+#[cfg(any(feature = "full", test))]
 fn require_executable(path: PathBuf, name: &str) -> Result<PathBuf> {
     if path.is_file() {
         Ok(path)
@@ -1079,6 +1111,7 @@ fn require_executable(path: PathBuf, name: &str) -> Result<PathBuf> {
     }
 }
 
+#[cfg(any(feature = "full", test))]
 fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
     if !src.is_dir() {
         bail!("source directory does not exist: {}", src.display());
@@ -1136,6 +1169,7 @@ fn random_base64(bytes_len: usize) -> String {
     BASE64_STANDARD.encode(bytes)
 }
 
+#[cfg(any(feature = "full", test))]
 fn yaml_quote(value: &str) -> Result<String> {
     if value.contains('\n') || value.contains('\r') {
         bail!("YAML scalar values must not contain newlines");
@@ -1143,6 +1177,7 @@ fn yaml_quote(value: &str) -> Result<String> {
     Ok(format!("'{}'", value.replace('\'', "''")))
 }
 
+#[cfg(any(feature = "full", test))]
 fn shell_single_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }

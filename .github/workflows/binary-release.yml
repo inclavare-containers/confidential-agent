@@ -16,6 +16,60 @@ concurrency:
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
+  mac-deploy-only:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Build the native deploy-only CLI and test tunnel ownership
+        run: |
+          cargo test --locked -p confidential-agent-cli --no-default-features --bin confidential-agent app::native_process::tests
+          cargo test --locked -p confidential-agent-cli --no-default-features --bin confidential-agent native_tool_timeout_stops_a_running_command
+          cargo build --locked --release -p confidential-agent-cli --no-default-features
+          target/release/confidential-agent --help
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: cagent-darwin-arm64
+          path: target/release/confidential-agent
+          if-no-files-found: error
+      - name: Run one-click with a user-installed Python on Apple Silicon
+        shell: /bin/bash {0}
+        env:
+          CA_GITHUB_PROXY_URL: ''
+        run: |
+          set -eu
+          export XDG_DATA_HOME="$RUNNER_TEMP/one-click data"
+          bin="$RUNNER_TEMP/without-python"
+          mkdir "$bin"
+          for cmd in uname curl shasum tar gzip mktemp mkdir mv rm; do
+            ln -s "$(command -v "$cmd")" "$bin/$cmd"
+          done
+          export PATH="$bin"
+          script=one-click/lib/python.sh
+          executable="$(/bin/bash "$script" -c 'import platform, ssl, sys; assert platform.machine() == "arm64"; print(sys.executable)')"
+          [[ "$executable" == "$XDG_DATA_HOME/"* ]]
+          CA_SKIP_DEPS=1 /bin/bash "$script" -c 'import sys; assert sys.executable == sys.argv[1]' "$executable"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: openanolis/trustee
+          ref: 0215708b020f6e668c37ffedb510603f38b87dfb # v1.10.2
+          path: trustee
+          persist-credentials: false
+      - name: Build the native challenge client with the Rust TDX verifier
+        working-directory: trustee
+        run: |
+          brew install protobuf
+          cargo build --locked --release -p attestation-service --bin attestation-challenge-client --no-default-features --features attestation-challenge-client,tdx-dcap-rust
+          ./target/release/attestation-challenge-client --help
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: challenge-darwin-arm64
+          path: trustee/target/release/attestation-challenge-client
+          if-no-files-found: error
+
   checks:
     if: github.repository == 'inclavare-containers/confidential-agent'
     runs-on: ubuntu-24.04
@@ -118,5 +172,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          version="${GITHUB_REF_NAME#v}"
+          for platform in linux-amd64 darwin-arm64; do
+            gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+              --pattern "cagent-deploy-$version-$platform.zip" --dir release-files
+          done
+          reuse_image_from="$(jq -r '.reuse_image_from // empty' hack/release-image.json)"
+          args=()
+          if [[ -n "$reuse_image_from" ]]; then args+=(--reuse-image-from "$reuse_image_from"); fi
           tar -xOzf release-files/cagent-*-build-inputs.tar.gz SOURCES/cagent-native-tools.tar.gz | tar -xz native-tools/oras
-          PATH="$PWD/native-tools:$PATH" python3 packaging/publish-release.py release-files
+          PATH="$PWD/native-tools:$PATH" python3 packaging/publish-release.py release-files "${args[@]}"

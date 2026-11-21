@@ -179,7 +179,16 @@ def copy_layout(reference, release, work, oras):
                 log(f'{error}; trying ghcr.1ms.run')
 
 
-def artifact_for(metadata, output, shelter, oras):
+def verify_artifact(shelter, artifact, manifest_digest, verify_disk):
+    command = [shelter, 'image', 'verify', artifact / 'artifact-manifest.json', '--format', 'json']
+    if not verify_disk:
+        command.extend(['--release-manifest', manifest_digest])
+    result = json.loads(subprocess.check_output(command))
+    if result['manifest_digest'] != manifest_digest:
+        raise ValueError('local artifact does not match the release manifest')
+
+
+def artifact_for(metadata, output, shelter, oras, verify_disk=False):
     reference = metadata['oci_reference']
     release = json.loads(subprocess.check_output([
         shelter, 'image', 'inspect-release', metadata['image_release'],
@@ -192,21 +201,16 @@ def artifact_for(metadata, output, shelter, oras):
     with (work / 'download.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         if artifact.is_dir():
-            result = json.loads(subprocess.check_output([
-                shelter, 'image', 'verify', artifact / 'artifact-manifest.json', '--format', 'json',
-            ]))
-            if result['manifest_digest'] != release['manifest_digest']:
-                raise ValueError('local artifact does not match the release manifest')
+            verify_artifact(shelter, artifact, release['manifest_digest'], verify_disk)
         else:
             copy_layout(reference, release, work, oras)
             with tempfile.TemporaryDirectory(dir=work) as staging:
-                result = json.loads(subprocess.check_output([
-                    shelter, '--work-dir', staging, 'image', 'pull', reference,
-                    '--format', 'json', '--oci-layout', layout, '--oras', oras,
-                ]))
-                if result['manifest_digest'] != release['manifest_digest']:
-                    raise ValueError('local artifact does not match the release manifest')
-                Path(result['record_path']).replace(artifact)
+                bundle = Path(staging) / 'artifact'
+                digest = reference.rsplit('@', 1)[1]
+                subprocess.run([oras, 'pull', '--oci-layout', f'{layout}@{digest}', '--output', bundle],
+                               check=True, stdout=sys.stderr)
+                verify_artifact(shelter, bundle, release['manifest_digest'], verify_disk)
+                bundle.replace(artifact)
         if layout.is_dir():
             shutil.rmtree(layout)
         return artifact
@@ -219,7 +223,11 @@ def main():
     parser.add_argument('--from-dir', type=Path, help='use a trusted local copy of the official release metadata')
     parser.add_argument('--region', default='cn-beijing', help='region in the printed publish command')
     parser.add_argument('--format', choices=('text', 'json'), default='text')
+    parser.add_argument('--verify-disk', action='store_true',
+                        help="also inspect disk structure and boot evidence using Shelter's Linux disk tools")
     args = parser.parse_args()
+    if args.verify_disk and sys.platform != 'linux':
+        parser.error('--verify-disk requires Linux disk tools')
     output = args.output_dir.resolve()
     resolver = [sys.executable, HERE / 'fetch-release-image.py', '--output-dir', output,
                 '--version', args.version]
@@ -227,7 +235,8 @@ def main():
         resolver.extend(['--from-dir', args.from_dir])
     try:
         metadata = json.loads(subprocess.check_output(resolver))
-        artifact = artifact_for(metadata, output, os.environ.get('CA_SHELTER_BIN', 'shelter'), TOOLS / 'oras')
+        artifact = artifact_for(metadata, output, os.environ.get('CA_SHELTER_BIN', 'shelter'), TOOLS / 'oras',
+                                args.verify_disk)
     except (OSError, ValueError, TransferError, subprocess.SubprocessError) as error:
         parser.exit(1, f'{error}\n')
     if args.format == 'json':
@@ -238,6 +247,7 @@ def main():
             'confidential-agent', 'image', 'publish', '--artifact', str(artifact),
             '--image-release', metadata['image_release'], '--release-digest', metadata['release_digest'],
             '--region', args.region,
+            *(['--verify-disk'] if args.verify_disk else []),
         ]))
 
 

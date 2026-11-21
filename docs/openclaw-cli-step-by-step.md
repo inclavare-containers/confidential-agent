@@ -4,10 +4,10 @@
 
 ## 1. 准备 CLI、原生工具与基础环境变量
 
-在 Alibaba Cloud Linux 3（`x86_64`）部署机上，推荐直接从 [v0.3.1 Release](https://github.com/inclavare-containers/confidential-agent/releases/tag/v0.3.1) 安装已校验的 `cagent` 与配套 `shelter` RPM（详见 [`docs/rpm.md`](rpm.md)）：
+在 Alibaba Cloud Linux 3（`x86_64`）部署机上，推荐直接从 [v0.4.0 Release](https://github.com/inclavare-containers/confidential-agent/releases/tag/v0.4.0) 安装已校验的 `cagent` 与配套 `shelter` RPM（详见 [`docs/rpm.md`](rpm.md)）：
 
 ```bash
-sudo bash install-rpm.sh --version 0.3.1
+sudo bash install-rpm.sh --version 0.4.0
 confidential-agent --version
 ```
 

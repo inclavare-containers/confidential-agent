@@ -30,7 +30,7 @@ save_cpu_task() {
   path="$(cpu_task_path "$CA_SERVICE_ID")"
   install -d -m 0700 "${path%/*}"
   tmp="$(mktemp "${path}.XXXXXX")"
-  for field in "${cpu_task_fields[@]}"; do
+  for field in "${cpu_task_fields[@]}" CA_HOST_CLIENT CA_VERIFY_DISK; do
     printf '%s\0' "${!field-}"
   done >"$tmp"
   mv -f -- "$tmp" "$path"
@@ -40,9 +40,14 @@ load_cpu_task() {
   local path field
   path="$(cpu_task_path "$1")"
   [[ -f "$path" ]] || die "no unfinished CPU task for service '$1'"
-  for field in "${cpu_task_fields[@]}"; do
-    IFS= read -r -d '' "$field" || die "could not read CPU task in $path"
-  done <"$path"
+  {
+    for field in "${cpu_task_fields[@]}"; do
+      IFS= read -r -d '' "$field" || die "could not read CPU task in $path"
+    done
+    # Older tasks did not record consent to install an application client.
+    IFS= read -r -d '' CA_HOST_CLIENT || CA_HOST_CLIENT=""
+    IFS= read -r -d '' CA_VERIFY_DISK || CA_VERIFY_DISK=0
+  } <"$path"
   CA_SERVICE_ID_OVERRIDE="$CA_SERVICE_ID"
   if [[ -n "$CA_CPU_ROOT" ]]; then ROOT_DIR="$CA_CPU_ROOT"; fi
   if [[ -n "$CA_SHELTER_BIN" ]]; then export CA_SHELTER_BIN; fi
@@ -82,7 +87,7 @@ reject_pending_cpu_task() {
   if [[ -f "$path" ]]; then
     load_cpu_task "$CA_SERVICE_ID"
     log "service '$CA_SERVICE_ID' has an unfinished task at $CA_CPU_NEXT"
-    entry="$ROOT_DIR/one-click/install.sh"
+    entry="${CA_DEPLOY_ENTRY:-$ROOT_DIR/one-click/install.sh}"
     if [[ -n "$CA_ONE_CLICK_ENTRY_URL" ]] && ! cpu_step_done bootstrap; then
       printf '  curl -fsSL %q | sh -s --' "$CA_ONE_CLICK_ENTRY_URL"
       if [[ "$CA_BOOTSTRAP_ACTION" == source ]]; then
