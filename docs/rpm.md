@@ -4,7 +4,7 @@
 
 ## 按部署机选择安装形态
 
-v0.3.0 已发布 AliLinux 3 全功能 RPM。下表是下一版多平台 Release 的安装规则，部署 ZIP 目前处于实验阶段。
+v0.4.0 在同一 Release 提供 AliLinux 3 全功能 RPM 和实验性的多平台部署 ZIP。
 
 | 部署机 | 公开 one-click 默认安装 | 该平台的安装选择 |
 | --- | --- | --- |
@@ -12,7 +12,7 @@ v0.3.0 已发布 AliLinux 3 全功能 RPM。下表是下一版多平台 Release 
 | 其他受支持的 Linux x86_64 发行版（Ubuntu、Debian，以及 Rocky Linux 9 等 RHEL 9 系列兼容发行版） | **仅部署版（`deploy-only`）** | 仅提供 Linux x86_64 部署 ZIP |
 | macOS（Apple Silicon，arm64） | **仅部署版（`deploy-only`）** | 仅提供 macOS arm64 部署 ZIP |
 
-`--image-source` 选择本次使用的镜像来源。AliLinux 3 如果已经装了全功能 RPM，直接运行 one-click 就能用它部署官方预构建镜像，无需另装 ZIP。新装 AliLinux 3 时，one-click 默认安装全功能 RPM。如果这台机器只负责部署，希望省去 mkosi、QEMU 等本地构建依赖，可以在首次安装时显式选择 `deploy-only`，也可以在新 Release 发布后直接下载部署 ZIP。部署 ZIP 首版支持官方 CPU/TDX 共享预构建镜像。`--image-source build` 需要 AliLinux 3 全功能版。
+`--image-source` 选择本次使用的镜像来源。AliLinux 3 如果已经装了全功能 RPM，直接运行 one-click 就能用它部署官方预构建镜像，无需另装 ZIP。新装 AliLinux 3 时，one-click 默认安装全功能 RPM。如果这台机器只负责部署，希望省去 mkosi、QEMU 等本地构建依赖，可以在首次安装时显式选择 `deploy-only`，也可以直接从 Release 下载部署 ZIP。部署 ZIP 首版支持官方 CPU/TDX 共享预构建镜像。`--image-source build` 需要 AliLinux 3 全功能版。
 
 部署 ZIP 提供原生 CLI、部署组件和模板。解压和直接运行 CLI 无需 Python。实验版 one-click 在运行镜像下载器或服务探针时，优先使用本机的 Python 3.11 及以上版本。缺少兼容解释器时，脚本下载固定版本的 Python，校验 SHA-256 后装到 `${XDG_DATA_HOME:-$HOME/.local/share}/cagent/one-click/python/`，后续运行可离线复用。这个步骤以当前用户身份运行，无需 sudo 或 Homebrew。`--skip-deps` 只使用已有解释器。手动单独运行现有预构建镜像下载脚本需要 Python 3.11 或更高版本。
 
@@ -39,15 +39,15 @@ ZIP 安装到 `${XDG_DATA_HOME:-$HOME/.local/share}/cagent/releases/` 下，
 
 ## 从 Release 安装
 
-从 [v0.3.1 GitHub Release](https://github.com/inclavare-containers/confidential-agent/releases/tag/v0.3.1) 下载并运行安装器：
+从 [v0.4.0 GitHub Release](https://github.com/inclavare-containers/confidential-agent/releases/tag/v0.4.0) 下载并运行安装器：
 
 ```bash
-curl -fsSLo install-rpm.sh https://github.com/inclavare-containers/confidential-agent/releases/download/v0.3.1/install-rpm.sh
-sudo --preserve-env=CA_GITHUB_PROXY_URL,CA_GITHUB_PROXY_FIRST bash install-rpm.sh --version 0.3.1
+curl -fsSLo install-rpm.sh https://github.com/inclavare-containers/confidential-agent/releases/download/v0.4.0/install-rpm.sh
+sudo --preserve-env=CA_GITHUB_PROXY_URL,CA_GITHUB_PROXY_FIRST bash install-rpm.sh --version 0.4.0
 confidential-agent --version
 ```
 
-安装器会下载并校验 `cagent-0.3.1-1.al8.x86_64.rpm` 与配套 `shelter-0.3.2-5.al8.x86_64.rpm` 的文件 SHA-256 和 RPM payload 摘要，再通过 DNF 一并安装，无需克隆源码或编译 Rust：
+安装器会下载并校验 `cagent-0.4.0-1.al8.x86_64.rpm` 与配套 `shelter-0.3.2-6.al8.x86_64.rpm` 的文件 SHA-256 和 RPM payload 摘要，再通过 DNF 一并安装，无需克隆源码或编译 Rust：
 
 - `--download-only --output-dir DIR`：仅下载并校验两个 RPM 及 `release-manifest.json`。
 - `--from-dir DIR`：从已下载目录校验并安装本地包（仍通过系统源解析常规 RPM 依赖）。
@@ -63,17 +63,17 @@ sudo dnf install -y rpm-build cargo rust gcc glibc-devel pkgconf-pkg-config pyth
 packaging/build-rpm.sh
 ```
 
-产物位于 `target/rpm/RPMS/x86_64/cagent-0.3.1-1.al8.x86_64.rpm`，SRPM 位于 `target/rpm/SRPMS/`。源码准备阶段缓存并校验固定版本的 `cosign`、`aliyun`、`ossutil64` 和 `oras`；`target/rpm/SOURCES/SHA256SUMS` 记录源码、Cargo vendor 和原生工具归档的哈希，rpmbuild 内使用 `--locked --offline` 编译与测试。
+产物位于 `target/rpm/RPMS/x86_64/cagent-0.4.0-1.al8.x86_64.rpm`，SRPM 位于 `target/rpm/SRPMS/`。源码准备阶段缓存并校验固定版本的 `cosign`、`aliyun`、`ossutil64` 和 `oras`；`target/rpm/SOURCES/SHA256SUMS` 记录源码、Cargo vendor 和原生工具归档的哈希，rpmbuild 内使用 `--locked --offline` 编译与测试。
 
-输出目录同时包含配套 Shelter RPM（`cagent` 依赖 `shelter >= 0.3.2-5`）、`shelter-rpm.json` 与 `SHA256SUMS`。`hack/shelter-rpm.json` 记录 GHCR 仓库、源码提交、RPM SHA-256 和 payload 摘要。缓存中缺少该 RPM 时，`hack/resolve-shelter-rpm.sh` 获取固定版本的 ORAS，按 RPM SHA-256 匿名下载，并校验包文件和 payload 后写入缓存。`CAGENT_BUILD_JOBS` 控制打包并行度（默认 `4`）。
+输出目录同时包含配套 Shelter RPM（`cagent` 依赖 `shelter >= 0.3.2-6`）、`shelter-rpm.json` 与 `SHA256SUMS`。`hack/shelter-rpm.json` 记录 GHCR 仓库、源码提交、RPM SHA-256 和 payload 摘要。缓存中缺少该 RPM 时，`hack/resolve-shelter-rpm.sh` 获取固定版本的 ORAS，按 RPM SHA-256 匿名下载，并校验包文件和 payload 后写入缓存。`CAGENT_BUILD_JOBS` 控制打包并行度（默认 `4`）。
 
 ## 在干净机器手动安装本地 RPM
 
 将 `cagent` 与配套 `shelter` RPM 放在同一目录后安装：
 
 ```bash
-grep -E '  (cagent-0\.3\.1-1\.al8\.x86_64|shelter-0\.3\.2-5\.al8\.x86_64)\.rpm$' SHA256SUMS | sha256sum -c -
-sudo dnf install -y ./shelter-0.3.2-5.al8.x86_64.rpm ./cagent-0.3.1-1.al8.x86_64.rpm
+grep -E '  (cagent-0\.4\.0-1\.al8\.x86_64|shelter-0\.3\.2-6\.al8\.x86_64)\.rpm$' SHA256SUMS | sha256sum -c -
+sudo dnf install -y ./shelter-0.3.2-6.al8.x86_64.rpm ./cagent-0.4.0-1.al8.x86_64.rpm
 confidential-agent version
 rpm -q cagent shelter attestation-challenge-client libtdx-verify trusted-network-gateway
 ```

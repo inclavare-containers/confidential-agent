@@ -28,7 +28,7 @@ BuildRequires:  glibc-devel
 BuildRequires:  python3.11
 BuildRequires:  /usr/bin/pkg-config
 
-Requires:       shelter >= 0.3.2-5
+Requires:       shelter >= 0.3.2-6
 Requires:       attestation-challenge-client
 Requires:       libtdx-verify
 Requires:       trusted-network-gateway = 2.9.2-1.al8
@@ -117,6 +117,9 @@ native-tools/oras version >/dev/null
 %{_datadir}/cagent/
 
 %changelog
+* Sat Nov 21 2026 Weidong Sun <sunweidong@linux.alibaba.com> - 0.4.0-1
+- Pair the full cagent RPM with Shelter 0.3.2-6 for verified image deployment.
+
 * Fri Nov 20 2026 Weidong Sun <sunweidong@linux.alibaba.com> - 0.3.1-1
 - Package all-in-one with a 30 GB base disk and compress final QCOW2 images using Shelter 0.3.2-5.
 - Use a 120 GiB default CPU one-click disk and ship slimmer application runtimes.

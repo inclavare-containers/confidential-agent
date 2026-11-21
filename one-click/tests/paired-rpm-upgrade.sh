@@ -16,7 +16,7 @@ required="$(awk '$1 == "Requires:" && $2 == "shelter" { print $2, $3, $4 }' "$re
 new_shelter_evr="${required##* }"
 new_shelter_version="${new_shelter_evr%-*}"
 new_shelter_release="${new_shelter_evr##*-}"
-old_ca_version=0.2.0
+old_ca_version=0.3.1
 old_ca_release=1
 
 make_package() {
@@ -41,11 +41,11 @@ SPEC
   mv "$work/build/RPMS/noarch/$name-$version-$release.noarch.rpm" "$work/packages/"
 }
 
-make_package shelter 0.3.2 2 ''
+make_package shelter 0.3.2 5 ''
 make_package shelter "$new_shelter_version" "$new_shelter_release" ''
-make_package cagent "$old_ca_version" "$old_ca_release" 'Requires: shelter >= 0.3.2-2'
+make_package cagent "$old_ca_version" "$old_ca_release" 'Requires: shelter >= 0.3.2-5'
 make_package cagent "$ca_version" "$ca_release" "Requires: $required"
-old_shelter="$work/packages/shelter-0.3.2-2.noarch.rpm"
+old_shelter="$work/packages/shelter-0.3.2-5.noarch.rpm"
 new_shelter="$work/packages/shelter-$new_shelter_evr.noarch.rpm"
 old_ca="$work/packages/cagent-$old_ca_version-$old_ca_release.noarch.rpm"
 new_ca="$work/packages/cagent-$ca_version-$ca_release.noarch.rpm"
