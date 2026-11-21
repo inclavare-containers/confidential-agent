@@ -1,8 +1,8 @@
 {
-  "file": "shelter-0.3.2-5.al8.x86_64.rpm",
-  "source_commit": "6217599d1274e88ce71448e74f19dc0d538d4126",
-  "source_archive_sha256": "37ae951cfdf3db00903e401f9e8519ac91662cd228c45dc30dad266299ff5982",
-  "sha256": "8b60083210a4a42262535250e3649bc4f7951627233042b1a5e62f86500bb0ca",
-  "payload_sha256": "4f50d0dae720569affb274f21dcd61ed3c0043a830696de5dad11196c999a7b3",
+  "file": "shelter-0.3.2-6.al8.x86_64.rpm",
+  "source_commit": "64255ca74442c6397e3cf6e5b7ba8ccab13d0154",
+  "source_archive_sha256": "1b83c5883d5b4dd3a88aed52d1694cb71d6dfba8e07fa6f1905c2d762a7889f6",
+  "sha256": "50b5206081cbd528daafbf1953cb08fa88084c72fe6c67165cd7075b10779061",
+  "payload_sha256": "f5a0f7fd714b81667783f9d20d2db2ed066a20be47d8004fdaab24778c3300d0",
   "oci_repository": "ghcr.io/inclavare-containers/confidential-agent/shelter-rpm"
 }

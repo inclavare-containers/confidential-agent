@@ -44,6 +44,7 @@ ensure_shelter_cleanup() {
   [[ -n "$CA_SHELTER_BIN" && -x "$CA_SHELTER_BIN" ]] ||
     die "Shelter is required for cleanup; install a compatible CLI or set CA_SHELTER_BIN"
   export CA_SHELTER_BIN
+  if [[ "${CA_DEPLOY_ONLY:-0}" == 1 ]]; then return; fi
   "$ROOT_DIR/hack/check-shelter.sh" "$CA_SHELTER_BIN" --cleanup ||
     die "Shelter lacks the managed removal/network commands required for cleanup"
   "$CA_SHELTER_BIN" --version >/dev/null
@@ -356,7 +357,7 @@ expected_connect_guest_port() {
 }
 
 probe_codex_websocket() {
-  python3.11 - "$CA_CONNECT_HOST" "$CA_CONNECT_PORT" "$CA_PROJECT_DIR/secrets/app-server-token" <<'PROBE'
+  one_click_python - "$CA_CONNECT_HOST" "$CA_CONNECT_PORT" "$CA_PROJECT_DIR/secrets/app-server-token" <<'PROBE'
 import base64, http.client, os, sys
 from pathlib import Path
 
@@ -517,7 +518,7 @@ run_install_only() {
 
 run_deploy_openclaw_vllm() {
   install_os_dependencies
-  ensure_host_openclaw_runtime
+  ensure_host_access_client
   ensure_shelter
   build_confidential_agent
   install_confidential_agent_cli

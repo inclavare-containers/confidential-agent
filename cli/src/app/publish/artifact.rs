@@ -22,6 +22,7 @@ pub(super) struct ArtifactManifest {
 }
 
 impl ArtifactManifest {
+    #[cfg(any(feature = "full", test))]
     pub(super) fn check_disk(&self, sha: &str, size: u64) -> Result<()> {
         let disk = self
             .outputs
@@ -101,6 +102,7 @@ fn directory(state: &Path, manifest: &str) -> Result<PathBuf> {
         .join(digest))
 }
 
+#[cfg(any(feature = "full", test))]
 pub(super) fn catalog_for_disk(state: &Path, disk: &Path) -> Result<Option<String>> {
     let manifest = disk.with_file_name("artifact-manifest.json");
     if !state.join("image-publications").is_dir() || !manifest.is_file() {
@@ -159,6 +161,7 @@ impl Location {
         Ok(())
     }
 
+    #[cfg(any(feature = "full", test))]
     pub(super) fn record_builder(&self, service: &str, key: &str) -> Result<()> {
         write_json_atomic(
             &self.path,
@@ -258,7 +261,7 @@ pub(in crate::app) fn resolve_artifact(
     )
 }
 
-fn verify_disk(cli: &Cli, base: &Path, release: &ReleaseIdentity) -> Result<PathBuf> {
+fn verify_disk(cli: &Cli, base: &Path, release: &ReleaseIdentity, deep: bool) -> Result<PathBuf> {
     let file = if base.is_dir() {
         base.join("artifact-manifest.json")
     } else {
@@ -269,16 +272,23 @@ fn verify_disk(cli: &Cli, base: &Path, release: &ReleaseIdentity) -> Result<Path
     struct Verification {
         manifest_digest: String,
     }
-    let checked: Verification = shelter_json(
-        cli,
-        &[
-            "image".into(),
-            "verify".into(),
-            file.as_os_str().into(),
-            "--format".into(),
-            "json".into(),
-        ],
-    )?;
+    let mut args = vec![
+        "image".into(),
+        "verify".into(),
+        file.as_os_str().into(),
+        "--format".into(),
+        "json".into(),
+    ];
+    if deep {
+        eprintln!("[ca] Verifying release integrity and inspecting the local disk structure");
+    } else {
+        eprintln!("[ca] Verifying prebuilt image files against the trusted release manifest");
+        args.extend([
+            "--release-manifest".into(),
+            release.manifest_digest.as_str().into(),
+        ]);
+    }
+    let checked: Verification = shelter_json(cli, &args)?;
     anyhow::ensure!(
         checked.manifest_digest == release.manifest_digest,
         "artifact does not match the release manifest"
@@ -311,6 +321,10 @@ pub(super) fn publish_artifact(
     args: &ImagePublishArgs,
     input: &Path,
 ) -> Result<PublishedImage> {
+    anyhow::ensure!(
+        !args.verify_disk || cfg!(target_os = "linux"),
+        "--verify-disk requires Linux disk tools"
+    );
     let release = release_identity(
         cli,
         args.image_release
@@ -320,7 +334,7 @@ pub(super) fn publish_artifact(
             .as_deref()
             .context("expected --release-digest")?,
     )?;
-    let disk_path = verify_disk(cli, input, &release)?;
+    let disk_path = verify_disk(cli, input, &release, args.verify_disk)?;
     let region = args.region.as_deref().context("expected --region")?;
     let location = Location::new(cli, region, &release.manifest_digest)?;
     let mut lock = location.lock()?;

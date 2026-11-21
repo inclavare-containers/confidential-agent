@@ -18,6 +18,10 @@ Bootstrap options:
   --source-dir PATH      Local source checkout directory
   --help                 Show this help
 
+Deployment options:
+  --install-host-client  Install the local OpenClaw CLI
+  --skip-host-client     Skip the local CLI installation and prompt
+
 All other options are handled by the OpenClaw vLLM one-click installer after checkout.
 EOF
 }

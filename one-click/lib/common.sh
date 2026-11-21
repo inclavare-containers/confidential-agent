@@ -71,8 +71,22 @@ write_secret_summary() {
   fi
 }
 
+one_click_python() {
+  CA_SKIP_DEPS="${CA_SKIP_DEPS:-0}" bash "${BASH_SOURCE[0]%/*}/python.sh" "$@"
+}
+
+workspace_absolute_path() {
+  if [[ "${CA_DEPLOY_ONLY:-0}" != 1 ]]; then
+    realpath -m -- "$1"
+  elif [[ "$1" == /* ]]; then
+    printf '%s\n' "$1"
+  else
+    printf '%s/%s\n' "$(pwd -P)" "$1"
+  fi
+}
+
 yaml_quote() {
-  python3.11 - "$1" <<'PY'
+  one_click_python - "$1" <<'PY'
 import sys
 value = sys.argv[1]
 if "\n" in value or "\r" in value:
@@ -82,7 +96,7 @@ PY
 }
 
 json_string() {
-  python3.11 - "$1" <<'PY'
+  one_click_python - "$1" <<'PY'
 import json
 import sys
 print(json.dumps(sys.argv[1]))

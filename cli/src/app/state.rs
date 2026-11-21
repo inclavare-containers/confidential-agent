@@ -522,6 +522,7 @@ pub(super) fn absolute_path_for_state(path: &Path) -> PathBuf {
 }
 
 /// Check the compiled plan, since older Shelter accepts unknown initrd keys.
+#[cfg(any(feature = "full", test))]
 pub(super) fn verify_shelter_initrd_support(cli: &Cli, config: &Path) -> Result<()> {
     let binary = effective_shelter_bin(cli);
     let output = shelter_command(
@@ -550,6 +551,7 @@ pub(super) fn verify_shelter_initrd_support(cli: &Cli, config: &Path) -> Result<
     verify_initrd_binaries_in_plan(&config, &plan)
 }
 
+#[cfg(any(feature = "full", test))]
 pub(super) fn verify_initrd_binaries_in_plan(
     config: &serde_yaml::Value,
     plan: &serde_json::Value,
@@ -617,6 +619,13 @@ pub(super) fn shelter_command(cli: &Cli, args: &[OsString]) -> Result<Command> {
 }
 
 pub(super) fn effective_shelter_bin(cli: &Cli) -> PathBuf {
+    #[cfg(not(feature = "full"))]
+    {
+        let bundled = cli.tools_dir.join("shelter");
+        if bundled.is_file() {
+            return effective_shelter_bin_from_candidates(cli, &[bundled]);
+        }
+    }
     effective_shelter_bin_from_candidates(
         cli,
         &[

@@ -16,12 +16,13 @@ spec.loader.exec_module(fetch)
 
 @unittest.skipUnless(shutil.which('rpm') and shutil.which('rpmbuild'), 'RPM tools required')
 class ReleaseDownloadTests(unittest.TestCase):
+    fixture_version = '0.3.1'
     @classmethod
     def setUpClass(cls):
         cls.temp = tempfile.TemporaryDirectory()
         cls.base = Path(cls.temp.name)
         cls.rpms = {}
-        for name, version, release in [('shelter','0.3.2','3.al8'),('cagent','0.3.1','1.al8')]:
+        for name, version, release in [('shelter','0.3.2','3.al8'),('cagent',cls.fixture_version,'1.al8')]:
             specfile = cls.base/(name+'.spec')
             specfile.write_text(f'''Name: {name}
 Version: {version}
@@ -114,12 +115,12 @@ printf fixture > %{{buildroot}}/usr/share/release-fixture/{name}
             version,release=subprocess.check_output(['rpm','-qp','--qf','%{VERSION}\n%{RELEASE}',str(path)],text=True).splitlines()
             packages.append({'name':name,'version':version,'release':release,'arch':'x86_64','file':path.name,
                              'sha256':fetch.digest(path),'payload_sha256':subprocess.check_output(['rpm','-qp','--qf','%{PAYLOADDIGEST}',str(path)],text=True)})
-        (source/'release-manifest.json').write_text(json.dumps({'schema':'confidential-agent/binary-release/v1','version':'0.3.1','tag':'v0.3.1','platform':'alinux3-x86_64','packages':packages}))
+        (source/'release-manifest.json').write_text(json.dumps({'schema':'confidential-agent/binary-release/v1','version':self.fixture_version,'tag':'v'+self.fixture_version,'platform':'alinux3-x86_64','packages':packages}))
         return source
 
     def test_offline_installer_verifies_pair_and_rejects_tampering(self):
         source=self.prepare_release()
-        cmd=['bash',str(ROOT/'packaging/install-rpm.sh'),'--from-dir',str(source),'--download-only','--output-dir',str(self.work/'download')]
+        cmd=['bash',str(ROOT/'packaging/install-rpm.sh'),'--version',self.fixture_version,'--from-dir',str(source),'--download-only','--output-dir',str(self.work/'download')]
         subprocess.run(cmd,capture_output=True,check=True)
         (source/self.rpms['shelter'].name).write_bytes(b'corrupted')
         result=subprocess.run(cmd,capture_output=True,text=True)
@@ -150,7 +151,7 @@ else:shutil.copy2(pathlib.Path(os.environ['FIXTURE_RELEASE'])/name,out)
                 log=self.work/('attempts-'+str(i));out=self.work/('download-'+str(i))
                 env=dict(os.environ,PATH=str(bindir)+os.pathsep+os.environ['PATH'],FIXTURE_RELEASE=str(source),
                          ATTEMPT_LOG=str(log),FAIL_MODE=mode,CA_GITHUB_PROXY_FIRST=first,CA_GITHUB_PROXY_URL=proxy)
-                cmd=['bash',str(ROOT/'packaging/install-rpm.sh'),'--download-only','--output-dir',str(out)]
+                cmd=['bash',str(ROOT/'packaging/install-rpm.sh'),'--version',self.fixture_version,'--download-only','--output-dir',str(out)]
                 result=subprocess.run(cmd,env=env,capture_output=True,text=True)
                 self.assertEqual(result.returncode,0,result.stderr)
                 attempts=log.read_text().splitlines()

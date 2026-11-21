@@ -93,23 +93,22 @@ harness_guest_port() {
   esac
 }
 
-selected_host_client() {
-  if [[ "${CA_SKIP_HOST_CLIENT:-0}" == "1" || "${CA_HARNESS_MODE:-cli}" == "cli" ]]; then
+resolve_host_client_install() {
+  local client
+  case "$CA_MODE:$CA_HARNESS:$CA_ACCESS_METHOD" in
+    deploy-openclaw:openclaw:web+tui|deploy-openclaw:openclaw:tui|deploy-openclaw-vllm:*) client=openclaw ;;
+    deploy-openclaw:codex:ws) client=codex ;;
+    deploy-openclaw:opencode:web+attach|deploy-openclaw:opencode:attach) client=opencode ;;
+    *) return 0 ;;
+  esac
+  if [[ "$CA_SKIP_HOST_CLIENT" == 1 || ( "$client" == openclaw && "$CA_SKIP_HOST_OPENCLAW" == 1 ) ]]; then
     return 0
   fi
-  case "${CA_HARNESS:-openclaw}:${CA_HARNESS_MODE:-gateway}:${CA_ACCESS_METHOD:-web+tui}" in
-    openclaw:gateway:web+tui|openclaw:gateway:tui)
-      if [[ "${CA_SKIP_HOST_OPENCLAW:-0}" != "1" ]]; then
-        printf 'openclaw\n'
-      fi
-      ;;
-    codex:app-server:*)
-      printf 'codex\n'
-      ;;
-    opencode:web:web+attach|opencode:web:attach)
-      printf 'opencode\n'
-      ;;
-  esac
+  if [[ "$CA_INSTALL_HOST_CLIENT" != 1 ]]; then
+    [[ "$CA_NON_INTERACTIVE" != 1 ]] || return 0
+    confirm "Install or update the local $client CLI (including Node.js/npm if needed)?" n || return 0
+  fi
+  CA_HOST_CLIENT="$client"
 }
 
 cpu_builder_id() {
@@ -141,7 +140,7 @@ resolve_cpu_release_metadata() {
   CA_DOWNLOAD_DIR="$CA_WORK_DIR/prebuilt/v$CA_RELEASE_VERSION"
   local args=(--output-dir "$CA_DOWNLOAD_DIR" --version "$CA_RELEASE_VERSION")
   if [[ -n "${CA_OFFICIAL_METADATA_DIR:-}" ]]; then args+=(--from-dir "$CA_OFFICIAL_METADATA_DIR"); fi
-  metadata="$("$ROOT_DIR/hack/resolve-release-image.sh" "${args[@]}")"
+  metadata="$(one_click_python "$ROOT_DIR/hack/fetch-release-image.py" "${args[@]}")"
   CA_IMAGE_RELEASE="$(jq -er .image_release <<<"$metadata")"
   CA_RELEASE_DIGEST="${CA_RELEASE_DIGEST:-$(jq -er .release_digest <<<"$metadata")}"
 }
@@ -155,8 +154,9 @@ find_cpu_publication() {
 
 download_cpu_image() {
   local downloaded
-  downloaded="$(CA_TOOLS_DIR="$CA_TOOLS_DIR" python3.11 "$ROOT_DIR/hack/download-release-image.py" --output-dir "$CA_DOWNLOAD_DIR" \
-    --version "$CA_RELEASE_VERSION" --from-dir "${CA_IMAGE_RELEASE%/*}" --region "$CA_REGION" --format json)"
+  local args=(--output-dir "$CA_DOWNLOAD_DIR" --version "$CA_RELEASE_VERSION" --from-dir "${CA_IMAGE_RELEASE%/*}" --region "$CA_REGION" --format json)
+  if [[ "$CA_VERIFY_DISK" == 1 ]]; then args+=(--verify-disk); fi
+  downloaded="$(CA_TOOLS_DIR="$CA_TOOLS_DIR" one_click_python "$ROOT_DIR/hack/download-release-image.py" "${args[@]}")"
   CA_ARTIFACT="$(jq -er .artifact <<<"$downloaded")"
 }
 
@@ -165,8 +165,10 @@ publish_cpu_image() {
   if [[ "$CA_IMAGE_SOURCE" == build ]]; then
     ca_cmd image publish "$(cpu_builder_id)" --region "$CA_REGION" --output "$receipt"
   else
-    ca_cmd image publish --artifact "$CA_ARTIFACT" --image-release "$CA_IMAGE_RELEASE" \
-      --release-digest "$CA_RELEASE_DIGEST" --region "$CA_REGION" --output "$receipt"
+    local args=(--artifact "$CA_ARTIFACT" --image-release "$CA_IMAGE_RELEASE"
+                --release-digest "$CA_RELEASE_DIGEST" --region "$CA_REGION" --output "$receipt")
+    if [[ "$CA_VERIFY_DISK" == 1 ]]; then args+=(--verify-disk); fi
+    ca_cmd image publish "${args[@]}"
   fi
   CA_IMAGE_ID="$(jq -er .image_id "$receipt")"
 }
@@ -183,7 +185,12 @@ resolve_cpu_image() {
   fi
   if [[ "$CA_SKIP_DEPLOY" == 1 ]]; then return; fi
   cpu_step image-lookup find_cpu_publication
-  if [[ -n "$CA_IMAGE_ID" ]]; then return; fi
+  if [[ -n "$CA_IMAGE_ID" ]]; then
+    if [[ "$CA_VERIFY_DISK" == 1 ]]; then
+      log "using ECS image $CA_IMAGE_ID; --verify-disk checks local artifacts only, and no local disk was read"
+    fi
+    return
+  fi
   if [[ "$CA_IMAGE_SOURCE" == prebuilt && -z "$CA_ARTIFACT" && -n "${CA_DOWNLOAD_DIR:-}" ]]; then
     cpu_step download download_cpu_image
   fi

@@ -4890,29 +4890,6 @@ fn proxied_challenge_envs_allow_proxy_for_guest() {
 }
 
 #[test]
-fn challenge_inject_args_are_wrapped_with_timeout() {
-    let args = challenge_inject_tool_args(
-        vec![
-            OsString::from("inject-resource"),
-            OsString::from("--api-url"),
-            OsString::from("http://39.105.64.44:8006"),
-        ],
-        90,
-    );
-
-    assert_eq!(
-        args,
-        vec![
-            OsString::from("90s"),
-            OsString::from("attestation-challenge-client"),
-            OsString::from("inject-resource"),
-            OsString::from("--api-url"),
-            OsString::from("http://39.105.64.44:8006"),
-        ]
-    );
-}
-
-#[test]
 fn local_port_allocator_skips_occupied_ports() {
     assert_eq!(allocate_local_port(18789, |_| false).unwrap(), 18789);
     assert_eq!(

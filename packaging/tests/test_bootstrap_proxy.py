@@ -85,7 +85,7 @@ else:
                     for name_inherited in ('REPO', 'REF', 'BRANCH', 'SOURCE_DIR'):
                         env.pop(f'CA_ONE_CLICK_{name_inherited}', None)
                     result = subprocess.run(
-                        ['sh', '-s', '--', 'deploy'], input=(ROOT / 'one-click' / name).read_text(),
+                        ['sh', '-s', '--', 'deploy', '--ref', 'master'], input=(ROOT / 'one-click' / name).read_text(),
                         text=True, capture_output=True, cwd=directory, env=env,
                     )
                     self.assertEqual(result.returncode, 0, result.stderr)

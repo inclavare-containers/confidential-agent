@@ -81,11 +81,13 @@ flowchart TB
 
 ## 快速开始 (Quick Start)
 
-只安装宿主机控制面与原生工具时，推荐从 [v0.3.1 Release](https://github.com/inclavare-containers/confidential-agent/releases/tag/v0.3.1) 下载 `install-rpm.sh`，运行 `sudo bash install-rpm.sh --version 0.3.1`。它会校验并安装 `cagent` 与配套 `shelter` RPM（支持 Alibaba Cloud Linux 3 `x86_64`），无需编译 Rust 源码；本地 `confidential-agent` CLI 从不在宿主机自动安装任何应用客户端，详见 [RPM 安装与预构建镜像流程](docs/rpm.md) 和 [宿主机依赖](docs/host-dependencies.md)。
+**Alibaba Cloud Linux 3（AliLinux 3，x86_64）默认安装全功能版 `full`**，即使使用官方预构建镜像也安装 cagent 和 Shelter RPM。从 v0.4.0 Release 下载 `install-rpm.sh`，执行 `sudo bash install-rpm.sh --version 0.4.0`。[v0.4.0 Release](https://github.com/inclavare-containers/confidential-agent/releases/tag/v0.4.0)
+
+**v0.4.0 Release** 同时提供仅部署版 `deploy-only` ZIP。AliLinux 3 用户显式选择仅部署时使用 Linux ZIP。其他受支持的 Linux x86_64 发行版和 Apple Silicon Mac 只提供各自平台的部署 ZIP。本地构建镜像请使用 AliLinux 3 全功能版。[安装形态与平台范围](docs/rpm.md#按部署机选择安装形态)
 
 ### 一键部署（One-Click）
 
-`one-click/install.sh deploy` 默认采用 **CPU OpenClaw 官方预构建共享镜像**并开启 Web / TUI 接入。传入 `--image-source build` 可本地构建镜像。脚本按选定的 `--harness` 和 `--access` 安装所需的本地客户端。
+`one-click/install.sh deploy` 默认采用 **CPU OpenClaw 官方预构建共享镜像**并开启 Web / TUI 接入。传入 `--image-source build` 可本地构建镜像。选择需要本地应用客户端的接入方式后，脚本会询问是否安装，默认跳过。自动化部署可用 `--install-host-client` 同意安装，或用 `--skip-host-client` 跳过询问。
 
 - **原生网络服务（经 TNG `connect` 隧道接入）**：OpenClaw Gateway（`web+tui` / `web` / `tui`）、Hermes HTTP API（`http`）、Codex 带鉴权 WebSocket CLI（`ws`）、OpenCode Web/attach（`web+attach` / `web` / `attach`）、DSH 带鉴权 Web（`web`）。
 - **认证管理 SSH 接入**：Claude Code（`claude-code`）、Qoder（`qodercli`）、Pi（`pi`）通过远程证明下发的实例级密钥执行 `confidential-agent ssh <id> --tty -- cai-agent`（上述原生网络服务也可通过 `--access ssh` 切换为 SSH CLI）。

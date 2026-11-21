@@ -3,7 +3,7 @@ set -eu
 
 DEFAULT_REPO="https://github.com/inclavare-containers/confidential-agent.git"
 DEFAULT_BRANCH="master"
-RELEASE_VERSION="0.3.1"
+RELEASE_VERSION="0.4.0"
 PACKAGED_DIR="/usr/share/cagent/one-click"
 
 usage() {
@@ -18,15 +18,19 @@ Bootstrap options:
   --ref REF              Git branch, tag, or commit for source workflows
   --commit SHA           Alias for --ref; SHA must be the full 40 hex chars
   --source-dir PATH      Local source checkout directory
+  --edition EDITION      full or deploy-only (AliLinux 3 defaults to full)
   --help                 Show this help
 
 Deployment options:
+  --install-host-client  Install the local application CLI for the selected access method
+  --skip-host-client     Skip the local application CLI installation and prompt
   --harness NAME         openclaw (default), hermes, codex, claude-code, qodercli, opencode, pi, dsh
   --api-base-url URL     Inference API base URL; defaults to Bailian
   --api-key KEY          Inference API key (or CA_API_KEY); --bailian-api-key is an alias
   --model MODEL          Model id; --bailian-model is an alias
   --image-source MODE    prebuilt (default) or build
   --artifact PATH        Local Shelter artifact
+  --verify-disk          Also inspect the local prebuilt disk using Linux disk tools
   --image-release PATH   Local image-release.json with --release-digest
   --release-digest HASH  Trusted SHA-256 digest of --image-release
   --image-id ID          Existing regional ECS image ID
@@ -61,6 +65,64 @@ run_main() {
     fi
     bash "$main_script"
     exit $?
+}
+
+deploy_zip_platform() {
+    case "$(uname -s)/$(uname -m)" in
+        Linux/x86_64) printf '%s\n' linux-amd64 ;;
+        Darwin/arm64) printf '%s\n' darwin-arm64 ;;
+        *) echo 'Deploy-only ZIPs support x86_64 Linux and Apple Silicon macOS.' >&2; return 1 ;;
+    esac
+}
+
+full_rpm_platform() (
+    [ "$(uname -s)/$(uname -m)" = Linux/x86_64 ] || exit 1
+    . /etc/os-release
+    [ "$ID" = alinux ] && [ "${VERSION_ID%%.*}" = 3 ]
+)
+
+fetch_release_asset() {
+    asset_url="$1"
+    destination="$2"
+    proxy_url="$(github_proxy_repo_url "$asset_url" || true)"
+    if [ -n "$proxy_url" ] && github_proxy_first; then
+        first_url="$proxy_url"
+        second_url="$asset_url"
+    else
+        first_url="$asset_url"
+        second_url="$proxy_url"
+    fi
+    curl -fsSL --retry 2 --connect-timeout 20 -o "$destination" "$first_url" ||
+        { [ -n "$second_url" ] && curl -fsSL --retry 2 --connect-timeout 20 -o "$destination" "$second_url"; }
+}
+
+install_deploy_zip() {
+    platform="$(deploy_zip_platform)"
+    download_base="${XDG_DATA_HOME:-$HOME/.local/share}/cagent/releases"
+    bundle="cagent-deploy-$RELEASE_VERSION-$platform"
+    entry="$download_base/$bundle/one-click.sh"
+    if [ ! -x "$entry" ]; then
+        mkdir -p "$download_base"
+        frontend_dir="$(mktemp -d "$download_base/.download.XXXXXX")"
+        release_url="https://github.com/inclavare-containers/confidential-agent/releases/download/v$RELEASE_VERSION"
+        fetch_release_asset "$release_url/SHA256SUMS" "$frontend_dir/SHA256SUMS"
+        fetch_release_asset "$release_url/$bundle.zip" "$frontend_dir/$bundle.zip"
+        (
+            cd "$frontend_dir"
+            awk -v name="$bundle.zip" '$2 == name {print}' SHA256SUMS > bundle.sha256
+            case "$platform" in
+                darwin-arm64) shasum -a 256 -c bundle.sha256 ;;
+                linux-amd64) sha256sum -c bundle.sha256 ;;
+            esac
+            unzip -q "$bundle.zip"
+            mv "$bundle" "$download_base/" || [ -x "$entry" ]
+        )
+    fi
+    bash -c '
+        args=()
+        while IFS= read -r -d "" arg; do args+=("$arg"); done < "$1"
+        exec bash "$2" ${args[@]+"${args[@]}"}
+    ' bash "$pass_args_file" "$entry"
 }
 
 install_release() {
@@ -219,6 +281,7 @@ main() {
     ref="${CA_ONE_CLICK_REF:-${CA_ONE_CLICK_BRANCH:-$DEFAULT_BRANCH}}"
     commit_ref=0
     source_dir="${CA_ONE_CLICK_SOURCE_DIR:-}"
+    edition=""
     frontend_dir=""
     pass_args_file="$(mktemp "${TMPDIR:-/tmp}/ca-one-click-args.XXXXXX")"
     trap 'rm -f "$pass_args_file"; if [ -n "$frontend_dir" ]; then rm -rf -- "$frontend_dir"; fi' EXIT
@@ -262,6 +325,15 @@ main() {
                 source_dir="$2"
                 shift 2
                 ;;
+            --edition)
+                [ "$#" -ge 2 ] || { echo "missing value for --edition" >&2; exit 2; }
+                edition="$2"
+                case "$edition" in
+                    deploy-only|full) ;;
+                    *) echo 'Use --edition full or --edition deploy-only.' >&2; exit 2 ;;
+                esac
+                shift 2
+                ;;
             --help|-h)
                 usage
                 exit 0
@@ -282,7 +354,7 @@ main() {
     fi
 
     if [ -z "$explicit_ref" ] && [ -z "$source_dir" ]; then
-        if [ -f "$0" ]; then
+        if [ -f "$0" ] && [ "$edition" != deploy-only ]; then
             script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)
             if [ -f "$script_dir/../Cargo.toml" ] && [ -f "$script_dir/lib/main.sh" ]; then
                 run_main "$script_dir/lib/main.sh"
@@ -292,6 +364,12 @@ main() {
                 run_main "$PACKAGED_DIR/lib/main.sh"
             fi
         fi
+
+        if [ "$edition" = deploy-only ] || { [ -z "$edition" ] && ! full_rpm_platform; }; then
+            install_deploy_zip
+            return
+        fi
+        full_rpm_platform || { echo 'The full RPM supports AliLinux 3 x86_64. Use deploy-only on this host.' >&2; exit 2; }
 
         export CA_PACKAGED_INSTALL=1 CA_RELEASE_VERSION="$RELEASE_VERSION"
         export CA_BOOTSTRAP_ROOT="${PACKAGED_DIR%/one-click}" CA_BOOTSTRAP_ACTION=release

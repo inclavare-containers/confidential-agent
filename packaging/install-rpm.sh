@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Install only the checksum-verified RPM pair recorded by a binary release.
 set -euo pipefail
-version=0.3.1
+version=0.4.0
 source_dir=""
 download_only=0
 destination=""
@@ -12,7 +12,7 @@ while (($#)); do
     --download-only) download_only=1; shift ;;
     --output-dir) destination="${2:?missing directory}"; shift 2 ;;
     --help|-h)
-      printf '%s\n' 'Usage: bash install-rpm.sh [--version 0.3.1] [--from-dir DIR] [--download-only --output-dir DIR]'
+      printf '%s\n' 'Usage: bash install-rpm.sh [--version VERSION] [--from-dir DIR] [--download-only --output-dir DIR]'
       exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac

@@ -36,10 +36,12 @@ Common options:
   --state-dir PATH               Confidential Agent state directory
   --work-dir PATH                One-click generated files/log directory
   --tools-dir PATH               Native tools directory
-  --skip-deps                    Do not install OS packages
+  --skip-deps                    Skip OS package and one-click Python installation
   --skip-rustup                  Do not install Rust with rustup (default)
   --allow-rustup                 Allow rustup fallback if OS cargo/rust is unavailable
   --skip-cargo-build             Reuse existing target/release binaries
+  --install-host-client          Install the local OpenClaw CLI and its prerequisites
+  --skip-host-client             Skip the local CLI installation and prompt
   --skip-host-openclaw           Do not install Node.js/OpenClaw CLI on the deploy host
   --help                         Show this help
 
@@ -93,7 +95,7 @@ Common options:
   --state-dir PATH               Confidential Agent state directory
   --work-dir PATH                One-click generated files/log directory
   --tools-dir PATH               Native tools directory
-  --skip-deps                    Do not install OS packages
+  --skip-deps                    Skip OS package and one-click Python installation
   --skip-rustup                  Do not install Rust with rustup (default)
   --allow-rustup                 Allow rustup fallback if OS cargo/rust is unavailable
   --skip-cargo-build             Reuse existing target/release binaries
@@ -148,11 +150,12 @@ Common options:
   --state-dir PATH               Confidential Agent state directory
   --work-dir PATH                One-click generated files/log directory
   --tools-dir PATH               Native tools directory
-  --skip-deps                    Do not install OS packages
+  --skip-deps                    Skip OS package and one-click Python installation
   --skip-rustup                  Do not install Rust with rustup (default)
   --allow-rustup                 Allow rustup fallback if OS cargo/rust is unavailable
   --skip-cargo-build             Reuse existing target/release binaries
-  --skip-host-client             Do not install hosted CLI clients (OpenClaw/Codex/OpenCode)
+  --install-host-client          Install the client for the selected access method
+  --skip-host-client             Skip the local CLI installation and prompt
   --skip-host-openclaw           Do not install Node.js/OpenClaw CLI on the deploy host
   --disable-pep                  Do not install or enable the OpenClaw cai-pep policy service
   --help                         Show this help
@@ -160,6 +163,7 @@ Common options:
 CPU shared image options:
   --image-source MODE            prebuilt (default) or build
   --artifact PATH                Local Shelter artifact directory or manifest
+  --verify-disk                  Also inspect the local prebuilt disk using Linux disk tools
   --image-release PATH           Explicit local image-release.json (requires --release-digest)
   --release-digest sha256:HEX    Trusted SHA-256 digest of --image-release
   --image-id ID                  Existing regional cloud ECS image ID (skips pull and publish)
@@ -232,6 +236,8 @@ init_defaults() {
   CA_SKIP_DEPLOY="${CA_SKIP_DEPLOY:-0}"
   CA_SKIP_HOST_OPENCLAW="${CA_SKIP_HOST_OPENCLAW:-0}"
   CA_SKIP_HOST_CLIENT="${CA_SKIP_HOST_CLIENT:-0}"
+  CA_INSTALL_HOST_CLIENT="${CA_INSTALL_HOST_CLIENT:-0}"
+  CA_HOST_CLIENT=""
   CA_ENABLE_DINGTALK="${CA_ENABLE_DINGTALK:-0}"
   CA_DISABLE_PEP="${CA_DISABLE_PEP:-0}"
   CA_START_CONNECT="${CA_START_CONNECT:-1}"
@@ -250,6 +256,7 @@ init_defaults() {
   CA_API_BASE_URL="${CA_API_BASE_URL:-}"
   CA_IMAGE_SOURCE="${CA_IMAGE_SOURCE:-}"
   CA_ARTIFACT="${CA_ARTIFACT:-}"
+  CA_VERIFY_DISK="${CA_VERIFY_DISK:-0}"
   CA_IMAGE_ID="${CA_IMAGE_ID:-}"
   CA_IMAGE_RELEASE="${CA_IMAGE_RELEASE:-}"
   CA_RELEASE_DIGEST="${CA_RELEASE_DIGEST:-}"
@@ -316,6 +323,7 @@ parse_args() {
       --skip-rustup) CA_SKIP_RUSTUP=1; shift ;;
       --allow-rustup) CA_SKIP_RUSTUP=0; shift ;;
       --skip-cargo-build) CA_SKIP_CARGO_BUILD=1; shift ;;
+      --install-host-client) CA_INSTALL_HOST_CLIENT=1; shift ;;
       --skip-host-client) CA_SKIP_HOST_CLIENT=1; shift ;;
       --skip-host-openclaw) CA_SKIP_HOST_OPENCLAW=1; shift ;;
       --disable-pep) CA_DISABLE_PEP=1; shift ;;
@@ -341,6 +349,7 @@ parse_args() {
       --model|--bailian-model) CA_MODEL="${2:?missing model}"; shift 2 ;;
       --image-source) CA_IMAGE_SOURCE="${2:?missing value for --image-source}"; shift 2 ;;
       --artifact) CA_ARTIFACT="${2:?missing value for --artifact}"; shift 2 ;;
+      --verify-disk) CA_VERIFY_DISK=1; shift ;;
       --image-id) CA_IMAGE_ID="${2:?missing value for --image-id}"; shift 2 ;;
       --image-release) CA_IMAGE_RELEASE="${2:?missing value for --image-release}"; shift 2 ;;
       --release-digest) CA_RELEASE_DIGEST="${2:?missing value for --release-digest}"; shift 2 ;;
@@ -508,6 +517,8 @@ validate_options() {
       *) die "--image-source must be prebuilt or build" ;;
     esac
     if [[ "$CA_IMAGE_SOURCE" == "build" ]]; then
+      [[ "${CA_DEPLOY_ONLY:-0}" != 1 ]] || die "--image-source build requires the full edition"
+      [[ "$CA_VERIFY_DISK" != 1 ]] || die "--verify-disk applies to prebuilt artifacts"
       if [[ -n "$CA_ARTIFACT" || -n "$CA_IMAGE_RELEASE" || -n "$CA_RELEASE_DIGEST" || -n "$CA_IMAGE_ID" ]]; then
         die "--image-source build cannot be combined with --artifact, --image-release, --release-digest, or --image-id"
       fi
@@ -524,6 +535,7 @@ validate_options() {
       die "CLI harnesses require --replicas 1; use separate service instances"
     fi
   elif [[ "$CA_MODE" == "deploy-openclaw-vllm" || "$CA_MODE" == "deploy-vllm-inference" ]]; then
+    [[ "$CA_VERIFY_DISK" != 1 ]] || die "--verify-disk applies to the CPU prebuilt image"
     if [[ "$CA_IMAGE_SOURCE" != prebuilt || -n "$CA_ARTIFACT" || -n "$CA_IMAGE_RELEASE" || -n "$CA_RELEASE_DIGEST" || -n "$CA_IMAGE_ID" || -n "$CA_ACCESS_METHOD" ]]; then
       die "CPU shared-image options (--image-source/--artifact/--image-release/--release-digest/--image-id/--access) apply to one-click/install.sh only"
     fi
@@ -587,10 +599,10 @@ validate_openclaw_vllm_build_variants() {
 }
 
 normalize_workspace_paths() {
-  CA_STATE_DIR="$(realpath -m -- "$CA_STATE_DIR")"
+  CA_STATE_DIR="$(workspace_absolute_path "$CA_STATE_DIR")"
   if [[ "$CA_WORK_DIR_EXPLICIT" != "1" ]]; then CA_WORK_DIR="$CA_STATE_DIR/one-click"; fi
-  CA_WORK_DIR="$(realpath -m -- "$CA_WORK_DIR")"
-  CA_TOOLS_DIR="$(realpath -m -- "$CA_TOOLS_DIR")"
+  CA_WORK_DIR="$(workspace_absolute_path "$CA_WORK_DIR")"
+  CA_TOOLS_DIR="$(workspace_absolute_path "$CA_TOOLS_DIR")"
   export PATH="$CA_TOOLS_DIR:$PATH"
   if [[ "$CA_PACKAGED_INSTALL" == "1" ]]; then
     export CA_SHELTER_RPM_CACHE="${CA_SHELTER_RPM_CACHE:-$CA_STATE_DIR/cache/shelter}"
@@ -598,12 +610,17 @@ normalize_workspace_paths() {
   fi
   local variable
   for variable in CA_IMAGE_SPEC CA_MODEL_KEY_FILE CA_COSIGN_KEY CA_IMAGE_RELEASE CA_READY_JSON; do
-    if [[ -n "${!variable:-}" ]]; then printf -v "$variable" '%s' "$(realpath -m -- "${!variable}")"; fi
+    if [[ -n "${!variable:-}" ]]; then printf -v "$variable" '%s' "$(workspace_absolute_path "${!variable}")"; fi
   done
-  if [[ -e "$CA_ARTIFACT" ]]; then CA_ARTIFACT="$(realpath -m -- "$CA_ARTIFACT")"; fi
+  if [[ -e "$CA_ARTIFACT" ]]; then CA_ARTIFACT="$(workspace_absolute_path "$CA_ARTIFACT")"; fi
 }
 
 print_startup_config() {
+  if [[ "${CA_DEPLOY_ONLY:-0}" == 1 ]]; then
+    log "deploy-only edition ($CA_BIN)"
+  else
+    log "full edition"
+  fi
   log "mode: $CA_MODE"
   log "service: $CA_SERVICE_ID"
   log "source: $ROOT_DIR"
@@ -667,19 +684,20 @@ main() {
   else
     if [[ "$CA_MODE" == deploy-openclaw && -n "$CA_SERVICE_ID_OVERRIDE" ]]; then
       [[ "$CA_SERVICE_ID_OVERRIDE" =~ ^[A-Za-z0-9_-]+$ ]] || die "invalid service ID: $CA_SERVICE_ID_OVERRIDE"
-      CA_STATE_DIR="$(realpath -m -- "$CA_STATE_DIR")"
+      CA_STATE_DIR="$(workspace_absolute_path "$CA_STATE_DIR")"
       CA_SERVICE_ID="$CA_SERVICE_ID_OVERRIDE" reject_pending_cpu_task
     fi
     resolve_harness_options
   fi
   normalize_workspace_paths
   apply_target_defaults
-  if [[ "${CA_CPU_RESUMING:-0}" != 1 ]]; then validate_options; fi
+  if [[ "${CA_CPU_RESUMING:-0}" != 1 ]]; then
+    validate_options
+    if [[ "$CA_MODE" == deploy-openclaw ]]; then reject_pending_cpu_task; fi
+    resolve_host_client_install
+  fi
   case "$CA_MODE" in
-    deploy-openclaw)
-      if [[ "${CA_CPU_RESUMING:-0}" != 1 ]]; then reject_pending_cpu_task; fi
-      collect_cpu_inputs
-      ;;
+    deploy-openclaw) collect_cpu_inputs ;;
     deploy-openclaw-vllm|deploy-vllm-inference) collect_gpu_inputs ;;
     cleanup-openclaw-vllm|cleanup-vllm-inference) collect_aliyun_credentials ;;
   esac

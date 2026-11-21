@@ -18,7 +18,7 @@ fetch_frontend_file() {
 }
 
 for path in common/software-versions.sh software-versions.json \
-    one-click/lib/common.sh one-click/lib/deps-alinux.sh one-click/lib/credentials.sh \
+    one-click/lib/common.sh one-click/lib/python.sh one-click/lib/deps-alinux.sh one-click/lib/credentials.sh \
     one-click/lib/openclaw.sh one-click/lib/harness.sh one-click/lib/deploy.sh \
     one-click/lib/cpu-state.sh one-click/lib/main.sh; do
     mkdir -p "$stage/$(dirname "$path")"

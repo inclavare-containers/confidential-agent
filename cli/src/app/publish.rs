@@ -10,6 +10,7 @@ const STATUS_IMPORTING: &str = "importing";
 const STATUS_AVAILABLE: &str = "available";
 const STATUS_FAILED: &str = "failed";
 
+#[cfg(any(feature = "full", test))]
 fn publish_key(region: &str, variant: &str, build_id: &str, source_sha256: &str) -> String {
     format!(
         "{PROVIDER_ALIYUN}/{region}/{variant}/{build_id}/{}",
@@ -1068,12 +1069,15 @@ fn publish_disk(
     Ok(entry)
 }
 
+#[cfg(any(feature = "full", test))]
 pub(super) enum Receipt {
     Builder { service: String, key: String },
     Imported(artifact::Location, StateDirLock),
 }
 
+#[cfg(any(feature = "full", test))]
 impl Receipt {
+    #[cfg(any(feature = "full", test))]
     pub(super) fn mark_exported(self, cli: &Cli, mut entry: PublishedImage) -> Result<()> {
         entry.exported = true;
         match self {
@@ -1099,6 +1103,7 @@ impl Receipt {
     }
 }
 
+#[cfg(any(feature = "full", test))]
 pub(super) fn build_publication(
     cli: &Cli,
     state: &LocalServiceState,
@@ -1191,6 +1196,7 @@ pub(super) fn build_publication(
     Ok(None)
 }
 
+#[cfg(any(feature = "full", test))]
 pub(super) fn published_image_for_deploy(
     cli: &Cli,
     state: &LocalServiceState,
@@ -1214,6 +1220,9 @@ pub(super) fn cmd_image_publish(cli: &Cli, args: &ImagePublishArgs) -> Result<()
     let published = if let Some(input) = &args.artifact {
         artifact::publish_artifact(cli, args, input)?
     } else {
+        #[cfg(not(feature = "full"))]
+        bail!("deploy-only publishing requires --artifact and a trusted release digest");
+        #[cfg(feature = "full")]
         publish_build(
             cli,
             args,
@@ -1233,6 +1242,7 @@ pub(super) fn cmd_image_publish(cli: &Cli, args: &ImagePublishArgs) -> Result<()
     Ok(())
 }
 
+#[cfg(any(feature = "full", test))]
 fn publish_build(cli: &Cli, args: &ImagePublishArgs, service: &str) -> Result<PublishedImage> {
     let _operation = lock_service_operation(&cli.state_dir, service)?;
     let paths = context_paths(&cli.state_dir, service);
