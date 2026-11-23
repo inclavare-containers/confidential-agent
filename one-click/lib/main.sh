@@ -173,7 +173,7 @@ Deploy options:
   --region REGION                Default: cn-beijing
   --zone-id ZONE                 Default: cn-beijing-i
   --instance-type TYPE           Default: ecs.g9i.xlarge
-  --disk-gb GB                   Default: 200
+  --disk-gb GB                   Default: 120 (minimum 120)
   --replicas N                   Default: 1
   --allowed-cidr CIDR[,CIDR...]  Operator access CIDR list; may be repeated
   --harness NAME                 openclaw (default), hermes, codex, claude-code, qodercli, opencode, pi, dsh

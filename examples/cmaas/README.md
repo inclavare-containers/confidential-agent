@@ -64,9 +64,10 @@ CLI 入口用于 operator 本地验证；虚拟 MCP tools 用于 mesh agent work
 ## 运行 E2E
 
 ```bash
-env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy -u ALL_PROXY -u all_proxy \
-  tools/e2e/run.sh cmaas
+tools/e2e/run.sh cmaas
 ```
+
+（如果当前 shell 设置了 HTTP 代理，而代理无法访问阿里云 OpenAPI 和软件源，请先 `unset` 相关代理变量再运行。）
 
 e2e 会执行以下验收：
 

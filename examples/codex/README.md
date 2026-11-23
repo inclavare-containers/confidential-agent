@@ -15,7 +15,7 @@ Run commands from the repository root. You need:
 - `confidential-agent` CLI available on `PATH`
 - Alibaba Cloud credentials exported in your shell
 - `DASHSCOPE_API_KEY` exported in your shell
-- `cargo`, `openssl`, and SSH tooling available locally
+- `openssl` and SSH tooling available locally
 - a local `codex` CLI only when you want to use interactive remote mode
 
 Optional overrides:
@@ -27,11 +27,11 @@ export DASHSCOPE_BASE_URL="${DASHSCOPE_BASE_URL:-https://dashscope.aliyuncs.com/
 
 ## Prepare Resources
 
-Build the local helper binary referenced by the AppSpec and create the Rekor
-signing key:
+The AppSpec copies the RPM-installed `/usr/bin/cai-pep` into the image. From a
+source checkout, install your `cai-pep` build at that path or edit
+`build.files` in `codex.yaml`. Create the Rekor signing key:
 
 ```bash
-cargo build -p cai-pep
 confidential-agent key generate-cosign --output-key-prefix examples/codex/cosign
 ```
 
@@ -81,8 +81,15 @@ each command.
 
 ## SSH Operation
 
-Connect using the debug SSH command from deploy/status. In the guest, start
-Codex:
+The example deploys a `release` image, which has no SSH access; use
+[Remote Operation](#remote-operation) instead. For troubleshooting only, set
+`build.variants.debug.enabled: true` and `deploy.image_variant: debug` in
+`codex.yaml`, rebuild and redeploy, then connect with the debug SSH command
+printed by deploy/status. For production SSH access, use the shared image
+(`confidential-agent init codex --harness-mode cli ...`), which delivers
+per-instance management SSH keys through remote attestation.
+
+In a debug guest, start Codex:
 
 ```bash
 cd /workspace
@@ -92,7 +99,9 @@ set +a
 codex
 ```
 
-For a non-interactive smoke test:
+For a non-interactive smoke test. These flags skip Codex approvals and its
+sandbox inside the guest; use them only for disposable smoke tests, not for
+normal operation:
 
 ```bash
 codex --ask-for-approval never exec \

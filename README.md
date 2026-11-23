@@ -1,272 +1,111 @@
 # Confidential Agent
 
-Confidential Agent 是一套面向"AI Agent + 机密计算"的端到端工程化工具链。它把一份声明式的 `AppSpec`（YAML），编译成一台运行在机密虚拟机里的、**全盘加密 + 远程证明 + 受策略约束** 的 Agent 实例，并在主机侧通过 **TNG (Trusted Network Gateway) RATS-TLS** 接入它。
+Confidential Agent（CA）把 AI Agent 放进阿里云 Intel TDX 机密虚拟机运行。镜像可度量，启动可证明，机密在远程证明通过后才下发。
 
-适合的人：
-- 想把一个 Agent（OpenClaw、Hermes、自研 LangChain/MCP Server …）一键放进 TEE 跑起来的开发者。
-- 需要把模型推理、对话上下文、密钥放进 **云厂商和运维都看不到** 的执行域里的安全敏感场景。
-- 要求镜像可度量、启动可证明、密钥按需注入的合规交付方。
+- **对使用者**：一条命令把 OpenClaw、Hermes、Codex、Claude Code 等 Agent 部署到 TDX 实例。对话、记忆、API Key 和模型权重都留在 TEE 内，云平台和运维人员看不到明文。
+- **对开发者**：用一份声明式 YAML（AppSpec）描述自己的 Agent，CA 负责构建加密镜像、创建云资源、远程证明、注入机密和建立可信隧道。
 
----
+> 第一次接触这些术语？先读 [核心概念与术语](docs/concepts.md)，五分钟即可读完。
 
-## 目录
-
-- [Confidential Agent](#confidential-agent)
-  - [目录](#目录)
-  - [核心特性](#核心特性)
-  - [整体架构](#整体架构)
-    - [三层信任链](#三层信任链)
-  - [快速开始 (Quick Start)](#快速开始-quick-start)
-  - [常用扩展场景](#常用扩展场景)
-  - [仓库结构](#仓库结构)
-  - [深入文档](#深入文档)
-
----
-
-## 核心特性
+## 它能保护什么
 
 | 能力 | 说明 |
 |---|---|
-| 🔐 **TDX 全盘加密** | Guest 可写层使用远程证明后取得的磁盘密钥加密；密钥只落 Guest tmpfs，每次启动都重新取得，不写入镜像或持久盘。 |
-| 📜 **声明式 AppSpec** | 一份 `confidential-agent/v1` YAML 描述服务、镜像、部署、证明、密钥、资源 6 个维度，CLI 自动驱动构建/部署/销毁。 |
-| 🛰 **远程证明模式** | `sample` 模式（开发自验）与 `rekor` 模式（基于 Sigstore Rekor + cosign 的供应链透明日志）。生产推荐 `rekor + required=true`。 |
-| 🗝 **Challenge / Trustee** | 同一度量镜像支持临时 challenge 注入或独立、持久的 Trustee KBS；Trustee URL 只在部署时注入，重启不要求本地 CLI 在线。 |
-| 🌐 **TNG RATS-TLS Mesh** | 多个 Confidential Agent 实例之间、以及主机 `connect` 子命令到 Guest 的连接，全部走带远程证明的 RATS-TLS（attest + TLS）。 |
-| 🛡 **运行时策略 PEP** | 内置 `cai-pep`（Policy Enforcement Point），把 Agent 的 `exec` 工具调用强制隔离到只读、无网、限资源的 Docker sandbox，并按 path/command 模式拒绝。 |
-| ☁️ **云资源全自动化** | 通过 [Shelter](https://github.com/inclavare-containers/shelter) + Terraform 自动完成 OSS 上传、自定义镜像、ECS 实例、安全组规则、镜像挂载等阿里云资源编排。 |
+| 全盘加密 | 根文件系统只读并受 dm-verity 保护。可写层加密，密钥每次启动都经远程证明重新取得，不写入镜像或持久盘。 |
+| 远程证明 | 校验 TDX 硬件证据和 UKI 度量值，参考值可发布到 Sigstore Rekor 透明日志，供第三方审计。 |
+| 机密按需下发 | 磁盘口令、模型 API Key、应用配置只在证明通过后注入。支持临时注入（challenge）和独立密钥服务（Trustee）两种模式。 |
+| 可信访问通道 | 部署机到实例、实例到实例的连接都经 TNG 完成远程证明后再加密传输。 |
+| 工具调用沙箱 | `cai-pep` 把 OpenClaw 的 `exec` 工具调用放进无网络、只读的容器，并拒绝高危命令。 |
+| 云资源自动化 | 自动创建和清理 ECS、VPC、安全组、OSS 中转对象和自定义镜像。 |
 
----
+## 选择你的路径
 
-## 整体架构
-
-### 三层信任链
-
-```mermaid
-flowchart TB
-    subgraph L1["1. 镜像可度量"]
-        S1["AppSpec (YAML)"] --> SH["Shelter build<br/>UKI + dm-verity"]
-        SH --> IMG["disk image (.qcow2)"]
-        SH --> RV["reference values<br/>(sample + rekor)"]
-        RV --> RK["Rekor + cosign 上链"]
-    end
-
-    subgraph L2["2. 启动可证明"]
-        TDX["TDX MRTD/UEFI event log"]
-        QUOTE["TDX quote"]
-        TDX --> QUOTE
-    end
-
-    subgraph L3["3. 资源按需注入"]
-        BS["bootstrap config"] --> CDH["confidential-data-hub"]
-        DK["disk_passphrase"] --> CDH
-        APP["app config / secrets"] --> CDH
-        MESH["mesh bundle"] --> CDH
-    end
-
-    L1 -- "policy 校验度量值" --> L2
-    L2 -- "challenge / Trustee KBS" --> L3
-```
-
-每一层都对应仓库中的具体组件：
-
-| 层 | 组件 | 代码入口 |
-|---|---|---|
-| 镜像构建 | `shelter` crate 渲染 Shelter YAML，由外部 `shelter` 二进制产出 UKI 镜像和 reference value | [`shelter/src/lib.rs`](shelter/src/lib.rs) |
-| Host 控制面 | `confidential-agent` CLI，负责 build / deploy / inject / mesh / connect / status / destroy | [`cli/src/app/commands.rs`](cli/src/app/commands.rs) |
-| Guest 控制面 | `confidential-agentd`，运行在 initrd 与 rootfs 两个阶段，负责拉密钥、写资源、配置 TNG | [`daemon/src/app.rs`](daemon/src/app.rs) |
-| Guest 数据面 | TNG 做 RATS-TLS 网关；Trustiflux 做证明协议 | `examples/openclaw/install-openclaw.sh`, [`shelter/src/lib.rs`](shelter/src/lib.rs) |
-| Agent 沙箱 | `cai-pep` 把 Agent 的 `exec` 工具下到 read-only/no-net Docker sandbox，并对外暴露 `attest` 子命令 | [`cai-pep/src/main.rs`](cai-pep/src/main.rs) |
-
----
-
-## 快速开始 (Quick Start)
-
-**Alibaba Cloud Linux 3（AliLinux 3，x86_64）默认安装全功能版 `full`**，即使使用官方预构建镜像也安装 cagent 和 Shelter RPM。从 v0.4.0 Release 下载 `install-rpm.sh`，执行 `sudo bash install-rpm.sh --version 0.4.0`。[v0.4.0 Release](https://github.com/inclavare-containers/confidential-agent/releases/tag/v0.4.0)
-
-**v0.4.0 Release** 同时提供仅部署版 `deploy-only` ZIP。AliLinux 3 用户显式选择仅部署时使用 Linux ZIP。其他受支持的 Linux x86_64 发行版和 Apple Silicon Mac 只提供各自平台的部署 ZIP。本地构建镜像请使用 AliLinux 3 全功能版。[安装形态与平台范围](docs/rpm.md#按部署机选择安装形态)
-
-### 一键部署（One-Click）
-
-`one-click/install.sh deploy` 默认采用 **CPU OpenClaw 官方预构建共享镜像**并开启 Web / TUI 接入。传入 `--image-source build` 可本地构建镜像。选择需要本地应用客户端的接入方式后，脚本会询问是否安装，默认跳过。自动化部署可用 `--install-host-client` 同意安装，或用 `--skip-host-client` 跳过询问。
-
-- **原生网络服务（经 TNG `connect` 隧道接入）**：OpenClaw Gateway（`web+tui` / `web` / `tui`）、Hermes HTTP API（`http`）、Codex 带鉴权 WebSocket CLI（`ws`）、OpenCode Web/attach（`web+attach` / `web` / `attach`）、DSH 带鉴权 Web（`web`）。
-- **认证管理 SSH 接入**：Claude Code（`claude-code`）、Qoder（`qodercli`）、Pi（`pi`）通过远程证明下发的实例级密钥执行 `confidential-agent ssh <id> --tty -- cai-agent`（上述原生网络服务也可通过 `--access ssh` 切换为 SSH CLI）。
-
-默认值面向 Alibaba Cloud Linux 3 部署机：
-
-| 参数 | 默认值 |
+| 我想… | 从这里开始 |
 |---|---|
-| Image Source | `prebuilt`（官方预构建共享镜像；可选 `build` 本地构建） |
-| Harness / Access | `openclaw` / `web+tui` |
-| Model | `qwen4-max`（未显式指定模型时的正常默认值） |
-| Region / Zone | `cn-beijing` / `cn-beijing-i` |
-| Instance Type / Disk | `ecs.g9i.xlarge` / `200G` |
-| Attestation | `rekor` |
-| State Dir | `$HOME/.confidential-agent` |
+| 最快体验：部署一个机密 OpenClaw（或其他 Agent） | 下方 [快速开始](#快速开始) → [一键部署指南](docs/guides/one-click.md) |
+| 在 GPU TEE 上用本地 vLLM 跑 OpenClaw | [OpenClaw 最佳实践](docs/guides/openclaw-best-practice/README.md) |
+| 部署加密模型的安全推理服务 | [安全大模型推理](docs/guides/secure-llm-inference.md) |
+| 逐步掌控每个环节（不用一键脚本） | [手动部署](docs/guides/manual-deployment.md) |
+| 把自己的 Agent 打包进 TEE | [打包自定义 Agent](docs/guides/custom-agent.md) + [AppSpec 参考](docs/reference/appspec.md) |
+| 理解内部原理、参与开发 | [架构设计](docs/design/architecture.md) + [开发者指南](docs/development/README.md) |
 
-百炼 API 非交互部署最佳实践示例（显式使用 `--bailian-model qwen3.7-max` 覆盖默认模型 `qwen4-max`）：
+完整文档导航见 [docs/README.md](docs/README.md)。
+
+## 快速开始
+
+下面在一台 **Alibaba Cloud Linux 3（x86_64）** 部署机上，用官方预构建镜像部署一个机密 OpenClaw，模型使用阿里云百炼。其他平台见 [安装](docs/install.md)。
+
+**前提**：阿里云 AccessKey（具备 ECS、VPC、OSS、自定义镜像权限），以及百炼 DashScope API Key。
 
 ```bash
 export ALICLOUD_ACCESS_KEY="<your-ak>"
 export ALICLOUD_SECRET_KEY="<your-sk>"
 export DASHSCOPE_API_KEY="<your-bailian-key>"
 
-set -euo pipefail
+# 下载一键脚本：先直连 GitHub，失败时再经第三方代理 gh-proxy.org（注意事项见 docs/install.md 第 7 节）
 INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/one-click/one-click/install.sh"
 INSTALL_SCRIPT="$(mktemp)"
-curl -fL --connect-timeout 10 --max-time 90 \
-  "https://github.jobcher.com/gh/${INSTALL_URL}" -o "$INSTALL_SCRIPT" || \
-curl -fL --connect-timeout 10 --max-time 90 \
-  "$INSTALL_URL" -o "$INSTALL_SCRIPT"
-sh "$INSTALL_SCRIPT" deploy \
-  --non-interactive \
-  --yes \
-  --region cn-beijing \
-  --zone-id cn-beijing-i \
-  --instance-type ecs.g9i.xlarge \
-  --disk-gb 200 \
-  --bailian-model qwen3.7-max
-```
+curl -fL --connect-timeout 10 --max-time 90 "$INSTALL_URL" -o "$INSTALL_SCRIPT" ||
+  curl -fL --connect-timeout 10 --max-time 90 "https://gh-proxy.org/${INSTALL_URL}" -o "$INSTALL_SCRIPT"
 
-官方 GitHub Release 提供不可变 OCI 引用和 `image-release.json` 的可信 SHA-256 摘要。下载脚本先直连 `ghcr.io`，传输失败后切换到 `ghcr.1ms.run`。one-click 会优先复用当前账号和地域的同一云镜像。运行时使用 TDX 和 Rekor 参考值完成远程证明。
-
-交互式部署会先收集镜像来源、harness、接入方式、模型、凭据和 operator 访问 CIDR，然后开始安装和部署。
-
-```bash
+# 交互式部署：依次询问镜像来源、Agent 类型、接入方式、模型和凭据，回车使用默认值
 sh "$INSTALL_SCRIPT"
 ```
 
-部署中断后，用相同入口执行 `sh "$INSTALL_SCRIPT" continue`。多个待续跑任务时加 `--service-id`，使用自定义状态目录时加原来的 `--state-dir`。脚本跳过已完成的阶段，并在开头补问剩余步骤所需的凭据。首次下载的完整产物留在工作目录，部署摘要会显示路径。
-
-在百炼/CPU OpenClaw 场景下，传入实例级 `--disable-pep` 可关闭该实例的 `exec` 工具策略沙箱控制，同时完整保留 TDX 远程证明与 `cai-pep attest` 能力。CIDR 默认限制为部署机公网出口 `/32`（仅支持 IPv4），非交互可通过 `--allowed-cidr` 传入自定义 CIDR，脚本仍会自动探测部署机出口写入 `deployer` peering；请勿在无保护场景随意暴露 `0.0.0.0/0`。更多双场景细节见 [OpenClaw one-click 最佳实践](docs/openclaw-one-click-best-practice/README.md)。
-
-只安装宿主机控制面组件时，运行：
-
-```bash
-sh "$INSTALL_SCRIPT" install-only
-```
-
-本地 vLLM / GPU TEE 一键部署示例（另有独立安全推理脚本 [`one-click/install-vllm-inference.sh`](docs/secure-llm-inference-one-click.md)）：
-
-```bash
-export ALICLOUD_ACCESS_KEY="<your-ak>"
-export ALICLOUD_SECRET_KEY="<your-sk>"
-
-set -euo pipefail
-INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install-openclaw-vllm.sh"
-INSTALL_SCRIPT="$(mktemp)"
-PROXY_URL="${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}"
-FIRST_URL="${PROXY_URL:+${PROXY_URL%/}/}${INSTALL_URL}"
-SECOND_URL="$INSTALL_URL"
-if [[ "${CA_GITHUB_PROXY_FIRST:-1}" == 0 ]]; then
-  SECOND_URL="$FIRST_URL"
-  FIRST_URL="$INSTALL_URL"
-fi
-if ! curl -fL --connect-timeout 10 --max-time 90 "$FIRST_URL" -o "$INSTALL_SCRIPT" ||
-   [[ "$(head -c 2 "$INSTALL_SCRIPT")" != '#!' ]]; then
-  curl -fL --connect-timeout 10 --max-time 90 "$SECOND_URL" -o "$INSTALL_SCRIPT"
-fi
-[[ "$(head -c 2 "$INSTALL_SCRIPT")" == '#!' ]]
-sh "$INSTALL_SCRIPT" \
-  --non-interactive \
-  --yes \
-  --region cn-beijing \
-  --zone-id cn-beijing-l \
-  --instance-type ecs.gn8v-tee.4xlarge \
-  --disk-gb 512
-```
-
-部署完成后，OpenClaw 场景会输出本地隧道地址与令牌（保存在 `$HOME/.confidential-agent/one-click/secrets/gateway.token`）：
+脚本会安装 CLI，导入官方镜像，创建 TDX 实例，完成远程证明并注入配置，最后在部署机本地开启隧道，输出类似：
 
 ```text
-web:        http://127.0.0.1:<port>/openclaw
-ws/api:     ws://127.0.0.1:<port>
-token:      <generated-or-provided-token>
-ready_json: /root/.confidential-agent/one-click/connect.json
+Web: http://127.0.0.1:18789/openclaw/#token=<gateway-token>
+TUI: openclaw tui --url ws://127.0.0.1:18789 --token "<gateway-token>"
 ```
 
-### 手动 CLI 分场景速查
+在部署机浏览器打开摘要中的 `Web` 地址即可使用。需要手动填写令牌时，默认从 `~/.confidential-agent/one-click/secrets/cpu-openclaw.token` 读取。端口以部署摘要为准。浏览器在另一台电脑上时，先执行 `ssh -N -L 18789:127.0.0.1:18789 root@<部署机IP>`。
 
-使用 `confidential-agent` CLI 手动控制每一步时（完整步骤见 [RPM 与预构建镜像流程](docs/rpm.md) 与 [OpenClaw CLI 分步部署示例](docs/openclaw-cli-step-by-step.md)），构建端使用 `init --stage build`，云镜像导入显式使用 `image publish`（不设单独的 `import` 子命令），实例端直接按具体应用执行 `init <app>`。按手头实际持有的产物选择对应入口：
-
-1. **从零构建共享镜像**。执行 `confidential-agent init --stage build`，进入生成的 `confidential-agent-init/allinone-builder/`，运行 `confidential-agent build --spec build.yaml`、`confidential-agent image export allinone-builder --output image-release.json` 和 `confidential-agent image publish allinone-builder --spec build.yaml --region cn-beijing`。`image export` 输出描述文件的可信摘要。
-2. **本机已完成构建**：直接执行 `image export` 与 `image publish`，无需重跑 `build`。
-3. **下载官方预构建镜像并导入 ECS**。运行 `python3.11 /usr/share/cagent/hack/download-release-image.py --output-dir ./prebuilt --region cn-beijing`，再执行脚本输出的 `image publish` 命令。
-4. **预构建产物已下载到本地**：运行 `confidential-agent image publish --artifact ./artifact-dir --image-release image-release.json --release-digest "$RELEASE_DIGEST" --region cn-beijing --output published.json` 校验本地大文件并导入 ECS。
-5. **当前地域已有可用 ECS 镜像 ID**：直接执行 `confidential-agent init <app> --image-release image-release.json --release-digest "$RELEASE_DIGEST" --image-id m-xxxx --service-id <id>`（同一 `--state-dir` 已 `image publish` 时可省略 `--image-id`），随后运行 `confidential-agent deploy --spec <dir>/instance.yaml`。
-6. **同一云镜像再起新实例**：更换新的 `--service-id` 执行 `confidential-agent init <app> ...` 后直接 `deploy`，可快速拉起同种或不同 `<app>`（`openclaw`、`hermes`、`codex`、`opencode`、`dsh`、`claude-code`、`qodercli`、`pi`）的独立实例。
-
-### 实时状态 TUI
-
-Host 控制面的实时总览使用：
+常用后续操作：
 
 ```bash
-confidential-agent tui
-# 只看一个服务；daemon 每 5 秒刷新，TEE evidence 每 2 分钟重新校验
-confidential-agent tui --service openclaw --refresh 5 --attestation-refresh 120
+confidential-agent status --live      # 查看实例与 Guest 状态
+confidential-agent tui                # 实时面板：远程证明结果、度量值、端口
+sh "$INSTALL_SCRIPT" continue         # 部署中断后续跑
+sh "$INSTALL_SCRIPT" cleanup          # 销毁实例（保留已导入的共享镜像）
 ```
 
-TUI 持续刷新本地 service state 与 Guest `:8088/status`，并自动通过 `attestation-challenge-client` 收集新 evidence、校验 EAR。远程认证面板直接展示 TEE、默认 policy 的判定、BOOTX64.EFI 的 UKI SHA-384 实测值与期望值、匹配结果，以及 Rekor URL、artifact 和本地 upload entry；Agents 表展示首选地址、Mesh ports 和 Connect ports，Service Network 面板展示所选服务的公网/私网地址及全部 service、connect、mesh、MCP 端口。`--attestation-refresh 0` 可关闭自动校验，界面内仍可按 `v` 手动校验。常用键为 `j/k` 或方向键选择、`/` 过滤、`:` 命令模式、`r` 刷新、`?` 帮助、`q` 退出。
+非交互部署、其他 7 种 Agent、自定义模型端点和全部参数见 [一键部署指南](docs/guides/one-click.md)。
 
-界面刻意区分这些含义：`Evidence VERIFIED` 表示本次新证据通过默认 appraisal policy；`UKI MATCH` 表示 evidence 中的 UKI 度量与配置的参考值一致；Rekor entry 来自本地构建 upload provenance，不冒充一次新的在线查询；`Mesh/TNG READY` 只表示本信任域 TNG 配置已就绪，不表示已经建立过业务连接。
+## 工作原理（简版）
 
-清理云资源（仅销毁实例运行资源，保留已导入的共享云镜像）：
-
-```bash
-sh "$INSTALL_SCRIPT" cleanup \
-  --state-dir "$HOME/.confidential-agent"
+```mermaid
+flowchart LR
+    A["AppSpec<br/>或官方预构建镜像"] --> B["镜像构建<br/>UKI + dm-verity<br/>参考值写入 Rekor"]
+    B --> C["导入 ECS 自定义镜像"]
+    C --> D["创建 TDX 实例"]
+    D --> E{"远程证明<br/>TDX quote + UKI 度量"}
+    E -- 通过 --> F["下发磁盘密钥<br/>与应用机密"]
+    E -- 失败 --> X["实例拒绝启动<br/>(fail-closed)"]
+    F --> G["Agent 就绪"]
+    G --> H["部署机经 TNG<br/>RATS-TLS 隧道访问"]
 ```
 
----
-
-## 常用扩展场景
-
-| 场景 | 入口 |
-|---|---|
-| **GPU TEE（OpenClaw + vLLM / 安全推理）** | `one-click/install-openclaw-vllm.sh` 与 `one-click/install-vllm-inference.sh`；手动模板见 `examples/openclaw-vllm/` 与 `examples/vllm-inference/`（推荐 `ecs.gn8v-tee.4xlarge`）。 |
-| **最小 MCP Server** | `examples/mcp/mcp-demo.yaml`，最薄的一个 spec，可作为自定义应用模板。 |
-| **预构建镜像导入 / 多实例同镜像复用** | 通过 `confidential-agent image publish --artifact <本地产物> --image-release image-release.json --release-digest sha256:... --region cn-beijing` 或本地构建后的 `image publish` 导入阿里云自定义镜像。用 `init <app> --image-release ... --release-digest ... --service-id <id>` 为不同应用或实例复用镜像。云镜像退役使用 `image unpublish` / `image prune`。 |
-| **多实例 Mesh** | 在不同的 spec 文件里使用相同的 `connect` 端口集合分别 `deploy`，CLI 会自动维护 `mesh-bundle.json` 并把对端公网 CIDR 注入安全组。 |
-| **管理 SSH 与 Debug SSH** | `release` 镜像通过 `service.ssh: true` 下发每实例独立的远程证明 SSH 密钥（`confidential-agent ssh <id>`）；开发排障也可使用 `deploy.image_variant: debug` + `build.variants.debug.enabled: true`，入向访问由 `peering add --role operator --cidr ...` 控制。 |
-
----
+每一环的组件、数据流和时序见 [架构设计](docs/design/architecture.md)。
 
 ## 仓库结构
 
-```
+```text
 confidential-agent/
-├── Cargo.toml             # workspace
-├── core/                  # 共享数据结构 (AppSpec / BootstrapConfig / MeshBundle / DaemonStatus)
-├── shelter/               # 把 AppSpec 渲染成 Shelter build/runtime YAML 的纯函数库
-├── cli/                   # confidential-agent (host 控制面)
-├── daemon/                # confidential-agentd (guest 控制面 + initrd-fetch)
-├── cai-pep/               # Policy Enforcement Point，运行时 sandbox + attest helper
-├── one-click/             # 一键部署入口（共享预构建 CPU / OpenClaw-vLLM / 安全 vLLM 推理）
-├── tools/
-│   ├── policies/          # Trustee/OPA rego（生产 + dev）
-│   └── e2e/               # 端到端测试 runner、case 模板与探针
-├── cagent.spec            # 原生工具与 CLI 的 RPM
-├── packaging/             # 源码准备、固定工具下载、预构建镜像发布与 RPM 打包
-├── hack/                  # 配套 Shelter RPM 与官方预构建镜像元数据解析器
-└── examples/
-    ├── allinone/          # 8 合 1 共享预构建镜像（OpenClaw / Hermes / Codex / OpenCode / DSH / Claude / Qoder / Pi）
-    ├── openclaw/          # 独立 OpenClaw + cai-pep 示例
-    ├── openclaw-vllm/     # OpenClaw + vLLM + NVIDIA GPU TEE
-    ├── vllm-inference/    # 加密模型 + vLLM 安全推理服务
-    └── mcp/               # 最小 MCP Server 示例
+├── cli/          # confidential-agent：部署机 CLI（构建、部署、注入、隧道、运维）
+├── daemon/       # confidential-agentd：Guest 守护进程（initrd 取密、资源应用、TNG 配置、状态）
+├── gateway/      # cai-gateway：mesh 服务身份校验与 MCP 审计网关（Guest 内）
+├── cai-pep/      # cai-pep：工具调用策略沙箱与远程证明辅助命令（Guest 内）
+├── core/         # 共享数据结构：AppSpec、bootstrap、mesh bundle、AgentCard、Trustee 等
+├── shelter/      # 把 AppSpec 渲染为 Shelter 构建/运行配置的纯函数库
+├── one-click/    # 一键部署脚本（CPU 共享镜像 / OpenClaw+vLLM / 安全推理）
+├── examples/     # AppSpec 示例：allinone、openclaw、hermes-agent、codex、claude-code、mcp、cmaas、vLLM 等
+├── packaging/    # RPM / 部署 ZIP 打包与发布脚本
+├── hack/         # Shelter RPM 与官方预构建镜像的下载、校验辅助脚本
+├── tools/        # e2e 测试、Trustee 安装脚本、默认证明策略（rego）
+└── docs/         # 文档
 ```
 
----
+## 许可证
 
-## 深入文档
-
-- [docs/rpm.md](docs/rpm.md) — `cagent` RPM 安装、预构建镜像信任模型与 6 种手动场景命令
-- [docs/host-dependencies.md](docs/host-dependencies.md) — 宿主机原生工具依赖与客户端按需安装边界
-- [docs/openclaw-one-click-best-practice/README.md](docs/openclaw-one-click-best-practice/README.md) — OpenClaw 一键部署最佳实践（百炼 API 预构建镜像与本地 vLLM 双场景）
-- [docs/secure-llm-inference-one-click.md](docs/secure-llm-inference-one-click.md) — 基于 `gn8v-tee` 异构机密计算实例的一键安全大模型推理指南
-- [docs/openclaw-cli-step-by-step.md](docs/openclaw-cli-step-by-step.md) — 不走 `one-click` 的 OpenClaw CLI 分步部署示例
-- [docs/architecture.md](docs/architecture.md) — 控制流与数据流详解（含序列图）
-- [docs/spec.md](docs/spec.md) — `confidential-agent/v1` AppSpec 完整字段参考
-- [docs/trustee.md](docs/trustee.md) — Trustee 全局配置、策略/资源同步、重启和销毁语义
-- [docs/a2a.md](docs/a2a.md) — 跨组织/跨用户 A2A：背景、架构、信任模型、step-by-step 上手与排错
-- [docs/cmaas.md](docs/cmaas.md) — CMaaS MCP Gateway 身份校验、审计链与 TEE 证据绑定
+[Apache-2.0](LICENSE)
