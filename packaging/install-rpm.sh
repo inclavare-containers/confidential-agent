@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Install only the checksum-verified RPM pair recorded by a binary release.
 set -euo pipefail
-version=0.4.0
+version=0.4.1
 source_dir=""
 download_only=0
 destination=""

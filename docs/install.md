@@ -21,19 +21,19 @@ CA 提供两种安装形态：
 
 ## 2. 安装全功能版（AliLinux 3）
 
-从 [v0.4.0 Release](https://github.com/inclavare-containers/confidential-agent/releases/tag/v0.4.0) 下载安装器并运行：
+从 [v0.4.1 Release](https://github.com/inclavare-containers/confidential-agent/releases/tag/v0.4.1) 下载安装器并运行：
 
 ```bash
 curl -fsSLo install-rpm.sh \
-  https://github.com/inclavare-containers/confidential-agent/releases/download/v0.4.0/install-rpm.sh
-sudo --preserve-env=CA_GITHUB_PROXY_URL,CA_GITHUB_PROXY_FIRST bash install-rpm.sh --version 0.4.0
+  https://github.com/inclavare-containers/confidential-agent/releases/download/v0.4.1/install-rpm.sh
+sudo --preserve-env=CA_GITHUB_PROXY_URL,CA_GITHUB_PROXY_FIRST bash install-rpm.sh --version 0.4.1
 confidential-agent --version
 ```
 
 安装器会做以下几件事：
 
 1. 从官方 Release 的 `release-manifest.json` 读取期望的 SHA-256；
-2. 下载 `cagent-0.4.0-1.al8.x86_64.rpm` 和配套的 `shelter-0.3.2-6.al8.x86_64.rpm`，同时校验文件摘要和 RPM payload 摘要；
+2. 下载 `cagent-0.4.1-1.al8.x86_64.rpm` 和配套的 `shelter-0.3.2-6.al8.x86_64.rpm`，同时校验文件摘要和 RPM payload 摘要；
 3. 通过 DNF 一起安装，并从 AliLinux 3 软件源解析其他依赖（例如 TNG `2.9.2-1.al8`）。
 
 无需克隆源码或编译 Rust。其他用法：
@@ -46,8 +46,8 @@ confidential-agent --version
 手动安装本地 RPM（例如离线环境）：
 
 ```bash
-grep -E '  (cagent-0\.4\.0-1\.al8\.x86_64|shelter-0\.3\.2-6\.al8\.x86_64)\.rpm$' SHA256SUMS | sha256sum -c -
-sudo dnf install -y ./shelter-0.3.2-6.al8.x86_64.rpm ./cagent-0.4.0-1.al8.x86_64.rpm
+grep -E '  (cagent-0\.4\.1-1\.al8\.x86_64|shelter-0\.3\.2-6\.al8\.x86_64)\.rpm$' SHA256SUMS | sha256sum -c -
+sudo dnf install -y ./shelter-0.3.2-6.al8.x86_64.rpm ./cagent-0.4.1-1.al8.x86_64.rpm
 rpm -q cagent shelter attestation-challenge-client libtdx-verify trusted-network-gateway
 ```
 
@@ -55,7 +55,7 @@ rpm -q cagent shelter attestation-challenge-client libtdx-verify trusted-network
 
 ## 3. 安装仅部署版（ZIP）
 
-1. 从同一 Release 下载 `cagent-deploy-0.4.0-linux-amd64.zip` 或 `cagent-deploy-0.4.0-darwin-arm64.zip`；
+1. 从同一 Release 下载 `cagent-deploy-0.4.1-linux-amd64.zip` 或 `cagent-deploy-0.4.1-darwin-arm64.zip`；
 2. 用 Release 中的 `SHA256SUMS` 校验后解压；
 3. 在解压目录运行 `./one-click.sh` 进行引导式部署，或运行 `./bin/cagent --help` 分步操作。也可以把 `bin` 目录加入 `PATH`。
 
