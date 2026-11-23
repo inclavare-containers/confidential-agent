@@ -15,93 +15,32 @@
 
 ## 构建、导入与多场景复用
 
-构建端使用 `confidential-agent init --stage build` 生成共享镜像配置，云端导入显式使用 `image publish`，实例端直接按具体应用名称运行 `confidential-agent init <app>`。根据手头已有的产物状态选择对应路径：
+镜像可以直接使用官方预构建版本，也可以从本目录自行构建。按已有产物选择路径（下载官方镜像、导入本地产物、复用已有 ECS 镜像、从零构建）的完整步骤见 [手动部署 · 准备云镜像](../../docs/guides/manual-deployment.md#2-准备云镜像)。这里只列出与本镜像相关的要点。
 
-| 当前已有条件 | 需要执行的步骤 |
-| --- | --- |
-| **1. 从零构建镜像** | `init --stage build` 生成 `build.yaml` → `build` 生成完整 Shelter 产物 → `image export` 导出描述与 `release_digest` → `image publish` 导入 ECS |
-| **2. 本机已构建好产物** | 跳过 `build`，直接对已有构建执行 `image export` 获取 `release_digest`，再执行 `image publish` 导入目标地域 ECS |
-| **3. 下载官方预构建镜像** | 运行 `download-release-image.py` 下载并校验本地产物，再执行脚本输出的 `image publish` 命令 |
-| **4. 镜像产物已下载到本地** | 运行 `image publish --artifact <本地产物目录或artifact-manifest.json> --image-release ... --release-digest ... --region ...` 校验本地大文件并导入 ECS |
-| **5. 当前地域已有 ECS 镜像 ID** | 跳过构建和 `image publish`，直接运行 `init <app> --image-release ... --release-digest ... --image-id <m-xxxx> --service-id <id>` 后 `deploy` |
-| **6. 同一镜像再起新实例** | 云镜像已就绪，无需重新下载或导入；更换新的 `--service-id` 运行 `init <app>`（可选相同或不同应用）后直接 `deploy` |
-
-### 1. 从零构建与导出（或复用本机已构建产物）
+**从源码构建并发布**（需要全功能版）：
 
 ```bash
 confidential-agent init --stage build --non-interactive --output-dir ~/cagent-work
 BUILD_SPEC="$HOME/cagent-work/allinone-builder/build.yaml"
-
-confidential-agent spec validate --spec "$BUILD_SPEC"
 confidential-agent build --spec "$BUILD_SPEC"
-
-IMAGE_RELEASE=./image-release.json
-confidential-agent image export allinone-builder --output "$IMAGE_RELEASE"
-RELEASE_DIGEST="sha256:$(sha256sum "$IMAGE_RELEASE" | awk '{print $1}')"
-
-# 显式上传并导入为当前账号目标地域的阿里云自定义镜像
-confidential-agent image publish allinone-builder \
-  --spec "$BUILD_SPEC" \
-  --region cn-beijing \
-  --output ./published.json
+confidential-agent image export allinone-builder --output ./image-release.json   # 输出 release_digest
+confidential-agent image publish allinone-builder --spec "$BUILD_SPEC" --region cn-beijing --output ./published.json
 ```
 
-若直接在本仓库根目录构建示例配置，可执行 `confidential-agent build --spec examples/allinone/build.yaml`，随后同样运行 `image export allinone-builder --output ./image-release.json`。
+也可以在仓库根目录直接构建本目录的配置：`confidential-agent build --spec examples/allinone/build.yaml`。
 
-阿里云凭证优先读取环境变量（`ALICLOUD_ACCESS_KEY` / `ALICLOUD_SECRET_KEY` 等），其次读取宿主机 `aliyun configure` 配置的 AK 或 StsToken profile（可通过 `ALIBABA_CLOUD_PROFILE` / `ALICLOUD_PROFILE` 选择命名 profile，或通过 `ALIBABA_CLOUD_CREDENTIALS_FILE` / `ALICLOUD_SHARED_CREDENTIALS_FILE` 指定凭证文件）。`CA_IMAGE_OSS_ENDPOINT` 默认 `auto`，同地域 ECS 内网可达时自动走内网 HTTPS，否则走公网。
-
-### 2. 下载并导入官方预构建镜像
+**基于镜像创建实例**：每个实例用 `confidential-agent init <app>` 生成配置，`<app>` 为下表中的任一 harness；换一个 `--service-id` 即可在同一镜像上再起一个实例，无需重新构建或导入：
 
 ```bash
-DOWNLOAD="$(python3.11 /usr/share/cagent/hack/download-release-image.py --output-dir ./prebuilt --format json)"
-ARTIFACT="$(jq -er '.artifact' <<<"$DOWNLOAD")"
-IMAGE_RELEASE="$(jq -er '.image_release' <<<"$DOWNLOAD")"
-RELEASE_DIGEST="$(jq -er '.release_digest' <<<"$DOWNLOAD")"
-
-confidential-agent image publish \
-  --artifact "$ARTIFACT" \
-  --image-release "$IMAGE_RELEASE" \
-  --release-digest "$RELEASE_DIGEST" \
-  --region cn-beijing \
-  --output ./published.json
-```
-
-已有本地产物时，将 `ARTIFACT` 设为对应的 Shelter 产物目录或 `artifact-manifest.json`，并提供与之匹配的 release 文件和可信摘要。
-
-### 3. 初始化应用实例、部署与同镜像多实例复用
-
-使用上一步的 `IMAGE_RELEASE`、`RELEASE_DIGEST` 和 `published.json`。若已有当前地域可用的 ECS 镜像，将 `IMAGE_ID` 设为该 ID，并采用与该镜像对应的描述和可信摘要。若在同一 `--state-dir` 下已将该产物导入当前账号和地域，也可省略 `--image-id`。
-
-```bash
-export DASHSCOPE_API_KEY="<YOUR_DASHSCOPE_API_KEY>"
-IMAGE_ID="$(jq -er '.image_id' ./published.json)"
-
-# 实例 1：部署 OpenClaw Gateway
-confidential-agent init openclaw \
-  --non-interactive \
-  --image-release "$IMAGE_RELEASE" \
-  --release-digest "$RELEASE_DIGEST" \
-  --image-id "$IMAGE_ID" \
-  --service-id openclaw-01 \
-  --region cn-beijing \
-  --output-dir ~/cagent-work
-
-confidential-agent peering add --role operator --cidr "<OPERATOR_IPV4>/32" --label ops
-confidential-agent spec validate --spec ~/cagent-work/openclaw-01/instance.yaml
-confidential-agent deploy --spec ~/cagent-work/openclaw-01/instance.yaml
-
-# 实例 2：复用同一云镜像再起一个 Codex 实例（无需重建或再次 image publish）
-confidential-agent init codex \
-  --non-interactive \
-  --image-release "$IMAGE_RELEASE" \
-  --release-digest "$RELEASE_DIGEST" \
-  --image-id "$IMAGE_ID" \
-  --service-id codex-01 \
-  --region cn-beijing \
-  --output-dir ~/cagent-work
-
+confidential-agent init codex --non-interactive \
+  --image-release ./image-release.json --release-digest "$RELEASE_DIGEST" --image-id "$IMAGE_ID" \
+  --service-id codex-01 --region cn-beijing --output-dir ~/cagent-work
 confidential-agent deploy --spec ~/cagent-work/codex-01/instance.yaml
 ```
+
+[`instance.yaml`](instance.yaml) 是 `init` 生成结果的参考模板。
+
+**凭据与上传端点**：阿里云凭据优先读取环境变量（`ALICLOUD_ACCESS_KEY` / `ALICLOUD_SECRET_KEY` 等），其次读取 `aliyun configure` 的 AK 或 StsToken profile（`ALIBABA_CLOUD_PROFILE` / `ALICLOUD_PROFILE` 选择 profile，`ALIBABA_CLOUD_CREDENTIALS_FILE` / `ALICLOUD_SHARED_CREDENTIALS_FILE` 指定凭证文件）。`CA_IMAGE_OSS_ENDPOINT` 默认 `auto`：同地域 ECS 内网可达时走内网 HTTPS，否则走公网。
 
 ## 支持的 Harness 与接入模式
 

@@ -1,10 +1,8 @@
-基于异构机密计算实例构建安全大语言模型推理环境
-================================================
+# 基于异构机密计算实例构建安全大语言模型推理环境
 
-随着大语言模型技术的普及，企业对推理过程中的数据安全问题日益关注。模型权重是核心资产，推理 Prompt 与回复可能包含敏感业务数据，模型解密密钥一旦泄露将导致模型保护失效。本文介绍如何在阿里云 gn8v-tee TDX 机密计算实例上，使用一键部署脚本快速构建基于 vLLM 的安全大语言模型推理环境，通过Intel TDX 硬件级内存加密和隔离、模型密钥分发、远程证明和端到端加密，保护模型权重、推理数据和模型密钥的安全。
+随着大语言模型技术的普及，企业对推理过程中的数据安全问题日益关注。模型权重是核心资产，推理 Prompt 与回复可能包含敏感业务数据，模型解密密钥一旦泄露将导致模型保护失效。本文介绍如何在阿里云 gn8v-tee TDX 机密计算实例上，使用一键部署脚本快速构建基于 vLLM 的安全大语言模型推理环境，通过 Intel TDX 硬件级内存加密和隔离、模型密钥分发、远程证明和端到端加密，保护模型权重、推理数据和模型密钥的安全。
 
-方案概述
----------
+## 方案概述
 
 本方案将 vLLM 推理服务封装在 Intel TDX（Trust Domain Extensions）可信执行环境中。模型以加密密文形式存储在 OSS Bucket 中，仅在远程证明通过后将模型解密密钥注入实例，由 gocryptfs 在 TDX 内存边界内完成解密挂载，vLLM 直接读取明文模型启动推理。用户推理请求经可信网关（TNG）提供的加密通道进入 TDX 实例，CPU 侧的模型解密和请求处理位于 TDX 来宾内；GPU 侧计算使用启用 NVIDIA Confidential Compute 的 GPU 环境。
 
@@ -46,8 +44,7 @@
 
 5. **访问推理服务** ：在部署机上使用 OpenAI 兼容 API 发起推理请求，所有流量经加密通道进入 TDX 实例。目标实例禁用 SSH/远程登录，无需也无法登录实例。
 
-前提条件
----------
+## 前提条件
 
 * 已开通阿里云 ECS 服务，账号具备创建 TDX 机密计算实例、VPC、交换机、安全组、OSS Bucket、自定义镜像等资源的权限。
 
@@ -65,8 +62,7 @@
 
 * （可选）如需使用自有模型，请在步骤一中完成 gocryptfs 加密与 OSS 上传；也可直接使用步骤一提供的预加密 Qwen3.8-27B 模型跳过该操作。
 
-操作步骤
----------
+## 操作步骤
 
 **说明**
 
@@ -218,24 +214,15 @@ export ALICLOUD_SECRET_KEY="<YOUR_SECRET_KEY>"
 
 ### 步骤三：执行一键部署
 
-在部署机上执行以下命令进入交互式部署：
+在部署机上下载脚本并进入交互式部署（后续示例复用这里的 `$INSTALL_SCRIPT`）：
 
 ```bash
-set -euo pipefail
+# 下载脚本：默认先走 GitHub 代理，失败再直连（代理设置见 docs/install.md）
 INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install-vllm-inference.sh"
 INSTALL_SCRIPT="$(mktemp)"
-PROXY_URL="${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}"
-FIRST_URL="${PROXY_URL:+${PROXY_URL%/}/}${INSTALL_URL}"
-SECOND_URL="$INSTALL_URL"
-if [[ "${CA_GITHUB_PROXY_FIRST:-1}" == 0 ]]; then
-  SECOND_URL="$FIRST_URL"
-  FIRST_URL="$INSTALL_URL"
-fi
-if ! curl -fL --connect-timeout 10 --max-time 90 "$FIRST_URL" -o "$INSTALL_SCRIPT" ||
-   [[ "$(head -c 2 "$INSTALL_SCRIPT")" != '#!' ]]; then
-  curl -fL --connect-timeout 10 --max-time 90 "$SECOND_URL" -o "$INSTALL_SCRIPT"
-fi
-[[ "$(head -c 2 "$INSTALL_SCRIPT")" == '#!' ]]
+curl -fL --connect-timeout 10 --max-time 90 "https://gh-proxy.org/${INSTALL_URL}" -o "$INSTALL_SCRIPT" ||
+  curl -fL --connect-timeout 10 --max-time 90 "$INSTALL_URL" -o "$INSTALL_SCRIPT"
+
 sh "$INSTALL_SCRIPT"
 ```
 
@@ -260,21 +247,6 @@ sh "$INSTALL_SCRIPT"
 非交互部署示例：
 
 ```bash
-set -euo pipefail
-INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install-vllm-inference.sh"
-INSTALL_SCRIPT="$(mktemp)"
-PROXY_URL="${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}"
-FIRST_URL="${PROXY_URL:+${PROXY_URL%/}/}${INSTALL_URL}"
-SECOND_URL="$INSTALL_URL"
-if [[ "${CA_GITHUB_PROXY_FIRST:-1}" == 0 ]]; then
-  SECOND_URL="$FIRST_URL"
-  FIRST_URL="$INSTALL_URL"
-fi
-if ! curl -fL --connect-timeout 10 --max-time 90 "$FIRST_URL" -o "$INSTALL_SCRIPT" ||
-   [[ "$(head -c 2 "$INSTALL_SCRIPT")" != '#!' ]]; then
-  curl -fL --connect-timeout 10 --max-time 90 "$SECOND_URL" -o "$INSTALL_SCRIPT"
-fi
-[[ "$(head -c 2 "$INSTALL_SCRIPT")" == '#!' ]]
 sh "$INSTALL_SCRIPT" \
   --non-interactive \
   --yes \
@@ -290,21 +262,6 @@ sh "$INSTALL_SCRIPT" \
 多副本（N 个 运行vLLM的gn8v-tee实例 + 1个ALB）部署示例：
 
 ```bash
-set -euo pipefail
-INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install-vllm-inference.sh"
-INSTALL_SCRIPT="$(mktemp)"
-PROXY_URL="${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}"
-FIRST_URL="${PROXY_URL:+${PROXY_URL%/}/}${INSTALL_URL}"
-SECOND_URL="$INSTALL_URL"
-if [[ "${CA_GITHUB_PROXY_FIRST:-1}" == 0 ]]; then
-  SECOND_URL="$FIRST_URL"
-  FIRST_URL="$INSTALL_URL"
-fi
-if ! curl -fL --connect-timeout 10 --max-time 90 "$FIRST_URL" -o "$INSTALL_SCRIPT" ||
-   [[ "$(head -c 2 "$INSTALL_SCRIPT")" != '#!' ]]; then
-  curl -fL --connect-timeout 10 --max-time 90 "$SECOND_URL" -o "$INSTALL_SCRIPT"
-fi
-[[ "$(head -c 2 "$INSTALL_SCRIPT")" == '#!' ]]
 sh "$INSTALL_SCRIPT" \
   --non-interactive \
   --yes \
@@ -398,7 +355,7 @@ TNG隧道监听在部署机本地 `127.0.0.1:8080`。通过 `curl http://127.0.0
 
 * **从其他客户端（如个人电脑/手机端）访问**
 
-客户端需要安装与部署机兼容的 `confidential-agent` 和 TNG 工具。默认安全组只允许部署机的公网出口；在复制状态前，先在部署机上授权客户端的实际公网出口 CIDR：
+  客户端需要安装与部署机兼容的 `confidential-agent` 和 TNG 工具。默认安全组只允许部署机的公网出口；在复制状态前，先在部署机上授权客户端的实际公网出口 CIDR：
 
   ```bash
   CLIENT_CIDR="198.51.100.23/32"  # 替换为客户端实际公网出口
@@ -407,15 +364,19 @@ TNG隧道监听在部署机本地 `127.0.0.1:8080`。通过 `curl http://127.0.0
   confidential-agent --state-dir "$HOME/.confidential-agent" peering apply
   ```
 
-再将部署机的服务状态目录（默认 `$HOME/.confidential-agent`）复制到客户端，并在客户端启动隧道（默认监听 `127.0.0.1:8080`）：
+  再将部署机的状态目录（默认 `$HOME/.confidential-agent`）复制到客户端，并在客户端启动隧道（默认监听 `127.0.0.1:8080`）：
 
   ```bash
   confidential-agent connect start --service vllm-inference
   ```
 
-如果复制到自定义路径，给客户端命令增加 `--state-dir <复制后的路径>`。`connect start` 成功表示本地隧道已启动，还需执行 `curl http://127.0.0.1:8080/v1/models` 确认远端可达，再使用上面的对话请求验证推理。客户端不需要阿里云 AccessKey。
+  复制到自定义路径时，给客户端命令加上 `--state-dir <复制后的路径>`。`connect start` 成功只表示本地隧道已启动，还需执行 `curl http://127.0.0.1:8080/v1/models` 确认远端可达。客户端不需要阿里云 AccessKey。
 
-如需集成可信网关客户端到您的业务中来发起推理请求，我们支持如下几种访问方式，您可以结合您的业务场景进行选择不同的集成方式
+  > **注意**：状态目录包含该环境的全部本地机密（磁盘口令、SSH 私钥、Terraform 状态等），只应复制到与部署机同等可信的机器上，并用安全的方式传输。
+
+#### 集成到业务系统
+
+除了 `confidential-agent connect`，也可以把 TNG 客户端直接集成到业务中发起推理请求：
 
 | 访问方式 | 获取方式 |
 | --- | --- |
@@ -437,24 +398,9 @@ go mod edit -replace=github.com/inclavare-containers/tng/tng-go=/绝对路径/TN
 
 ### 步骤六（可选）：释放资源
 
-不再需要服务时，在部署机上执行以下命令释放云资源：
+不再需要服务时，在部署机上用同一个脚本释放云资源（`$INSTALL_SCRIPT` 已失效时按步骤三重新下载）：
 
 ```bash
-set -euo pipefail
-INSTALL_URL="https://raw.githubusercontent.com/inclavare-containers/confidential-agent/master/one-click/install-vllm-inference.sh"
-INSTALL_SCRIPT="$(mktemp)"
-PROXY_URL="${CA_GITHUB_PROXY_URL-https://gh-proxy.org/}"
-FIRST_URL="${PROXY_URL:+${PROXY_URL%/}/}${INSTALL_URL}"
-SECOND_URL="$INSTALL_URL"
-if [[ "${CA_GITHUB_PROXY_FIRST:-1}" == 0 ]]; then
-  SECOND_URL="$FIRST_URL"
-  FIRST_URL="$INSTALL_URL"
-fi
-if ! curl -fL --connect-timeout 10 --max-time 90 "$FIRST_URL" -o "$INSTALL_SCRIPT" ||
-   [[ "$(head -c 2 "$INSTALL_SCRIPT")" != '#!' ]]; then
-  curl -fL --connect-timeout 10 --max-time 90 "$SECOND_URL" -o "$INSTALL_SCRIPT"
-fi
-[[ "$(head -c 2 "$INSTALL_SCRIPT")" == '#!' ]]
 sh "$INSTALL_SCRIPT" cleanup \
   --state-dir "$HOME/.confidential-agent"
 ```
@@ -465,8 +411,7 @@ sh "$INSTALL_SCRIPT" cleanup \
 
 镜像导入生成的快照可能独立保留。清理后请在对应地域查询快照，按本次镜像 ID、名称和创建时间核对归属，仅删除已不再需要的本次导入快照。双副本部署还需确认 ALB、监听器、服务器组及公网 EIP 已释放；所有资源确认释放后再删除本地状态目录。
 
-安全验证
----------
+## 安全验证
 
 ### 验证供应链完整性
 
@@ -522,8 +467,7 @@ Verification Successful!
 confidential-agent status --live
 ```
 
-注意事项与常见问题
----------
+## 注意事项与常见问题
 
 - **排查问题不用登录实例**：目标实例不允许 SSH 登录。出了问题在部署机上运行 `confidential-agent status --live` 查看实例内部状态，或查看 `$HOME/.confidential-agent/one-click/` 目录下的部署日志（特别是 `connect-vllm-inference.log`）。
 
@@ -539,13 +483,13 @@ confidential-agent status --live
 
 - **vLLM 没启动好**：用 `confidential-agent status --live` 查看实例内服务状态；部署脚本在加密通道建立后会做一次健康检查，结果在日志里。实例没有 SSH，看不了系统日志，vLLM 的启动细节请查看部署日志。
 
-- **实例重启后推理不可用**：默认模式下，模型解密密钥不会在重启后保留，需要重新运行 `confidential-agent inject` 注入。如果需要重启自动恢复，可以改用 Trustee 模式（参见 [docs/trustee.md](trustee.md)）。
+- **实例重启后推理不可用**：默认的 challenge 模式需要从原部署机重新交付磁盘和模型密钥。按 [重启恢复步骤](operations.md#challenge-模式重启后恢复) 执行，`--spec` 使用部署摘要中的配置路径（默认 `~/.confidential-agent/one-click/vllm-inference/vllm-inference.yaml`），`--target-ip` 填目标副本的实例地址。需要无人值守重启时，参见 [Trustee 模式](trustee.md)。
 
 - **更换模型密钥**：用新密码重新加密模型、上传到 OSS，然后用新的 `--model-key-file` 重新部署。
 
 
-相关文档
----------
+## 相关文档
 
-* [基于 gn8v-tee 异构机密计算实例一键构建 OpenClaw 机密 AI Agent](https://help.aliyun.com/zh/egs/use-cases/build-openclaw-confidential-ai-agent-on-heterogeneous-confidential-computing-instances)
+* [OpenClaw 机密 AI Agent 最佳实践](openclaw-best-practice/README.md)（[阿里云帮助中心版本](https://help.aliyun.com/zh/egs/use-cases/build-openclaw-confidential-ai-agent-on-heterogeneous-confidential-computing-instances)）
+* [运维手册](operations.md)
 * [基于 gn8v-tee 关联实例构建安全大语言模型推理环境](https://help.aliyun.com/zh/egs/use-cases/build-a-secure-llm-inference-environment-on-gn8v-tee-related-instances)

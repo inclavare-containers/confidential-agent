@@ -107,7 +107,7 @@ native-tools/oras version >/dev/null
 
 %files
 %license LICENSE
-%doc README.md docs/host-dependencies.md docs/rpm.md
+%doc README.md docs/concepts.md docs/install.md
 %{_bindir}/cagent
 %{_bindir}/confidential-agent
 %{_bindir}/confidential-agentd

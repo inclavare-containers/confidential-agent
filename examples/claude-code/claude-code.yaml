@@ -1,3 +1,6 @@
+# 开发示例：Claude Code 只能通过 SSH 使用，而本示例镜像不包含实例级管理 SSH 服务，
+# 因此部署 debug 镜像（带构建期 SSH）。不要用于生产；生产请使用共享镜像：
+#   confidential-agent init claude-code ...（release 镜像 + 经远程证明下发的管理 SSH）
 schema: confidential-agent/v1
 
 service:

@@ -197,7 +197,7 @@ pub(crate) enum Commands {
     Spec(SpecArgs),
     Key(KeyArgs),
     Trustee(TrusteeArgs),
-    #[command(hide = true)]
+    /// Re-inject resources into a managed instance, including after a challenge-mode reboot.
     Inject(InjectArgs),
     #[command(hide = true)]
     Mesh(MeshArgs),
@@ -491,8 +491,10 @@ pub(crate) enum TrusteeCommands {
 
 #[derive(Debug, Args)]
 pub(crate) struct InjectArgs {
+    /// Deployment AppSpec for the managed service.
     #[arg(long)]
     pub(crate) spec: PathBuf,
+    /// Recorded public or private IP of the instance to inject.
     #[arg(long)]
     pub(crate) target_ip: String,
     #[arg(long, env = "CA_SKIP_PEERING_CHECK")]

@@ -1,14 +1,16 @@
-# Confidential A2A 接入指南
+# A2A 跨组织协作
 
-Confidential Agent 的 A2A 能力用于把不同管理域里的 agent 连接起来：每一方仍独立管理云账号、state-dir、镜像构建、密钥和安全组，但应用可以通过 A2A AgentCard 发现对端，并通过 RATS-TLS/TNG 建立经过远程证明的本地转发通道。
+A2A 让**不同管理域**的 Agent 互相调用。双方各自管理自己的云账号、状态目录、镜像、密钥和安全组，互不共享。调用方通过对端发布的 A2A AgentCard 发现它，再经 TNG 建立经过远程证明的通道发起调用。
 
-需要先明确三个边界：
+**OpenClaw 接入**使用 CA AgentCard 发现对端。内置插件经 TNG 发出 `POST /v1/responses`，并携带对端的 Gateway Token。OpenClaw Gateway 尚未提供卡片默认声明的 `/a2a` 处理器，标准 A2A 客户端按该地址调用会失败。应用接入见 [第 5.5 节](#55-应用调用)。
 
-- A2A `connect` 指 peer `service.connect[]` 暴露的 RATS-TLS server 入口。调用方通过本地 TNG ingress 访问被调方，远程证明方向是调用方验证被调方，不是双向会话。
-- A2A 不接入 `cai-gateway` client，也不读取、映射或访问 MCP 的 `mcp_ports`。
-- A2A 的可追踪性来自 `peerings.yaml`、`a2a.json` 和 `a2a-bundle.json` 的配置状态；不要把它称为 MCP audit，MCP 调用审计属于 CMaaS/MCP gateway 链路。
+先明确三个边界：
 
-本文档描述当前实现，不描述计划中的兼容层。AppSpec 字段定义见 [`spec.md`](spec.md)。
+- **单向证明**：A2A 调用走对端 `service.connect` 暴露的端口，由调用方验证被调方的 TEE，不是双向会话。需要反向调用时，双方各自配置一次。
+- **不涉及 MCP 网关**：A2A 不经过 `cai-gateway`，也不能访问对端的 mesh / `mcp_ports` 端口。
+- **可追踪的是配置，不是调用**：A2A 的可追踪性来自 `peerings.yaml`、`a2a.json` 和 `a2a-bundle.json` 这些配置状态。MCP 调用审计是另一条链路，见 [MCP 网关](../design/mcp-gateway.md)。
+
+本文描述当前实现，不包含计划中的能力。AppSpec 中 `a2a` 字段的定义见 [AppSpec 参考](../reference/appspec.md#8-a2a发布-agentcard)。
 
 ## 目录
 
@@ -65,7 +67,7 @@ alpha side:
 | `:8088` | daemon `/status` / `/health` | `status` |
 | `:8089` | daemon `/.well-known/agent-card.json` | `agent_card` |
 | `:8006` | challenge inject control | `control` |
-| `:22` | debug SSH，仅 debug image | `ssh` |
+| `:22` | 调试 SSH（debug 镜像）或管理 SSH（`service.ssh: true`） | `ssh` |
 | `service.connect[]` | RATS-TLS server 入口 | `connect` |
 | `service.ports - service.connect` | 内部 mesh 端口 | `mesh` |
 
@@ -104,7 +106,7 @@ CLI preview 是 best-effort：管理机可能访问不了对端 `:8089`，失败
 
 ### 3.1 当前 AgentCard 形态
 
-当前实现发布 A2A v1 风格 AgentCard。CA 专用扩展只接受 `capabilities.extensions[]` 中 URI 为 `https://confidential-agent.dev/extensions/tee-rekor/v1` 的条目。旧版顶层 `extensions["x-confidential-agent/v1"]` 不再被消费；遇到这种卡片会提示对端仍在使用 legacy AgentCard extension。
+当前发布的 CA AgentCard 在 `supportedInterfaces[]` 中声明版本 `1.0`，并保留顶层 `protocolVersion` 和 `preferredTransport`。CA 消费者按这套格式校验，标准 v1 客户端互通仍需要接口和消息协议支持。CA 专用扩展只接受 `capabilities.extensions[]` 中 URI 为 `https://confidential-agent.dev/extensions/tee-rekor/v1` 的条目。旧版顶层 `extensions["x-confidential-agent/v1"]` 不再被消费；遇到这种卡片会提示对端仍在使用 legacy AgentCard extension。
 
 最小有效 AgentCard 示例：
 
@@ -190,7 +192,7 @@ a2a:
 - `a2a.interfaces[].port` 必须在 `service.connect` 中。
 - `attestation.reference_values` 必须为 `rekor`，否则 AgentCard 中没有可公开追踪和验证的 Rekor metadata。
 
-未显式配置 `interfaces` 时，CLI 会从 `service.connect[]` 推导 `JSONRPC` + `/a2a`。
+未显式配置 `interfaces` 时，CLI 会从 `service.connect[]` 推导 `JSONRPC` + `/a2a`。发布供 A2A 客户端使用的卡片时，应用需要实现声明的路径和协议。
 
 ### 3.3 Sigstore Keyless AgentCard 签名
 
@@ -352,6 +354,8 @@ confidential-agent --state-dir ./alpha-state a2a add \
 
 这条路径不会启动或复用 `cai-gateway` client，也不会把 MCP `mcp_ports` 暴露给 A2A peer。如果同一服务还承载 MCP gateway，MCP 调用审计仍由 MCP gateway/CMaaS 路径独立产生。
 
+**OpenClaw** 的内置插件从 `/etc/cai/service-directory.json` 解析 peer alias，并使用配置中的 peer token 或 `defaultPeerToken` 调用对端 `/v1/responses`。
+
 管理机调试本服务时使用：
 
 ```bash
@@ -383,7 +387,7 @@ confidential-agent --state-dir ./alpha-state connect stop \
 | Analyst Org | Analyst Agent | 接收用户自然语言任务，规划要向数据方请求什么聚合信息，再综合最终答案 |
 | Data Owner Org | Data Owner Agent | 持有 `private-risk-data.jsonl`，只能把本地数据聚合后交给 LLM 总结 |
 
-两个 agent 都是 `examples/a2a-data-collab/files/agent-server.mjs` 启动的真实 HTTP JSON-RPC A2A server，背后通过 DashScope compatible `/chat/completions` 调用真实 LLM。没有 mock LLM、没有固定字符串回复。
+两个 agent 都由 [`agent-server.mjs`](../../examples/a2a-data-collab/files/agent-server.mjs) 启动，使用旧版 JSON-RPC 方法 `message/send`，通过 DashScope 兼容的 `/chat/completions` 调用真实 LLM。标准 A2A v1 的 `SendMessage` 会收到 `method not found`。
 
 ### 6.2 运行链路
 
@@ -423,7 +427,7 @@ E2E 覆盖的基础设施路径：
 
 ### 6.3 通过标准
 
-Probe 代码在 `tools/e2e/probes/a2a-data-collab-probe.mjs`。通过条件：
+Probe 代码在 [`tools/e2e/probes/a2a-data-collab-probe.mjs`](../../tools/e2e/probes/a2a-data-collab-probe.mjs)。通过条件：
 
 - A2A response 是 `completed` task。
 - 最终文本看起来是针对 `AlphaCorp` 的聚合风险分析。
@@ -445,9 +449,10 @@ export DASHSCOPE_API_KEY='...'
 export DASHSCOPE_BASE_URL='https://dashscope.aliyuncs.com/compatible-mode/v1'
 export DASHSCOPE_MODEL='qwen4-max'
 
-env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy -u ALL_PROXY -u all_proxy \
-  tools/e2e/run.sh a2a-data-collab
+tools/e2e/run.sh a2a-data-collab
 ```
+
+（如果当前 shell 设置了 HTTP 代理，而代理无法访问阿里云 OpenAPI 和软件源，请先 `unset` 相关代理变量再运行。）
 
 开启 signed 模式时再提供 Sigstore keyless 身份：
 
@@ -579,9 +584,9 @@ CLI preview 状态：
 
 ## 参考
 
-- [`spec.md`](spec.md)
-- [`architecture.md`](architecture.md)
-- `examples/a2a-data-collab/`
+- [AppSpec 参考](../reference/appspec.md)
+- [架构设计](../design/architecture.md)
+- [`examples/a2a-data-collab/`](../../examples/a2a-data-collab/)
 - `tools/e2e/run.sh a2a-data-collab`
 - [A2A Protocol Spec v1](https://a2a-protocol.org/latest/specification/)
 - [Sigstore Rekor](https://docs.sigstore.dev/logging/overview/)
