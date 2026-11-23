@@ -11,7 +11,7 @@
 %global __brp_strip_comment_note %{nil}
 
 Name:           cagent
-Version:        0.4.0
+Version:        0.4.1
 Release:        1%{?dist}
 Summary:        Confidential Agent host CLI and guest image assets
 License:        Apache-2.0
@@ -117,6 +117,9 @@ native-tools/oras version >/dev/null
 %{_datadir}/cagent/
 
 %changelog
+* Mon Nov 23 2026 Weidong Sun <sunweidong@linux.alibaba.com> - 0.4.1-1
+- Publish the revised documentation and expose the resource injection help.
+
 * Sat Nov 21 2026 Weidong Sun <sunweidong@linux.alibaba.com> - 0.4.0-1
 - Pair the full cagent RPM with Shelter 0.3.2-6 for verified image deployment.
 
