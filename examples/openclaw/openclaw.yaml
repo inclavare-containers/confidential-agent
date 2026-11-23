@@ -49,13 +49,13 @@ build:
     - ./install-openclaw.sh
   variants:
     release:
-      enabled: false
-    debug:
       enabled: true
+    debug:
+      enabled: false   # 排障时改为 true，并把 deploy.image_variant 设为 debug（debug 镜像带构建期 SSH）
 
 deploy:
   provider: aliyun
-  image_variant: debug
+  image_variant: release
   instance_type: ecs.g9i.xlarge
   region: cn-beijing
   zone_id: cn-beijing-i
