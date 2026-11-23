@@ -25,7 +25,7 @@ cleanup_connect_ready() {
   [[ -f "$1" ]] || return 0
   printf '%s\n' "$1" >> "$WORK_DIR/cleaned"
 }
-port="$(start_connect_until_http_ready "$WORK_DIR/state" probe /ready 1 1)"
+port="$(start_connect_until_http_ready "$WORK_DIR/state" probe /ready 1 5)"
 [[ "$port" == 12345 ]]
 [[ "${#E2E_CONNECT_READY_FILES[@]}" == 0 ]]
 cleanup_connects
