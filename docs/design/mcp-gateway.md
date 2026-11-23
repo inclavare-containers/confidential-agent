@@ -1,8 +1,10 @@
-# CMaaS MCP Gateway / E2E 文档
+# MCP 网关与 CMaaS
 
-CMaaS 是当前 MCP gateway 端到端能力的主示例。它把标准 MCP memory server 放进 Confidential Agent 服务里，用 gateway 和 TNG 在业务端口前接管访问控制、服务身份、MCP 审计、虚拟 MCP tools 和 TEE evidence 绑定。
+`cai-gateway` 运行在每个 Guest 内，接管本服务的 mesh 端口，为同一状态目录内的服务调用提供：**调用方服务身份校验**，以及（对 `mcp_ports`）**MCP 调用审计、虚拟 MCP 工具和 TEE 证据绑定**。
 
-CMaaS 不定义新的 MCP 协议，也不把 `mcp-proxy` 当成安全代理。应用侧仍然是一个标准 MCP server，监听 `127.0.0.1:8000/mcp`；安全边界由 `cai-gateway`、TNG/RATS-TLS、mesh service identity 和 TDX 远程证明共同提供。
+本文以 CMaaS 示例（位于 [`examples/cmaas`](../../examples/cmaas/README.md)）为例说明它的工作方式。CMaaS 把一个标准 MCP memory server 放进机密服务，由 gateway 和 TNG 在业务端口前负责访问控制和审计。
+
+CMaaS 不定义新的 MCP 协议，也不把 `mcp-proxy` 当作安全代理。应用侧仍是一个监听 `127.0.0.1:8000/mcp` 的标准 MCP server；安全边界由 `cai-gateway`、TNG（RATS-TLS）、mesh 服务身份和 TDX 远程证明共同提供。
 
 ## AppSpec 端口契约
 
@@ -22,7 +24,7 @@ service:
 - `service.ports`：服务声明的业务端口集合。CMaaS 只有 `8000`，MCP endpoint 对 peer 来说仍然是 `:8000/mcp`。
 - `service.connect`：允许 host `connect` 和 A2A connect 客户端通过单向 RA 验证服务端后访问的端口子集。CMaaS 明确设置为 `[]`，表示 memory API 不暴露给这些入口；普通 raw `curl` 不属于合法 connect 客户端。
 - `service.mcp_ports`：声明哪些业务端口按 MCP JSON-RPC 解析。CMaaS 把 `8000` 放入 `mcp_ports`，因此 gateway 会在该端口启用 MCP 审计、虚拟 tools 注入和 `tee_attest` 绑定逻辑。
-- `service.app_service`：guest 内实际运行 MCP HTTP adapter 的 systemd unit。daemon 用它判断应用是否 ready。
+- `service.app_service`：Guest 内实际运行 MCP HTTP adapter 的 systemd unit。daemon 用它判断应用是否 ready。
 
 本文中的 `mesh_ports` 指 daemon 根据 `service.ports - service.connect` 派生出的 confidential-only mesh 端口集合，不是 AppSpec 中需要用户手写的新字段。对 CMaaS 而言：
 
@@ -185,3 +187,9 @@ tools/call tee_attest
 - `mcp-proxy` 不是安全代理。它只是 stdio/HTTP MCP adapter，不能替代 TNG、gateway service identity、MCP audit 或 TEE attestation。
 - gateway v1 做 MCP method/tool 级审计，不实现 per-entity ACL、namespace 隔离、撤销列表或 memory poisoning 恢复。
 - audit JSONL 是哈希链，不是外部透明日志。当前 e2e 通过 guest 内 operator CLI 和 agent 虚拟 MCP tools 验证它；后续可以再把 operator 远程 API 接到 agentd/TNG 通道。
+
+## 相关文档
+
+- [AppSpec 参考 · 三类端口](../reference/appspec.md#三类端口)
+- [架构设计 · Mesh](architecture.md#6-mesh同状态目录内的可信寻址)
+- [`examples/cmaas`](../../examples/cmaas/README.md)

@@ -5,6 +5,15 @@ Pay-as-you-go `qwen4-max` through the Anthropic-compatible endpoint.
 Credentials are runtime resources and are released to the guest only after
 remote attestation succeeds.
 
+> **Development example.** Claude Code is used over SSH, and this image does
+> not include the attested management SSH service, so `claude-code.yaml`
+> deploys a `debug` image with build-time SSH. Do not use it in production.
+> For production, deploy the shared image with `confidential-agent init
+> claude-code ...`, which uses a release image and per-instance management SSH
+> keys delivered through remote attestation (see
+> [one-click](../../docs/guides/one-click.md) or
+> [manual deployment](../../docs/guides/manual-deployment.md)).
+
 No Claude Code hook, long-running PEP service, or PEP policy is installed. The
 `cai-pep` binary is included only so the installed skill can run
 `cai-pep attest collect-and-verify` on demand.
@@ -16,7 +25,7 @@ Run commands from the repository root. You need:
 - `confidential-agent` CLI available on `PATH`
 - Alibaba Cloud credentials exported in your shell
 - `DASHSCOPE_API_KEY` exported in your shell
-- `cargo`, `openssl`, and SSH tooling available locally
+- `openssl` and SSH tooling available locally
 
 Optional overrides:
 
@@ -27,11 +36,11 @@ export DASHSCOPE_ANTHROPIC_BASE_URL="${DASHSCOPE_ANTHROPIC_BASE_URL:-https://das
 
 ## Prepare Resources
 
-Build the local helper binary referenced by the AppSpec and create the Rekor
-signing key:
+The AppSpec copies the RPM-installed `/usr/bin/cai-pep` into the image. From a
+source checkout, install your `cai-pep` build at that path or edit
+`build.files` in `claude-code.yaml`. Create the Rekor signing key:
 
 ```bash
-cargo build -p cai-pep
 confidential-agent key generate-cosign --output-key-prefix examples/claude-code/cosign
 ```
 

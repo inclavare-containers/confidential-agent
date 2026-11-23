@@ -460,7 +460,7 @@ fn spec_schema_json() -> serde_json::Value {
         },
         "build": {
             "image_name": "base Shelter image name",
-            "resize": "optional target disk size; rendered as Shelter disk.size",
+            "resize": "optional target disk size; rendered as Shelter output.disk_size",
             "container": "optional Shelter OCI workload payload; supports image/archive, mode, runtime, name, pull, command, env, working_dir, and network",
             "packages": "minimal OS packages installed by Shelter/mkosi",
             "files": "host files copied into the guest image",
